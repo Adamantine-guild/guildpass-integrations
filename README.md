@@ -14,8 +14,9 @@ The main frontend MVP for the GuildPass ecosystem. Built with **Next.js 14 App R
 - **Member dashboard** — wallet connect, membership state, community & tier, expiration, badges placeholder, gated resources, profile summary
 - **Admin dashboard** — overview, member list, role assignment, resource access policies, community settings
 - **Access-gated experiences** — gated pages, gated content sections, event access, denied states, upgrade/renew placeholders
-- **Wallet-aware UX** — connect flow, authenticated member experience, role-aware UI states, admin-only sections
-- **Local development** — mock/demo mode with seeded fake data; typed API layer switches between mock and live
+- **Wallet-aware UX** — connect flow, SIWE-authenticated admin experience, role-aware UI states, admin-only sections
+- **SIWE authentication** — Sign-In with Ethereum (EIP-4361) for admin sessions; gasless off-chain signature; short-lived token attached to all mutations
+- **Local development** — mock/demo mode with seeded fake data; typed API layer switches between mock and live; SIWE fully simulated in mock mode
 
 ---
 
@@ -58,13 +59,44 @@ npm run dev
 
 ---
 
+## Authentication (SIWE)
+
+Admin actions are protected by [Sign-In with Ethereum (EIP-4361)](https://eips.ethereum.org/EIPS/eip-4361). After connecting a wallet, admins must sign a one-time, gasless message. The backend verifies the signature and returns a short-lived session token attached as `Authorization: Bearer` on all privileged mutations.
+
+### Sign-in flow
+
+```
+1. User connects wallet
+2. UI shows "Sign In" with explanation — no gas required
+3. Frontend requests a nonce: POST /access-api/siwe/nonce
+4. EIP-4361 message built client-side (domain, statement, nonce, chainId, issuedAt)
+5. wagmi signMessage → user approves in wallet
+6. POST /access-api/siwe/verify → { token, expiresAt }
+7. Token stored in sessionStorage; auto-attached to admin mutations
+8. 401 from backend shows inline re-auth banner without page redirect
+```
+
+### Required backend endpoints (live mode only)
+
+| Method | Path | Body | Response |
+|--------|------|------|----------|
+| `POST` | `/access-api/siwe/nonce` | `{ address }` | `{ nonce: string }` |
+| `POST` | `/access-api/siwe/verify` | `{ message, signature }` | `{ token, address, expiresAt }` |
+| `POST` | `/access-api/siwe/logout` | — (Bearer token in header) | `204 No Content` |
+
+> In **mock mode** all three endpoints are simulated in-memory — no backend required.
+
+---
+
 ## Environment Variables
 
 | Variable | Required | Description |
 | ---- | ------- | ----------- |
-| `NEXT_PUBLIC_MOCK_MODE` | No | Set `true` to use in-memory mock API (no backend needed) |
+| `NEXT_PUBLIC_MOCK_MODE` | No | Set `true` for in-memory mock API; SIWE fully simulated |
 | `NEXT_PUBLIC_DEMO_MODE` | No | Alias for `NEXT_PUBLIC_MOCK_MODE` |
 | `NEXT_PUBLIC_CORE_API_URL` | Live mode only | Base URL of the `guildpass-core` access-api |
+| `NEXT_PUBLIC_SIWE_DOMAIN` | No | Domain field in the EIP-4361 message (defaults to `window.location.host`) |
+| `NEXT_PUBLIC_SIWE_STATEMENT` | No | Human-readable statement shown in the signed message |
 
 See [`.env.example`](./.env.example) for a ready-to-copy template.
 
@@ -87,13 +119,16 @@ npm run typecheck  # TypeScript type checking
 | Path | Purpose |
 | ---- | ------- |
 | `app/*` | Next.js App Router pages |
-| `lib/wallet/providers.tsx` | wagmi and React Query global providers |
-| `lib/api/*` | API layer (`getApi(address?)` switches mock ↔ live) |
-| `lib/api/live.ts` | Live integration with `guildpass-core` |
-| `lib/api/types.ts` | Shared TypeScript types |
+| `lib/wallet/providers.tsx` | wagmi, React Query, and `SiweAuthContext` providers; `useSiweAuth()` hook |
+| `lib/api/*` | API layer (`getApi(address?, token?)` switches mock ↔ live) |
+| `lib/api/live.ts` | Live integration with `guildpass-core`; `AuthError` for 401 handling |
+| `lib/api/mock.ts` | In-memory mock; simulates SIWE endpoints without real signatures |
+| `lib/api/types.ts` | Shared TypeScript types incl. `SiweAuthSession`, `SiweAuthState` |
+| `lib/session.ts` | `sessionStorage` helpers for SIWE token persistence |
 | `components/ui/*` | Minimal shadcn-style UI primitives |
 | `components/gated.tsx` | Access-gate component |
-| `components/admin-guard.tsx` | Admin-only section guard |
+| `components/admin-guard.tsx` | 3-layer admin guard (wallet → SIWE → role) with `SiwePrompt` |
+| `components/wallet/connect-button.tsx` | 3-state button (disconnected / connected / authenticated) |
 | `components/nav.tsx` | Navigation bar |
 
 ---

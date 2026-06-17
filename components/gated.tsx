@@ -1,10 +1,10 @@
-"use client"
-import { ReactNode } from "react"
-import { useAccount } from "wagmi"
-import { useQuery } from "@tanstack/react-query"
-import { getApi, type MembershipTier, type Role } from "@/lib/api"
-import Link from "next/link"
-import { Button } from "./ui/button"
+'use client'
+import { ReactNode } from 'react'
+import { useAccount } from 'wagmi'
+import { useQuery } from '@tanstack/react-query'
+import { getApi, type MembershipTier, type Role } from '@/lib/api'
+import Link from 'next/link'
+import { buttonVariants } from './ui/button'
 
 export function Gated({
   children,
@@ -49,8 +49,8 @@ export function AccessDenied({ reason }: { reason: string }) {
       <div className="text-lg font-medium mb-2">Access Denied</div>
       <div className="text-sm text-muted-foreground mb-4">{reason}</div>
       <div className="flex items-center gap-2">
-        <Button asChild><Link href="/dashboard">Back to Dashboard</Link></Button>
-        <Button variant="outline">Upgrade or Renew</Button>
+        <Link href="/dashboard" className={buttonVariants()}>Back to Dashboard</Link>
+        <Link href="/dashboard" className={buttonVariants({ variant: 'outline' })}>Upgrade or Renew</Link>
       </div>
     </div>
   )
