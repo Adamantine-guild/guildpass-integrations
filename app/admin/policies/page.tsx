@@ -5,11 +5,17 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { getApi, type AccessPolicy } from '@/lib/api'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
 import { AdminGuard } from '@/components/admin-guard'
 import { useSiweAuth } from '@/lib/wallet/providers'
 import { AuthError } from '@/lib/api/live'
 import { useState } from 'react'
 import { LoadingState, ErrorState, EmptyState, safeErrorMessage } from '@/components/ui/api-states'
+import { applyOptimisticPolicy } from '@/lib/api/optimistic'
+
+type PolicyRollback = {
+  previousPolicies?: AccessPolicy[]
+}
 
 function SessionExpiredBanner() {
   const { signIn, isSigningIn } = useSiweAuth()
@@ -39,6 +45,9 @@ export default function PoliciesPage() {
   const { authSession } = useSiweAuth()
   const qc = useQueryClient()
   const [sessionExpired, setSessionExpired] = useState(false)
+  const [pendingPolicyId, setPendingPolicyId] = useState<string | null>(null)
+  const [successMessage, setSuccessMessage] = useState('')
+  const [rollbackMessage, setRollbackMessage] = useState('')
 
   const { data: policies, isLoading, isError, error, refetch } = useQuery<AccessPolicy[]>({
     queryKey: ['policies'],
@@ -48,22 +57,41 @@ export default function PoliciesPage() {
 
   const {
     mutate,
-    isPending,
     isError: mutateError,
     error: mutateErrorValue,
     reset: resetMutation
-  } = useMutation({
+  } = useMutation<void, unknown, AccessPolicy, PolicyRollback>({
     mutationFn: (p: AccessPolicy) =>
       getApi(address, authSession?.token).updatePolicy(p),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['policies'] })
+    onMutate: async (policy) => {
+      await qc.cancelQueries({ queryKey: ['policies'] })
+      const previousPolicies = qc.getQueryData<AccessPolicy[]>(['policies'])
+
+      setPendingPolicyId(policy.resourceId)
+      setSuccessMessage('')
+      setRollbackMessage('')
       setSessionExpired(false)
+
+      qc.setQueryData<AccessPolicy[]>(['policies'], (currentPolicies) =>
+        applyOptimisticPolicy(currentPolicies, policy),
+      )
+
+      return { previousPolicies }
+    },
+    onSuccess: (_data, policy) => {
+      setSuccessMessage(`Policy saved for ${policy.resourceId}.`)
       resetMutation()
     },
-    onError: (err: unknown) => {
+    onError: (err: unknown, _policy, context) => {
+      qc.setQueryData(['policies'], context?.previousPolicies)
+      setRollbackMessage(`Change reverted: ${safeErrorMessage(err)}`)
       if (err instanceof AuthError) {
         setSessionExpired(true)
       }
+    },
+    onSettled: () => {
+      setPendingPolicyId(null)
+      qc.invalidateQueries({ queryKey: ['policies'] })
     },
   })
 
@@ -90,13 +118,18 @@ export default function PoliciesPage() {
             ) : (
               policies.map((p) => (
                 <div key={p.resourceId} className="flex items-center gap-2">
-                  <div className="w-40 text-sm">{p.resourceId}</div>
+                  <div className="flex w-40 items-center gap-2 text-sm">
+                    <span>{p.resourceId}</span>
+                    {pendingPolicyId === p.resourceId && (
+                      <Badge variant="warning">Saving</Badge>
+                    )}
+                  </div>
                   <select
                     id={`policy-tier-${p.resourceId}`}
                     className="border rounded-md h-9 px-2 text-sm"
                     value={p.minTier ?? 'free'}
                     onChange={(e) => mutate({ ...p, minTier: e.target.value as AccessPolicy['minTier'] })}
-                    disabled={isPending}
+                    disabled={Boolean(pendingPolicyId)}
                   >
                     <option value="free">free</option>
                     <option value="standard">standard</option>
@@ -107,12 +140,22 @@ export default function PoliciesPage() {
                     variant="outline"
                     size="sm"
                     onClick={() => mutate({ ...p })}
-                    disabled={isPending}
+                    disabled={Boolean(pendingPolicyId)}
                   >
-                    {isPending ? 'Saving…' : 'Save'}
+                    {pendingPolicyId === p.resourceId ? 'Saving…' : 'Save'}
                   </Button>
                 </div>
               ))
+            )}
+            {successMessage && (
+              <div className="text-sm text-green-700 dark:text-green-400" role="status">
+                {successMessage}
+              </div>
+            )}
+            {rollbackMessage && (
+              <div className="text-sm text-destructive" role="alert">
+                {rollbackMessage}
+              </div>
             )}
             {mutateError && (
               <ErrorState

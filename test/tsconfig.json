@@ -1,0 +1,17 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "noEmit": false,
+    "outDir": "../test-dist",
+    "rootDir": "..",
+    "incremental": false,
+    "jsx": "react-jsx"
+  },
+  "include": [
+    "../lib/api/optimistic.ts",
+    "../lib/api/types.ts",
+    "./*.test.ts"
+  ]
+}

@@ -6,11 +6,22 @@ import { getApi, type MemberRow, type Role } from '@/lib/api'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Badge } from '@/components/ui/badge'
 import { useState } from 'react'
 import { AdminGuard } from '@/components/admin-guard'
 import { useSiweAuth } from '@/lib/wallet/providers'
 import { AuthError } from '@/lib/api/live'
 import { LoadingState, ErrorState, EmptyState, safeErrorMessage } from '@/components/ui/api-states'
+import { applyOptimisticRole } from '@/lib/api/optimistic'
+
+type AssignRoleInput = {
+  address: string
+  role: Role
+}
+
+type AssignRoleRollback = {
+  previousMembers?: MemberRow[]
+}
 
 function SessionExpiredBanner() {
   const { signIn, isSigningIn } = useSiweAuth()
@@ -49,6 +60,9 @@ export default function MembersPage() {
 
   const [addr, setAddr] = useState('')
   const [role, setRole] = useState<Role>('member')
+  const [pendingAssignment, setPendingAssignment] = useState<AssignRoleInput | null>(null)
+  const [successMessage, setSuccessMessage] = useState('')
+  const [rollbackMessage, setRollbackMessage] = useState('')
 
   const {
     mutate,
@@ -56,18 +70,39 @@ export default function MembersPage() {
     isError: mutateError,
     error: mutateErrorValue,
     reset: resetMutation
-  } = useMutation({
-    mutationFn: () => getApi(address, authSession?.token).assignRole(addr, role),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['members'] })
+  } = useMutation<void, unknown, AssignRoleInput, AssignRoleRollback>({
+    mutationFn: (input) =>
+      getApi(address, authSession?.token).assignRole(input.address, input.role),
+    onMutate: async (input) => {
+      await qc.cancelQueries({ queryKey: ['members'] })
+      const previousMembers = qc.getQueryData<MemberRow[]>(['members'])
+
+      setPendingAssignment(input)
+      setSuccessMessage('')
+      setRollbackMessage('')
       setSessionExpired(false)
+
+      qc.setQueryData<MemberRow[]>(['members'], (currentMembers) =>
+        applyOptimisticRole(currentMembers, input.address, input.role),
+      )
+
+      return { previousMembers }
+    },
+    onSuccess: (_data, input) => {
+      setSuccessMessage(`Role "${input.role}" saved for ${input.address}.`)
       setAddr('')
       resetMutation()
     },
-    onError: (err: unknown) => {
+    onError: (err: unknown, _input, context) => {
+      qc.setQueryData(['members'], context?.previousMembers)
+      setRollbackMessage(`Change reverted: ${safeErrorMessage(err)}`)
       if (err instanceof AuthError) {
         setSessionExpired(true)
       }
+    },
+    onSettled: () => {
+      setPendingAssignment(null)
+      qc.invalidateQueries({ queryKey: ['members'] })
     },
   })
 
@@ -100,17 +135,27 @@ export default function MembersPage() {
               </select>
               <Button
                 id="assign-role-btn"
-                onClick={() => mutate()}
+                onClick={() => mutate({ address: addr, role })}
                 disabled={!addr || isPending}
               >
                 {isPending ? 'Assigning…' : 'Assign'}
               </Button>
             </div>
+            {successMessage && (
+              <div className="text-sm text-green-700 dark:text-green-400" role="status">
+                {successMessage}
+              </div>
+            )}
+            {rollbackMessage && (
+              <div className="text-sm text-destructive" role="alert">
+                {rollbackMessage}
+              </div>
+            )}
             {mutateError && (
               <ErrorState
                 title="Failed to assign role"
                 message={safeErrorMessage(mutateErrorValue)}
-                onRetry={() => mutate()}
+                onRetry={() => mutate({ address: addr, role })}
               />
             )}
           </CardContent>
@@ -137,8 +182,11 @@ export default function MembersPage() {
                     className="flex items-center justify-between border rounded-md p-2"
                   >
                     <div className="text-sm">{m.address}</div>
-                    <div className="text-xs text-muted-foreground">
-                      Tier: {m.tier} • Roles: {m.roles.join(', ')}
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <span>Tier: {m.tier} • Roles: {m.roles.join(', ')}</span>
+                      {pendingAssignment?.address.toLowerCase() === m.address.toLowerCase() && (
+                        <Badge variant="warning">Saving</Badge>
+                      )}
                     </div>
                   </div>
                 ))}

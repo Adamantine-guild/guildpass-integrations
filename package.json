@@ -13,6 +13,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
+    "test": "tsc -p test/tsconfig.json && node --test test-dist/test/*.test.js",
     "typecheck": "tsc --noEmit",
     "sync-types": "node scripts/sync-api-types.js --write",
     "check-types": "node scripts/sync-api-types.js --check"
