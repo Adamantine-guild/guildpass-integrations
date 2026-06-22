@@ -1,7 +1,7 @@
 'use client'
 import Link from 'next/link'
-import { Button } from '@/components/ui/button'
 import { AdminGuard } from '@/components/admin-guard'
+import { EmptyState } from '@/components/ui/api-states'
 
 export default function AdminHome() {
   return (
@@ -20,9 +20,10 @@ export default function AdminHome() {
             Settings
           </Link>
         </div>
-        <div className="rounded-md border p-4">
-          <div className="text-sm text-muted-foreground">Community overview placeholder with metrics.</div>
-        </div>
+        <EmptyState
+          title="Overview metrics unavailable"
+          message="Community overview metrics will appear here when they are available."
+        />
       </div>
     </AdminGuard>
   )

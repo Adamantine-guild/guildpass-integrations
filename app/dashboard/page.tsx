@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import Link from 'next/link'
 import { buttonVariants } from '@/components/ui/button'
-import { LoadingState, ErrorState, safeErrorMessage } from '@/components/ui/api-states'
+import { LoadingState, ErrorState, EmptyState, DeniedState, safeErrorMessage } from '@/components/ui/api-states'
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -50,7 +50,12 @@ export default function DashboardPage() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <Section title="Community">
-          {isLoading ? (
+          {!address ? (
+            <DeniedState
+              title="Wallet connection required"
+              message="Connect your wallet to load your community membership."
+            />
+          ) : isLoading ? (
             <LoadingState />
           ) : isError ? (
             <ErrorState
@@ -75,10 +80,10 @@ export default function DashboardPage() {
         </Section>
 
         <Section title="Profile Summary">
-          <div className="space-y-2">
-            <div className="text-sm text-muted-foreground">Basic profile details will appear here.</div>
-            <div className="text-xs text-muted-foreground">This is intentionally minimal for MVP.</div>
-          </div>
+          <EmptyState
+            title="Profile details unavailable"
+            message="Basic profile details will appear here when they are available."
+          />
         </Section>
 
         <Section title="Badges">

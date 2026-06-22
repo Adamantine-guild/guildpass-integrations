@@ -1,6 +1,7 @@
 "use client"
 import { Gated } from "@/components/gated"
 import { FeatureGate } from "@/components/feature-gate"
+import { EmptyState } from "@/components/ui/api-states"
 import { features } from "@/lib/features"
 
 export default function DemoEvent() {
@@ -10,9 +11,10 @@ export default function DemoEvent() {
         <div className="space-y-2">
           <h1 className="text-2xl font-semibold">Demo Event Access</h1>
           <p className="text-muted-foreground">Members can access this event page.</p>
-          <div className="rounded-md border p-4">
-            <div className="text-sm">Event ticket placeholder with simple status.</div>
-          </div>
+          <EmptyState
+            title="Ticket unavailable"
+            message="Event ticket status will appear here when it is available."
+          />
         </div>
       </Gated>
     </FeatureGate>

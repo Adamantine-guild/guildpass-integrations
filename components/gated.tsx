@@ -5,7 +5,7 @@ import { useQuery } from '@tanstack/react-query'
 import { getApi, type MembershipTier, type Role } from '@/lib/api'
 import Link from 'next/link'
 import { buttonVariants } from './ui/button'
-import { LoadingState, ErrorState, safeErrorMessage } from './ui/api-states'
+import { LoadingState, ErrorState, DeniedState, safeErrorMessage } from './ui/api-states'
 
 export function Gated({
   children,
@@ -57,13 +57,15 @@ export function Gated({
 
 export function AccessDenied({ reason }: { reason: string }) {
   return (
-    <div className="rounded-md border p-6">
-      <div className="text-lg font-medium mb-2">Access Denied</div>
-      <div className="text-sm text-muted-foreground mb-4">{reason}</div>
-      <div className="flex items-center gap-2">
+    <DeniedState
+      title="Access denied"
+      message={reason}
+      actions={
+        <>
         <Link href="/dashboard" className={buttonVariants()}>Back to Dashboard</Link>
         <Link href="/dashboard" className={buttonVariants({ variant: 'outline' })}>Upgrade or Renew</Link>
-      </div>
-    </div>
+        </>
+      }
+    />
   )
 }

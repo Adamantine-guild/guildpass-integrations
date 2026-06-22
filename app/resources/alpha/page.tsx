@@ -1,6 +1,7 @@
 "use client"
 import { Gated } from "@/components/gated"
 import { FeatureGate } from "@/components/feature-gate"
+import { EmptyState } from "@/components/ui/api-states"
 import { features } from "@/lib/features"
 
 export default function AlphaDocs() {
@@ -10,9 +11,10 @@ export default function AlphaDocs() {
         <div className="space-y-2">
           <h1 className="text-2xl font-semibold">Alpha Docs</h1>
           <p className="text-muted-foreground">This page is gated at Standard tier and above.</p>
-          <div className="rounded-md border p-4">
-            <div className="text-sm">Gated content section placeholder.</div>
-          </div>
+          <EmptyState
+            title="Content unavailable"
+            message="Gated resource content will appear here when it is available."
+          />
         </div>
       </Gated>
     </FeatureGate>

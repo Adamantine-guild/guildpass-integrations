@@ -11,7 +11,7 @@ import { useState } from 'react'
 import { AdminGuard } from '@/components/admin-guard'
 import { useSiweAuth } from '@/lib/wallet/providers'
 import { AuthError } from '@/lib/api/live'
-import { LoadingState, ErrorState, EmptyState, safeErrorMessage } from '@/components/ui/api-states'
+import { LoadingState, ErrorState, EmptyState, DeniedState, safeErrorMessage } from '@/components/ui/api-states'
 import { applyOptimisticRole } from '@/lib/api/optimistic'
 
 type AssignRoleInput = {
@@ -26,12 +26,11 @@ type AssignRoleRollback = {
 function SessionExpiredBanner() {
   const { signIn, isSigningIn } = useSiweAuth()
   return (
-    <div
-      id="session-expired-banner"
-      role="alert"
-      className="flex items-center justify-between rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-700/40 dark:bg-amber-900/20 dark:text-amber-300"
-    >
-      <span>Your admin session has expired.</span>
+    <div id="session-expired-banner">
+      <DeniedState
+        title="Admin session expired"
+        message="Your admin session has expired."
+        actions={
       <Button
         id="session-reauth-btn"
         size="sm"
@@ -42,6 +41,8 @@ function SessionExpiredBanner() {
       >
         {isSigningIn ? 'Signing…' : 'Re-authenticate'}
       </Button>
+        }
+      />
     </div>
   )
 }
@@ -173,7 +174,7 @@ export default function MembersPage() {
                 onRetry={() => refetch()}
               />
             ) : !members?.length ? (
-              <EmptyState message="No members yet." />
+              <EmptyState title="No members yet" message="No members have been added to this community." />
             ) : (
               <div className="space-y-2">
                 {members.map((m) => (
