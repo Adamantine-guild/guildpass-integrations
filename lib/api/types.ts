@@ -37,6 +37,12 @@ export interface Session {
   community?: Community
 }
 
+export interface WalletVerification {
+  verified: boolean
+  method?: string
+  checkedAt: string
+}
+
 export interface Resource {
   id: string
   title: string
@@ -177,4 +183,7 @@ export interface AccessApi {
   siweVerify(message: string, signature: string): Promise<SiweAuthSession>
   /** Invalidate the current server-side session (no-op for stateless JWTs). */
   siweLogout(token: string): Promise<void>
+
+  /** Verify a wallet and return a safe verification result. */
+  verifyWallet(address: string): Promise<WalletVerification>
 }

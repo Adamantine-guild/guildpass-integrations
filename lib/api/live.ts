@@ -10,6 +10,7 @@ import {
   Role,
   Session,
   SiweAuthSession,
+  WalletVerification,
   BackendSession,
   BackendMember,
   BackendResource,
@@ -153,6 +154,41 @@ async function getJson<T>(path: string, init?: RequestInit): Promise<T> {
   return JSON.parse(text) as T
 }
 
+async function getIntegrationJson<T>(path: string): Promise<T> {
+  let res: Response
+
+  try {
+    res = await fetch(path, {
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    })
+  } catch (cause) {
+    throw new ApiError({
+      code: 'network_error',
+      safeMessage:
+        'Unable to connect to the integration gateway. Please check your configuration and try again.',
+      retryable: true,
+      cause,
+    })
+  }
+
+  if (!res.ok) {
+    throw createApiError(res.status, await parseErrorBody(res))
+  }
+
+  if (res.status === 204 || res.status === 205) {
+    return {} as T
+  }
+
+  const text = await res.text()
+  if (!text.trim()) {
+    return {} as T
+  }
+
+  return JSON.parse(text) as T
+}
+
 // ── Response mappers ──────────────────────────────────────────────────────────
 
 function mapCommunity(raw: BackendSession['community']): Community {
@@ -247,7 +283,23 @@ export class LiveAccessApi implements AccessApi {
       ? `?address=${encodeURIComponent(this.address)}`
       : ''
     const raw = await getJson<BackendSession>(`/v1/session${addr}`)
-    return mapSession(raw)
+    const session = mapSession(raw)
+
+    if (this.address) {
+      try {
+        const integrationMembership = await getIntegrationJson<Membership | null>(
+          `/api/integration/membership?address=${encodeURIComponent(this.address)}`,
+        )
+        if (integrationMembership) {
+          session.membership = integrationMembership
+        }
+      } catch {
+        // If the integration gateway is unavailable, retain the membership data
+        // returned by the core API rather than failing the entire session.
+      }
+    }
+
+    return session
   }
 
   async getCommunity(): Promise<Community> {
@@ -256,10 +308,15 @@ export class LiveAccessApi implements AccessApi {
   }
 
   async getMembership(address: string): Promise<Membership | null> {
-    const raw = await getJson<BackendMember | null>(
-      `/v1/members/${encodeURIComponent(address)}/membership`,
+    return await getIntegrationJson<Membership | null>(
+      `/api/integration/membership?address=${encodeURIComponent(address)}`,
     )
-    return raw ? mapMembership(raw) : null
+  }
+
+  async verifyWallet(address: string): Promise<WalletVerification> {
+    return await getIntegrationJson<WalletVerification>(
+      `/api/integration/verify?address=${encodeURIComponent(address)}`,
+    )
   }
 
   async getProfile(address: string): Promise<MemberProfile | null> {

@@ -56,6 +56,7 @@ By default, live mode assumes the backend is running at `http://localhost:4000`.
 
 ```bash
 # Set NEXT_PUBLIC_CORE_API_URL in .env.local if your backend runs on a different port
+# Also provide INTEGRATION_API_KEY for the server-side integration gateway
 npm run dev
 ```
 
@@ -97,6 +98,7 @@ Admin actions are protected by [Sign-In with Ethereum (EIP-4361)](https://eips.e
 | `NEXT_PUBLIC_MOCK_MODE` | No | Set `true` for in-memory mock API; SIWE fully simulated |
 | `NEXT_PUBLIC_DEMO_MODE` | No | Alias for `NEXT_PUBLIC_MOCK_MODE` |
 | `NEXT_PUBLIC_CORE_API_URL` | Live mode only | Base URL of the `guildpass-core` access-api |
+| `INTEGRATION_API_KEY` | Live mode only | Server-side API key used by `@guildpass/integration-client` through the dashboard gateway |
 | `NEXT_PUBLIC_SIWE_DOMAIN` | No | Domain field in the EIP-4361 message (defaults to `window.location.host`) |
 | `NEXT_PUBLIC_SIWE_STATEMENT` | No | Human-readable statement shown in the signed message |
 
@@ -194,7 +196,16 @@ All live requests are sent to `NEXT_PUBLIC_CORE_API_URL` (default `http://localh
 | `POST` | `/v1/auth/siwe/verify` | — | Verify SIWE signature → token |
 | `POST` | `/v1/auth/siwe/logout` | Bearer | Invalidate session |
 
-> Path and query parameters are URL-encoded. Backend responses are mapped into frontend types via the response-mapping layer in `lib/api/live.ts`.
+### Local dashboard integration gateway
+
+When live mode is enabled, the dashboard uses server-side route handlers to access `@guildpass/integration-client` without exposing private credentials.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/integration/membership?address=<wallet>` | Lookup membership by wallet address |
+| `GET` | `/api/integration/verify?address=<wallet>` | Verify wallet status |
+
+> Path and query parameters are URL-encoded. The integration gateway uses `INTEGRATION_API_KEY` from server environment variables and never exposes it to the browser.
 
 ---
 

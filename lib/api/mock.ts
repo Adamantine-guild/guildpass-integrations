@@ -27,6 +27,7 @@ import {
   Role,
   Session,
   SiweAuthSession,
+  WalletVerification,
 } from './types'
 
 const community: Community = {
@@ -173,5 +174,13 @@ export class MockAccessApi implements AccessApi {
   /** No-op logout — the sessionStorage entry is cleared by the provider. */
   async siweLogout(_token: string): Promise<void> {
     // No server-side session to invalidate in mock mode
+  }
+
+  async verifyWallet(address: string): Promise<WalletVerification> {
+    return {
+      verified: true,
+      method: 'mock',
+      checkedAt: new Date().toISOString(),
+    }
   }
 }

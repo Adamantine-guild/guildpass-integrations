@@ -1,7 +1,7 @@
 'use client'
 import { useAccount } from 'wagmi'
 import { useQuery } from '@tanstack/react-query'
-import { getApi, type Membership, type Session } from '@/lib/api'
+import { getApi, type Membership, type Session, type WalletVerification } from '@/lib/api'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import Link from 'next/link'
@@ -25,7 +25,20 @@ export default function DashboardPage() {
     queryKey: ["session", address],
     queryFn: () => getApi(address).getSession(),
     enabled: !!address,
-    retry: 1
+    retry: 1,
+  })
+
+  const {
+    data: verification,
+    isLoading: isVerifying,
+    isError: verifyIsError,
+    error: verifyError,
+    refetch: refetchVerification,
+  } = useQuery<WalletVerification>({
+    queryKey: ['walletVerification', address],
+    queryFn: () => getApi(address).verifyWallet(address as string),
+    enabled: !!address,
+    retry: 1,
   })
 
   const membership: Membership | undefined = session?.membership
@@ -80,10 +93,43 @@ export default function DashboardPage() {
         </Section>
 
         <Section title="Profile Summary">
-          <EmptyState
-            title="Profile details unavailable"
-            message="Basic profile details will appear here when they are available."
-          />
+          {!address ? (
+            <DeniedState
+              title="Wallet connection required"
+              message="Connect your wallet to load your profile and verification state."
+            />
+          ) : isVerifying ? (
+            <LoadingState />
+          ) : verifyIsError ? (
+            <ErrorState
+              title="Wallet verification failed"
+              message={safeErrorMessage(verifyError)}
+              onRetry={() => refetchVerification()}
+            />
+          ) : verification ? (
+            <div className="space-y-2">
+              <div className="text-sm text-muted-foreground">
+                Verification: {verification.verified ? (
+                  <Badge variant="success">Verified</Badge>
+                ) : (
+                  <Badge variant="destructive">Not verified</Badge>
+                )}
+              </div>
+              {verification.method ? (
+                <div className="text-sm text-muted-foreground">
+                  Method: {verification.method}
+                </div>
+              ) : null}
+              <div className="text-sm text-muted-foreground">
+                Checked: {new Date(verification.checkedAt).toLocaleString()}
+              </div>
+            </div>
+          ) : (
+            <EmptyState
+              title="Profile details unavailable"
+              message="Basic profile details will appear here when they are available."
+            />
+          )}
         </Section>
 
         <Section title="Badges">
