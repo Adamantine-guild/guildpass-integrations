@@ -198,6 +198,14 @@ All live requests are sent to `NEXT_PUBLIC_CORE_API_URL` (default `http://localh
 
 ---
 
+## Deployment
+
+See [docs/deployment.md](./docs/deployment.md)
+for production deployment instructions,
+environment variables,
+smoke checks,
+and troubleshooting.
+
 ## What's Implemented vs Deferred
 
 **Implemented**:
