@@ -1,3 +1,5 @@
+
+// PoliciesPage
 export type FeatureFlags = {
   adminPolicies: boolean
   events: boolean
