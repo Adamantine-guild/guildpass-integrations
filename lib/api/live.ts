@@ -1,90 +1,154 @@
-/**
-* lib/api/live.ts
-*
-* Live integration with guildpass-core access-api.
-*/
-
 import {
-    AccessApi,
-AccessPolicy,
-Community,
-MemberProfile,
-MemberRow,
-Membership,
-Resource,
-Role,
-Session,
-SiweAuthSession,
-BackendSession,
-BackendMember,
-BackendResource,
-BackendPolicy,
+  AccessApi,
+  AccessPolicy,
+  ApiErrorBody,
+  Community,
+  MemberProfile,
+  MemberRow,
+  Membership,
+  Resource,
+  Role,
+  Session,
+ SiweAuthSession,
+  BackendSession,
+  BackendMember,
+  BackendResource,
+  BackendPolicy,
 } from './types'
+import { ApiError } from './errors'
 
 function getCoreApiUrl(): string {
-  const url = process.env.NEXT_PUBLIC_CORE_API_URL
-  if (url) return url
-
-  const isMockMode = process.env.NEXT_PUBLIC_MOCK_MODE === 'true'
-  if (!isMockMode) {
-    console.warn(
-      '⚠️ NEXT_PUBLIC_CORE_API_URL is missing in live mode.\n' +
-      'Falling back to http://localhost:4000.\n' +
-      'To silence this warning, set NEXT_PUBLIC_CORE_API_URL in your .env.local file.'
-)
-}
-return 'http://localhost:4000'
+  return process.env.NEXT_PUBLIC_CORE_API_URL || 'http://localhost:4000'
 }
 
 const BASE = getCoreApiUrl()
 
-/** Thrown when the backend returns HTTP 401 (expired / invalid session token). */
-export class AuthError extends Error {
-constructor() {
-    super('Session expired. Please sign in again.')
-    this.name = 'AuthError'
+function createApiError(status: number, body?: ApiErrorBody): ApiError {
+  const details =
+    body?.details && typeof body.details === 'object'
+      ? body.details
+      : undefined
+
+  if (status === 400) {
+    return new ApiError({
+      status,
+      code: 'bad_request',
+      safeMessage: body?.message || 'The request could not be processed.',
+      details,
+    })
   }
+
+  if (status === 401) {
+    return new ApiError({
+      status,
+      code: 'unauthorized',
+      safeMessage: 'Session expired. Please sign in again.',
+    })
+  }
+
+  if (status === 403) {
+    return new ApiError({
+      status,
+      code: 'forbidden',
+      safeMessage: 'You do not have permission to perform this action.',
+    })
+  }
+
+  if (status === 404) {
+    return new ApiError({
+      status,
+      code: 'not_found',
+      safeMessage: 'The requested resource could not be found.',
+    })
+  }
+
+  if (status === 422) {
+    return new ApiError({
+      status,
+      code: 'validation_error',
+      safeMessage:
+        body?.message || 'Some of the submitted data is invalid.',
+      details,
+    })
+  }
+
+  if (status === 429) {
+    return new ApiError({
+      status,
+      code: 'rate_limited',
+      safeMessage: 'Too many requests. Please try again shortly.',
+      retryable: true,
+    })
+  }
+
+  if (status >= 500) {
+    return new ApiError({
+      status,
+      code: 'server_error',
+      safeMessage:
+        'The server could not complete the request. Please try again.',
+      retryable: true,
+    })
+  }
+
+  return new ApiError({
+    status,
+    code: 'unknown_error',
+    safeMessage: body?.message || 'Request failed.',
+  })
 }
 
-export class ApiError extends Error {
-  constructor(
-    public readonly status: number,
-    statusText: string,
-    serverMessage?: string
-  ) {
-    super(serverMessage ? `${serverMessage} (${status})` : `Request failed (${status} ${statusText})`)
-    this.name = 'ApiError'
+async function parseErrorBody(
+  res: Response,
+): Promise<ApiErrorBody | undefined> {
+  const text = await res.text()
+  if (!text.trim()) return undefined
+
+  try {
+    const body = JSON.parse(text)
+    return body && typeof body === 'object'
+      ? (body as ApiErrorBody)
+      : undefined
+  } catch {
+    return undefined
   }
 }
 
 async function getJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    ...init,
-    headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
-  })
+  let res: Response
 
-  if (res.status === 401) {
-    throw new AuthError()
+  try {
+    res = await fetch(`${BASE}${path}`, {
+      ...init,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(init?.headers ?? {}),
+      },
+    })
+  } catch (cause) {
+    throw new ApiError({
+      code: 'network_error',
+      safeMessage:
+        'Unable to connect. Please check your connection and try again.',
+      retryable: true,
+      cause,
+    })
   }
 
   if (!res.ok) {
-    let serverMessage: string | undefined
-    try {
-      const body = await res.json()
-      const raw = body?.message ?? body?.error
-      if (typeof raw === 'string' && raw.length <= 120 && !raw.includes('<')) {
-        serverMessage = raw
-      }
-    } catch {}
-    throw new ApiError(res.status, res.statusText, serverMessage)
+    throw createApiError(res.status, await parseErrorBody(res))
   }
 
-  // Handle 204 No Content (or 205 Reset Content)
   if (res.status === 204 || res.status === 205) {
     return {} as T
   }
 
-  return res.json() as Promise<T>
+  const text = await res.text()
+  if (!text.trim()) {
+    return {} as T
+  }
+
+  return JSON.parse(text) as T
 }
 
 // ── Response mappers ──────────────────────────────────────────────────────────
@@ -95,23 +159,16 @@ function mapCommunity(raw: BackendSession['community']): Community {
       id: 'unknown',
       name: 'Unknown Community',
       description: '',
-      tiers: ['free']
-    };
+      tiers: ['free'],
+    }
   }
 
   return {
-    id: raw?.id ?? '',
-    name: raw?.name ?? '',
-    description: raw?.description,
-    tiers: raw?.tiers ?? ['free', 'standard', 'pro'],
+    id: raw.id ?? '',
+    name: raw.name ?? '',
+    description: raw.description,
+    tiers: raw.tiers ?? ['free', 'standard', 'pro'],
   }
-}
-
-function requiredString(value: string | undefined, field: string): string {
-  if (!value) {
-    throw new ApiError(500, 'Invalid API response', `Missing ${field}`)
-  }
-  return value
 }
 
 function mapMembership(raw: BackendMember): Membership {
@@ -126,7 +183,8 @@ function mapMembership(raw: BackendMember): Membership {
 function mapMemberProfile(raw: any, address: string): MemberProfile {
   return {
     address,
-    displayName: raw.displayName ?? raw.display_name ?? raw.username ?? 'Unknown',
+    displayName:
+      raw.displayName ?? raw.display_name ?? raw.username ?? 'Unknown',
     bio: raw.bio,
     badges: raw.badges ?? [],
   }
@@ -163,7 +221,9 @@ function mapSession(raw: any): Session {
   return {
     address: raw.address ?? raw.wallet_address ?? '',
     roles: raw.roles ?? [],
-    membership: raw.membership ? mapMembership(raw.membership as BackendMember) : undefined,
+    membership: raw.membership
+      ? mapMembership(raw.membership as BackendMember)
+      : undefined,
     community: raw.community ? mapCommunity(raw.community) : undefined,
   }
 }
@@ -177,14 +237,13 @@ export class LiveAccessApi implements AccessApi {
   ) {}
 
   private authHeaders(): HeadersInit {
-    if (!this.token) return {}
-    return { Authorization: `Bearer ${this.token}` }
+    return this.token ? { Authorization: `Bearer ${this.token}` } : {}
   }
 
-  // ── Read-only ──────────────────────────────────────────────────────────────
-
   async getSession(): Promise<Session> {
-    const addr = this.address ? `?address=${encodeURIComponent(this.address)}` : ''
+    const addr = this.address
+      ? `?address=${encodeURIComponent(this.address)}`
+      : ''
     const raw = await getJson<BackendSession>(`/v1/session${addr}`)
     return mapSession(raw)
   }
@@ -197,15 +256,15 @@ export class LiveAccessApi implements AccessApi {
   async getMembership(address: string): Promise<Membership | null> {
     const raw = await getJson<BackendMember | null>(
       `/v1/members/${encodeURIComponent(address)}/membership`,
-)
-return raw ? mapMembership(raw) : null
+    )
+    return raw ? mapMembership(raw) : null
   }
 
   async getProfile(address: string): Promise<MemberProfile | null> {
     const raw = await getJson<BackendMember | null>(
       `/v1/members/${encodeURIComponent(address)}/profile`,
     )
-return raw ? mapMemberProfile(raw, address) : null
+    return raw ? mapMemberProfile(raw, address) : null
   }
 
   async listMembers(): Promise<MemberRow[]> {
@@ -222,8 +281,6 @@ return raw ? mapMemberProfile(raw, address) : null
     const raw = await getJson<BackendPolicy[]>('/v1/policies')
     return raw.map(mapPolicy)
   }
-
-  // ── Authenticated mutations ────────────────────────────────────────────────
 
   async assignRole(address: string, role: Role): Promise<void> {
     await getJson<void>(`/v1/members/${encodeURIComponent(address)}/roles`, {
@@ -245,8 +302,6 @@ return raw ? mapMemberProfile(raw, address) : null
     })
   }
 
-  // ── SIWE authentication ────────────────────────────────────────────────────
-
   async getNonce(address: string): Promise<string> {
     const data = await getJson<{ nonce: string }>('/v1/auth/siwe/nonce', {
       method: 'POST',
@@ -255,23 +310,28 @@ return raw ? mapMemberProfile(raw, address) : null
     return data.nonce
   }
 
-  async siweVerify(message: string, signature: string): Promise<SiweAuthSession> {
-    const data = await getJson<{ token: string; address: string; expiresAt: string }>(
-      '/v1/auth/siwe/verify',
-      {
-        method: 'POST',
-        body: JSON.stringify({ message, signature }),
-      },
-)
-return { isAuthenticated: true, ...data }
-}
+  async siweVerify(
+    message: string,
+    signature: string,
+  ): Promise<SiweAuthSession> {
+    const data = await getJson<{
+      token: string
+      address: string
+      expiresAt: string
+    }>('/v1/auth/siwe/verify', {
+      method: 'POST',
+      body: JSON.stringify({ message, signature }),
+    })
 
-async siweLogout(token: string): Promise<void> {
+    return { isAuthenticated: true, ...data }
+  }
+
+  async siweLogout(token: string): Promise<void> {
     await getJson<void>('/v1/auth/siwe/logout', {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` },
     }).catch(() => {
-      // Best-effort: don't block client-side logout if the server call fails
+      // best-effort logout
     })
   }
 }

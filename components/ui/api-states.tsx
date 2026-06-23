@@ -1,9 +1,9 @@
 "use client"
 import { Button } from "./button"
-import { ApiError } from "@/lib/api/live"
+import { ApiError } from "@/lib/api/errors"
 
 export function safeErrorMessage(err: unknown): string {
-  if (err instanceof ApiError) return err.message
+  if (err instanceof ApiError) return err.safeMessage
   if (err instanceof Error) {
     if (/fetch|network|connect/i.test(err.message)) {
       return "Unable to connect. Please check your connection and try again."

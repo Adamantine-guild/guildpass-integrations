@@ -58,6 +58,13 @@ export interface MemberRow {
   active: boolean
 }
 
+export interface ApiErrorBody {
+  code?: string
+  error?: string
+  message?: string
+  details?: Record<string, unknown>
+}
+
 export interface SiweAuthSession {
   isAuthenticated: true
   token: string
