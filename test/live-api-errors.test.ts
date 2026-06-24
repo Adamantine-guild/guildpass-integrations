@@ -64,3 +64,60 @@ test('normalizes network failures', async () => {
       err.retryable,
   )
 })
+
+test('includes request path in error', async () => {
+  global.fetch = async () =>
+    new Response('', { status: 403 }) as any
+
+  await assert.rejects(
+    () => api.getCommunity(),
+    (err: ApiError) =>
+      err instanceof ApiError &&
+      err.code === 'forbidden' &&
+      typeof err.path === 'string' &&
+      err.path.includes('/v1/community'),
+  )
+})
+
+test('handles HTML error bodies gracefully', async () => {
+  global.fetch = async () =>
+    new Response(
+      '<html><body>502 Bad Gateway</body></html>',
+      { status: 502 },
+    ) as any
+
+  await assert.rejects(
+    () => api.getCommunity(),
+    (err: ApiError) =>
+      err instanceof ApiError &&
+      err.status === 502 &&
+      err.code === 'server_error' &&
+      err.retryable,
+  )
+})
+
+test('marks 401 as non-retryable', async () => {
+  global.fetch = async () =>
+    new Response('', { status: 401 }) as any
+
+  await assert.rejects(
+    () => api.getSession(),
+    (err: ApiError) =>
+      err instanceof ApiError &&
+      err.code === 'unauthorized' &&
+      !err.retryable,
+  )
+})
+
+test('marks 429 as retryable', async () => {
+  global.fetch = async () =>
+    new Response('', { status: 429 }) as any
+
+  await assert.rejects(
+    () => api.getSession(),
+    (err: ApiError) =>
+      err instanceof ApiError &&
+      err.code === 'rate_limited' &&
+      err.retryable,
+  )
+})

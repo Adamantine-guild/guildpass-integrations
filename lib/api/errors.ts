@@ -13,6 +13,7 @@ export interface ApiErrorOptions {
   status?: number
   code: ApiErrorCode
   safeMessage: string
+  path?: string
   retryable?: boolean
   details?: Record<string, unknown>
   cause?: unknown
@@ -22,6 +23,7 @@ export class ApiError extends Error {
   readonly status?: number
   readonly code: ApiErrorCode
   readonly safeMessage: string
+  readonly path?: string
   readonly retryable: boolean
   readonly details?: Record<string, unknown>
 
@@ -29,6 +31,7 @@ export class ApiError extends Error {
     status,
     code,
     safeMessage,
+    path,
     retryable = false,
     details,
     cause,
@@ -38,6 +41,7 @@ export class ApiError extends Error {
     this.status = status
     this.code = code
     this.safeMessage = safeMessage
+    this.path = path
     this.retryable = retryable
     this.details = details
 

@@ -2,6 +2,7 @@
 import { ReactNode } from "react"
 import { Button } from "./button"
 import { ApiError } from "@/lib/api/errors"
+import { cn } from "@/lib/utils"
 
 export function safeErrorMessage(err: unknown): string {
   if (err instanceof ApiError) return err.safeMessage

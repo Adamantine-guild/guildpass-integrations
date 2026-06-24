@@ -23,7 +23,7 @@ import { config } from '@/lib/config'
 
 const BASE = config.apiUrl
 
-function createApiError(status: number, body?: ApiErrorBody): ApiError {
+function createApiError(status: number, body?: ApiErrorBody, path?: string): ApiError {
   const details =
     body?.details && typeof body.details === 'object'
       ? body.details
@@ -34,6 +34,7 @@ function createApiError(status: number, body?: ApiErrorBody): ApiError {
       status,
       code: 'bad_request',
       safeMessage: body?.message || 'The request could not be processed.',
+      path,
       details,
     })
   }
@@ -43,6 +44,7 @@ function createApiError(status: number, body?: ApiErrorBody): ApiError {
       status,
       code: 'unauthorized',
       safeMessage: 'Session expired. Please sign in again.',
+      path,
     })
   }
 
@@ -51,6 +53,7 @@ function createApiError(status: number, body?: ApiErrorBody): ApiError {
       status,
       code: 'forbidden',
       safeMessage: 'You do not have permission to perform this action.',
+      path,
     })
   }
 
@@ -59,6 +62,7 @@ function createApiError(status: number, body?: ApiErrorBody): ApiError {
       status,
       code: 'not_found',
       safeMessage: 'The requested resource could not be found.',
+      path,
     })
   }
 
@@ -68,6 +72,7 @@ function createApiError(status: number, body?: ApiErrorBody): ApiError {
       code: 'validation_error',
       safeMessage:
         body?.message || 'Some of the submitted data is invalid.',
+      path,
       details,
     })
   }
@@ -77,6 +82,7 @@ function createApiError(status: number, body?: ApiErrorBody): ApiError {
       status,
       code: 'rate_limited',
       safeMessage: 'Too many requests. Please try again shortly.',
+      path,
       retryable: true,
     })
   }
@@ -87,6 +93,7 @@ function createApiError(status: number, body?: ApiErrorBody): ApiError {
       code: 'server_error',
       safeMessage:
         'The server could not complete the request. Please try again.',
+      path,
       retryable: true,
     })
   }
@@ -95,6 +102,7 @@ function createApiError(status: number, body?: ApiErrorBody): ApiError {
     status,
     code: 'unknown_error',
     safeMessage: body?.message || 'Request failed.',
+    path,
   })
 }
 
@@ -136,7 +144,7 @@ async function getJson<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   if (!res.ok) {
-    throw createApiError(res.status, await parseErrorBody(res))
+    throw createApiError(res.status, await parseErrorBody(res), path)
   }
 
   if (res.status === 204 || res.status === 205) {
