@@ -6,6 +6,98 @@
     "version": "1.0.0"
   },
   "paths": {
+    "/v1/resources": {
+      "get": {
+        "summary": "List gated resources",
+        "operationId": "listResources",
+        "responses": {
+          "200": {
+            "description": "List of available resources.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/Resource" }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/resources/{id}": {
+      "get": {
+        "summary": "Get a single resource by ID",
+        "operationId": "getResource",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The requested resource.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Resource" }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found."
+          }
+        }
+      }
+    },
+    "/v1/policies": {
+      "get": {
+        "summary": "List all access policies",
+        "operationId": "listPolicies",
+        "responses": {
+          "200": {
+            "description": "List of access policies.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/AccessPolicy" }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/policies/{resourceId}": {
+      "get": {
+        "summary": "Get access policy for a specific resource",
+        "operationId": "getPolicy",
+        "parameters": [
+          {
+            "name": "resourceId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The access policy for the resource.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/AccessPolicy" }
+              }
+            }
+          },
+          "404": {
+            "description": "Policy not found."
+          }
+        }
+      }
+    },
     "/v1/admin/events": {
       "get": {
         "summary": "List webhook event logs",

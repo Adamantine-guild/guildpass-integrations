@@ -47,13 +47,15 @@ export const members = [
   },
 ]
 
+export const resource = {
+  id: 'alpha',
+  name: 'Alpha Docs',
+  description: 'Internal docs',
+  min_tier: 'standard',
+}
+
 export const resources = [
-  {
-    id: 'alpha',
-    name: 'Alpha Docs',
-    description: 'Internal docs',
-    min_tier: 'standard',
-  },
+  resource,
   {
     id: 'pro-reports',
     title: 'Pro Reports',
@@ -68,8 +70,10 @@ export const resources = [
   },
 ]
 
+export const policy = { resource_id: 'alpha', min_tier: 'standard' }
+
 export const policies = [
-  { resource_id: 'alpha', min_tier: 'standard' },
+  policy,
   { resource_id: 'pro-reports', min_tier: 'pro' },
   { resource_id: 'mem-updates', min_tier: 'free' },
 ]

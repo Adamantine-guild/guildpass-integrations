@@ -187,21 +187,41 @@ describe('resource lookup', () => {
     assert.equal(nil, null)
   })
 
-  test('LiveAccessApi returns valid Resource or null', async () => {
-    stubFetch({ '/v1/resources': FIXTURES.resources })
+  test('LiveAccessApi returns valid Resource via direct lookup', async () => {
+    stubFetch({ '/v1/resources/alpha': FIXTURES.resource })
     const api = new LiveAccessApi()
     const r = await api.getResource('alpha')
     assert.ok(r)
     assert.equal(r.id, 'alpha')
+    assert.equal(r.title, 'Alpha Docs')
+  })
 
-    const nil = await api.getResource('non-existent')
-    assert.equal(nil, null)
+  test('LiveAccessApi falls back to list search when direct lookup returns 404', async () => {
+    // Direct lookup fails with 404, but list search succeeds
+    stubFetch({
+      '/v1/resources/alpha': undefined, // trigger 404 in stubFetch if not found in responses
+      '/v1/resources': FIXTURES.resources,
+    })
+    const api = new LiveAccessApi()
+    const r = await api.getResource('alpha')
+    assert.ok(r)
+    assert.equal(r.id, 'alpha')
+  })
+
+  test('LiveAccessApi returns null when both direct lookup and list search fail', async () => {
+    stubFetch({
+      '/v1/resources/non-existent': undefined,
+      '/v1/resources': [],
+    })
+    const api = new LiveAccessApi()
+    const r = await api.getResource('non-existent')
+    assert.equal(r, null)
   })
 
   test('both APIs produce identical Resource lookup results', async () => {
     const mockResult = await new MockAccessApi().getResource('alpha')
 
-    stubFetch({ '/v1/resources': FIXTURES.resources })
+    stubFetch({ '/v1/resources/alpha': FIXTURES.resource })
     const liveResult = await new LiveAccessApi().getResource('alpha')
 
     assert.deepStrictEqual(normalize(mockResult), normalize(liveResult))
@@ -259,21 +279,40 @@ describe('policy lookup', () => {
     assert.equal(nil, null)
   })
 
-  test('LiveAccessApi returns valid AccessPolicy or null', async () => {
-    stubFetch({ '/v1/policies': FIXTURES.policies })
+  test('LiveAccessApi returns valid AccessPolicy via direct lookup', async () => {
+    stubFetch({ '/v1/policies/alpha': FIXTURES.policy })
     const api = new LiveAccessApi()
     const p = await api.getPolicy('alpha')
     assert.ok(p)
     assert.equal(p.resourceId, 'alpha')
+    assert.equal(p.minTier, 'standard')
+  })
 
-    const nil = await api.getPolicy('non-existent')
-    assert.equal(nil, null)
+  test('LiveAccessApi falls back to list search when direct policy lookup returns 404', async () => {
+    stubFetch({
+      '/v1/policies/alpha': undefined,
+      '/v1/policies': FIXTURES.policies,
+    })
+    const api = new LiveAccessApi()
+    const p = await api.getPolicy('alpha')
+    assert.ok(p)
+    assert.equal(p.resourceId, 'alpha')
+  })
+
+  test('LiveAccessApi returns null when both direct policy lookup and list search fail', async () => {
+    stubFetch({
+      '/v1/policies/non-existent': undefined,
+      '/v1/policies': [],
+    })
+    const api = new LiveAccessApi()
+    const p = await api.getPolicy('non-existent')
+    assert.equal(p, null)
   })
 
   test('both APIs produce identical AccessPolicy lookup results', async () => {
     const mockResult = await new MockAccessApi().getPolicy('alpha')
 
-    stubFetch({ '/v1/policies': FIXTURES.policies })
+    stubFetch({ '/v1/policies/alpha': FIXTURES.policy })
     const liveResult = await new LiveAccessApi().getPolicy('alpha')
 
     assert.deepStrictEqual(normalize(mockResult), normalize(liveResult))

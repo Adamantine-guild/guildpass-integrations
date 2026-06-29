@@ -106,7 +106,7 @@ export interface ApiErrorBody {
 /**
  * Result of an access check for a specific resource.
  * This is the value stored in the route-level access cache.
- * Only safe display metadata is included - never sensitive tokens.
+ * Only safe display metadata is included — never sensitive tokens.
  */
 export interface AccessDecision {
   /** Whether access is granted */
@@ -117,16 +117,16 @@ export interface AccessDecision {
   checkedAt: string
 }
 
-// Client-side State Types
+// ── Client-side State Types ──────────────────────────────────────────────────
 
 /**
  * Distinct states of the admin authentication session.
  *
- * - disconnected   - no wallet connected
- * - connected      - wallet connected, but SIWE sign-in not yet performed
- * - authenticating - SIWE signing flow is in-flight
- * - authenticated  - valid, non-expired session token is held
- * - expired        - a session was held but the token has since expired (or
+ * - disconnected   — no wallet connected
+ * - connected      — wallet connected, but SIWE sign-in not yet performed
+ * - authenticating — SIWE signing flow is in-flight
+ * - authenticated  — valid, non-expired session token is held
+ * - expired        — a session was held but the token has since expired (or
  *                    the backend rejected it with 401); re-auth is required
  */
 export type AdminSessionStatus =
@@ -143,7 +143,7 @@ export type SiweAuthState =
   | SiweAuthSession
   | { isAuthenticated: false }
 
-// Backend raw types (guildpass-core response shapes)
+// ── Backend raw types (guildpass-core response shapes) ───────────────────────
 // These are the shapes returned by /v1/* endpoints. The live API client maps
 // them into the frontend types above. Fields are optional because backend
 // versions may use snake_case or camelCase, and this mapping handles both.
@@ -197,7 +197,7 @@ export interface BackendSession {
   }
 }
 
-// API Interface
+// ── API Interface ─────────────────────────────────────────────────────────────
 
 /**
  * Read-only member and resource queries.

@@ -211,13 +211,19 @@ All live requests are sent to `NEXT_PUBLIC_CORE_API_URL` (default `http://localh
 | `GET` | `/v1/members/:address/membership` | — | Membership for address |
 | `GET` | `/v1/members/:address/profile` | — | Profile for address |
 | `GET` | `/v1/resources` | — | Available gated resources |
-| `GET` | `/v1/policies` | — | Access policies |
+| `GET` | `/v1/resources/:id` | — | Single resource lookup (with list fallback) |
+| `GET` | `/v1/policies` | — | All access policies |
+| `GET` | `/v1/policies/:resourceId` | — | Single policy lookup (with list fallback) |
 | `GET` | `/v1/admin/events` | Bearer | Admin webhook event feed |
 | `POST` | `/v1/members/:address/roles` | Bearer | Assign role to member |
 | `PUT` | `/v1/policies/:resourceId` | Bearer | Update access policy |
 | `POST` | `/v1/auth/siwe/nonce` | — | Request SIWE nonce |
 | `POST` | `/v1/auth/siwe/verify` | — | Verify SIWE signature → token |
 | `POST` | `/v1/auth/siwe/logout` | Bearer | Invalidate session |
+
+### Safe Fallback Mechanism
+
+For compatibility with older backend versions that do not yet expose direct lookup endpoints (e.g., `GET /v1/resources/:id`), the API client implements a safe fallback. If a direct lookup returns a `404 Not Found`, the client automatically falls back to fetching the full list (e.g., `GET /v1/resources`) and filtering for the requested identifier client-side.
 
 ### Local dashboard integration gateway
 
