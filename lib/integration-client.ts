@@ -121,3 +121,44 @@ export async function verifyWallet(address: string): Promise<WalletVerification>
   const raw = await method.call(client, address)
   return normalizeVerification(raw)
 }
+
+/**
+ * Returns true when INTEGRATION_API_KEY is set.
+ * Does not expose the key value.
+ */
+export function isGatewayConfigured(): boolean {
+  return Boolean(process.env.INTEGRATION_API_KEY)
+}
+
+/**
+ * Returns true when the optional @guildpass/integration-client package can be imported.
+ */
+export function isGatewayDependencyAvailable(): boolean {
+  try {
+    require.resolve('@guildpass/integration-client')
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Returns true when the resolved client exposes a membership lookup method.
+ */
+export function isGatewayMethodSupported(): boolean {
+  try {
+    const mod = require('@guildpass/integration-client') as IntegrationClientModule
+    const Client = mod.IntegrationClient ?? mod.default
+    if (typeof Client !== 'function') return false
+    // Instantiate without calling — just check the prototype has the method
+    const instance = Object.create(Client.prototype)
+    return (
+      typeof instance.getMembershipByWallet === 'function' ||
+      typeof instance.membershipByWallet === 'function' ||
+      typeof instance.getMembership === 'function' ||
+      typeof instance.membership === 'function'
+    )
+  } catch {
+    return false
+  }
+}
