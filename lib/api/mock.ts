@@ -21,6 +21,8 @@
  * The mock MOCK_ADMIN_ADDRESS constant seeds a pre-authenticated admin for
  * convenience so you can simulate both unauthenticated and admin states:
  * NEXT_PUBLIC_MOCK_ADMIN_ADDRESS=0xYourAddress
+ *
+ * Scenario presets and reset functionality for developer testing are also included.
  */
 import { PolicyValidationError, validatePolicy } from '../validation/policy'
 import {
@@ -45,26 +47,26 @@ const MOCK_SESSION_STATE =
     process.env.NEXT_PUBLIC_MOCK_SESSION_STATE) ||
   ''
 
-const community: Community = {
+const DEFAULT_COMMUNITY: Community = {
   id: 'guildpass-demo',
   name: 'GuildPass Demo Community',
   description: 'Demo space for membership and gating',
   tiers: ['free', 'standard', 'pro'],
 }
 
-let resources: Resource[] = [
+const DEFAULT_RESOURCES: Resource[] = [
   { id: 'alpha', title: 'Alpha Docs', description: 'Internal docs', minTier: 'standard' },
   { id: 'pro-reports', title: 'Pro Reports', description: 'Advanced insight', minTier: 'pro' },
   { id: 'mem-updates', title: 'Member Updates', description: 'Community updates', minTier: 'free' },
 ]
 
-let policies: AccessPolicy[] = [
+const DEFAULT_POLICIES: AccessPolicy[] = [
   { resourceId: 'alpha', minTier: 'standard' },
   { resourceId: 'pro-reports', minTier: 'pro' },
   { resourceId: 'mem-updates', minTier: 'free' },
 ]
 
-const mockWebhookEvents: WebhookEventLog[] = [
+const DEFAULT_WEBHOOK_EVENTS: WebhookEventLog[] = [
   {
     id: "wh_01J1",
     eventType: "membership.created",
@@ -91,7 +93,13 @@ const mockWebhookEvents: WebhookEventLog[] = [
   }
 ]
 
-const memberStore: Record<string, { membership: Membership; roles: Role[]; profile: MemberProfile }> = {}
+const DEFAULT_MEMBER_STORE: Record<string, { membership: Membership; roles: Role[]; profile: MemberProfile }> = {}
+
+let community: Community = { ...DEFAULT_COMMUNITY }
+let resources: Resource[] = [...DEFAULT_RESOURCES]
+let policies: AccessPolicy[] = [...DEFAULT_POLICIES]
+let mockWebhookEvents: WebhookEventLog[] = [...DEFAULT_WEBHOOK_EVENTS]
+let memberStore: Record<string, { membership: Membership; roles: Role[]; profile: MemberProfile }> = { ...DEFAULT_MEMBER_STORE }
 
 function ensureAddress(addr?: string) {
   if (!addr) return null
@@ -111,6 +119,120 @@ function ensureAddress(addr?: string) {
     }
   }
   return memberStore[addr]
+}
+
+type MockScenario = 
+  | 'active-member' 
+  | 'expired-member' 
+  | 'denied-resource' 
+  | 'admin-session-expired' 
+  | 'no-roles'
+
+/**
+ * Reset all mock data to its initial state.
+ */
+export function resetMockData() {
+  community = { ...DEFAULT_COMMUNITY }
+  resources = [...DEFAULT_RESOURCES]
+  policies = [...DEFAULT_POLICIES]
+  mockWebhookEvents = [...DEFAULT_WEBHOOK_EVENTS]
+  memberStore = { ...DEFAULT_MEMBER_STORE }
+}
+
+/**
+ * Apply a predefined scenario preset for testing.
+ */
+export function applyMockScenario(scenario: MockScenario, address: string = '0x1234567890123456789012345678901234567890') {
+  resetMockData()
+  
+  switch (scenario) {
+    case 'active-member':
+      memberStore[address] = {
+        membership: {
+          address,
+          tier: 'standard',
+          active: true,
+        },
+        roles: ['member'],
+        profile: {
+          address,
+          displayName: 'Active Standard User',
+          badges: ['Early Member', 'Standard Tier'],
+        },
+      }
+      break
+      
+    case 'expired-member':
+      memberStore[address] = {
+        membership: {
+          address,
+          tier: 'standard',
+          active: false,
+          expiresAt: new Date(Date.now() - 1000 * 60 * 60 * 24).toISOString(),
+        },
+        roles: ['member'],
+        profile: {
+          address,
+          displayName: 'Expired User',
+          badges: ['Former Member'],
+        },
+      }
+      break
+      
+    case 'denied-resource':
+      memberStore[address] = {
+        membership: {
+          address,
+          tier: 'free',
+          active: true,
+        },
+        roles: ['member'],
+        profile: {
+          address,
+          displayName: 'Free Tier User',
+          badges: ['Free Tier'],
+        },
+      }
+      // Ensure Alpha Docs require standard tier
+      policies = policies.map(p => 
+        p.resourceId === 'alpha' 
+          ? { ...p, minTier: 'standard' } 
+          : p
+      )
+      break
+      
+    case 'admin-session-expired':
+      memberStore[address] = {
+        membership: {
+          address,
+          tier: 'pro',
+          active: true,
+        },
+        roles: ['admin', 'member'],
+        profile: {
+          address,
+          displayName: 'Expired Admin',
+          badges: ['Admin', 'Pro Tier'],
+        },
+      }
+      break
+      
+    case 'no-roles':
+      memberStore[address] = {
+        membership: {
+          address,
+          tier: 'free',
+          active: true,
+        },
+        roles: [],
+        profile: {
+          address,
+          displayName: 'No Roles User',
+          badges: ['New User'],
+        },
+      }
+      break
+  }
 }
 
 /** Generate a short random hex nonce (16 bytes). */

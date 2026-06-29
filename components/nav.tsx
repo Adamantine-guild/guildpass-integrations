@@ -10,6 +10,7 @@ import { ConnectButton } from './wallet/connect-button'
 import { useSiweAuth } from '@/lib/wallet/providers'
 import { queryKeys } from '@/lib/query'
 import { features } from '@/lib/features'
+import { config } from '@/lib/config'
 
 export function Nav() {
   const pathname = usePathname()
@@ -30,6 +31,7 @@ export function Nav() {
     { href: '/admin' as Route, label: 'Admin', enabled: isAdmin },
     { href: '/resources/alpha' as Route, label: 'Gated', enabled: features.resources },
     { href: '/events/demo' as Route, label: 'Event', enabled: features.events },
+    { href: '/developer' as Route, label: 'Dev', enabled: config.apiMode === 'mock' },
   ].filter((it) => it.enabled)
 
   return (

@@ -48,7 +48,17 @@ cp .env.example .env.local
 NEXT_PUBLIC_MOCK_MODE=true npm run dev
 ```
 
-Open http://localhost:3000.
+Open http://localhost:3000. In mock mode, a "Dev" link appears in the navigation, taking you to the developer controls page with tools for resetting mock data and applying scenario presets.
+
+#### Mock Developer Controls
+In mock mode, visit `/developer` (or click "Dev" in the nav) to access:
+- **Reset Mock Data**: Reset all mock data (members, resources, policies, webhook events) to initial state
+- **Scenario Presets**: Apply predefined testing scenarios:
+  - Active Member: Active standard tier user
+  - Expired Member: Inactive user with expired membership
+  - Denied Resource: Free tier user denied access to Alpha Docs
+  - Admin Session Expired: Admin user to test expired SIWE sessions
+  - No Roles: Member with no roles assigned
 
 ### Run against live guildpass-core
 

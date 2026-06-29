@@ -13,8 +13,9 @@ import { useSiweAuth } from '@/lib/wallet/providers'
 import { AuthError } from '@/lib/api/live'
 import { queryKeys } from '@/lib/query'
 import { LoadingState, ErrorState, EmptyState, DeniedState, safeErrorMessage } from '@/components/ui/api-states'
-import { applyOptimisticRole } from '@/lib/api/optimistic'
+import { applyOptimisticRole, applyOptimisticRemoveRole } from '@/lib/api/optimistic'
 import { AddressText } from '@/components/wallet/address-text'
+import { isWalletAddress, normalizeAddress } from '@/lib/wallet/address'
 
 type AssignRoleInput = {
   address: string
@@ -66,6 +67,10 @@ export default function MembersPage() {
   const [pendingAssignment, setPendingAssignment] = useState<AssignRoleInput | null>(null)
   const [successAssignment, setSuccessAssignment] = useState<AssignRoleInput | null>(null)
   const [rollbackMessage, setRollbackMessage] = useState('')
+  const [successMessage, setSuccessMessage] = useState('')
+  
+  const normalizedAddr = normalizeAddress(addr)
+  const isValidAddress = isWalletAddress(normalizedAddr)
 
   const {
     mutate,
@@ -164,6 +169,7 @@ export default function MembersPage() {
                 placeholder="0x…"
                 value={addr}
                 onChange={(e) => setAddr(e.target.value)}
+                className={!isValidAddress && addr.trim() ? 'border-destructive' : ''}
               />
               <select
                 id="assign-role-select"
@@ -177,12 +183,17 @@ export default function MembersPage() {
               </select>
               <Button
                 id="assign-role-btn"
-                onClick={() => mutate({ address: addr, role })}
-                disabled={!addr || isPending}
+                onClick={() => mutate({ address: normalizedAddr, role })}
+                disabled={!isValidAddress || isPending}
               >
                 {isPending ? 'Assigning…' : 'Assign'}
               </Button>
             </div>
+            {!isValidAddress && addr.trim() && (
+              <div className="text-sm text-destructive" role="alert">
+                Please enter a valid wallet address (0x followed by 40 hexadecimal characters)
+              </div>
+            )}
             {successAssignment && (
               <div className="text-sm text-green-700 dark:text-green-400" role="status">
                 Role "{successAssignment.role}" saved for{' '}
