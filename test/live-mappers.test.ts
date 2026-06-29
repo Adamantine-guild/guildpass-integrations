@@ -9,8 +9,10 @@ import {
   mapPolicy,
   mapSession,
   mapWebhookEvent,
+  mapVerificationState,
 } from '../lib/api/mappers'
 import type { MembershipTier } from '../lib/api/types'
+import { ApiError } from '../lib/api/errors'
 
 // ===========================================================================
 // mapCommunity
@@ -363,5 +365,58 @@ describe('mapWebhookEvent', () => {
   it('handles missing payloadSummary', () => {
     const result = mapWebhookEvent({ id: 'evt3', eventType: 'policy.updated', status: 'failed' })
     assert.deepEqual(result.payloadSummary, { network: undefined, txHash: undefined, tier: undefined, reason: undefined })
+  })
+})
+// ===========================================================================
+// mapVerificationState
+// ===========================================================================
+
+describe('mapVerificationState', () => {
+  it('returns verified state when data.verified is true', () => {
+    const data = { verified: true, checkedAt: '2024-01-01' }
+    const result = mapVerificationState(data, null)
+    assert.equal(result.status, 'verified')
+    assert.equal(result.badgeVariant, 'success')
+  })
+
+  it('returns unverified state when data.verified is false', () => {
+    const data = { verified: false, checkedAt: '2024-01-01' }
+    const result = mapVerificationState(data, null)
+    assert.equal(result.status, 'unverified')
+    assert.equal(result.badgeVariant, 'warning')
+  })
+
+  it('returns unavailable state for 503 errors', () => {
+    const error = new ApiError({
+      status: 503,
+      code: 'server_error',
+      safeMessage: 'Gateway unavailable',
+    })
+    const result = mapVerificationState(undefined, error)
+    assert.equal(result.status, 'unavailable')
+    assert.equal(result.badgeVariant, 'default')
+    assert.equal(result.message, 'Gateway unavailable')
+  })
+
+  it('returns unavailable state for network errors', () => {
+    const error = new ApiError({
+      code: 'network_error',
+      safeMessage: 'Network down',
+    })
+    const result = mapVerificationState(undefined, error)
+    assert.equal(result.status, 'unavailable')
+    assert.equal(result.badgeVariant, 'default')
+  })
+
+  it('returns failed state for other errors (e.g. 502)', () => {
+    const error = new ApiError({
+      status: 502,
+      code: 'server_error',
+      safeMessage: 'Bad gateway',
+    })
+    const result = mapVerificationState(undefined, error)
+    assert.equal(result.status, 'failed')
+    assert.equal(result.badgeVariant, 'destructive')
+    assert.equal(result.message, 'Bad gateway')
   })
 })

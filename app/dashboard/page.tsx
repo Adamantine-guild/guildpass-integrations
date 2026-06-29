@@ -1,7 +1,14 @@
 'use client'
 import { useAccount } from 'wagmi'
 import { useQuery } from '@tanstack/react-query'
-import { getApi, type MemberProfile, type Membership, type Session, type WalletVerification } from '@/lib/api'
+import {
+  getApi,
+  type MemberProfile,
+  type Membership,
+  type Session,
+  type WalletVerification,
+  mapVerificationState,
+} from '@/lib/api'
 import { queryKeys } from '@/lib/query'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -115,35 +122,46 @@ export default function DashboardPage() {
             />
           ) : isVerifying ? (
             <LoadingState />
-          ) : verifyIsError ? (
-            <ErrorState
-              title="Wallet verification failed"
-              message={safeErrorMessage(verifyError)}
-              onRetry={() => refetchVerification()}
-            />
-          ) : verification ? (
-            <div className="space-y-2">
-              <div className="text-sm text-muted-foreground">
-                Verification: {verification.verified ? (
-                  <Badge variant="success">Verified</Badge>
-                ) : (
-                  <Badge variant="destructive">Not verified</Badge>
-                )}
-              </div>
-              {verification.method ? (
-                <div className="text-sm text-muted-foreground">
-                  Method: {verification.method}
-                </div>
-              ) : null}
-              <div className="text-sm text-muted-foreground">
-                Checked: {new Date(verification.checkedAt).toLocaleString()}
-              </div>
-            </div>
           ) : (
-            <EmptyState
-              title="Profile details unavailable"
-              message="Basic profile details will appear here when they are available."
-            />
+            <div className="space-y-4">
+              {(() => {
+                const display = mapVerificationState(verification, verifyError)
+                return (
+                  <div className="space-y-2">
+                    <div className="text-sm text-muted-foreground flex items-center gap-2">
+                      Verification:{' '}
+                      <Badge variant={display.badgeVariant}>
+                        {display.title}
+                      </Badge>
+                    </div>
+                    <div className="text-sm text-muted-foreground">
+                      {display.message}
+                    </div>
+                    {display.status === 'failed' && (
+                      <button
+                        onClick={() => refetchVerification()}
+                        className="text-xs text-primary underline underline-offset-4"
+                      >
+                        Try again
+                      </button>
+                    )}
+                  </div>
+                )
+              })()}
+
+              {verification && (
+                <div className="space-y-2 pt-2 border-t">
+                  {verification.method ? (
+                    <div className="text-sm text-muted-foreground">
+                      Method: {verification.method}
+                    </div>
+                  ) : null}
+                  <div className="text-sm text-muted-foreground">
+                    Checked: {new Date(verification.checkedAt).toLocaleString()}
+                  </div>
+                </div>
+              )}
+            </div>
           )}
         </Section>
 

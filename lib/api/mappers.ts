@@ -9,7 +9,16 @@ import type {
   WebhookEventLog,
   BackendMember,
   BackendSession,
+  WalletVerification,
 } from './types'
+import { isApiError } from './errors'
+
+export interface VerificationDisplay {
+  status: 'verified' | 'unverified' | 'unavailable' | 'failed'
+  title: string
+  message: string
+  badgeVariant: 'success' | 'warning' | 'destructive' | 'default'
+}
 
 // ── Community ────────────────────────────────────────────────────────────────
 
@@ -119,5 +128,54 @@ export function mapWebhookEvent(raw: any): WebhookEventLog {
       reason:
         raw.payloadSummary?.reason ?? raw.payload_summary?.reason,
     },
+  }
+}
+
+// ── Wallet Verification ──────────────────────────────────────────────────────
+
+export function mapVerificationState(
+  data: WalletVerification | undefined,
+  error: unknown,
+): VerificationDisplay {
+  if (error) {
+    const isUnavailable =
+      isApiError(error) &&
+      (error.status === 503 || error.code === 'network_error')
+
+    if (isUnavailable) {
+      return {
+        status: 'unavailable',
+        title: 'Verification Unavailable',
+        message: isApiError(error)
+          ? error.safeMessage
+          : 'The verification service is currently unavailable.',
+        badgeVariant: 'default',
+      }
+    }
+
+    return {
+      status: 'failed',
+      title: 'Verification Check Failed',
+      message: isApiError(error)
+        ? error.safeMessage
+        : 'An error occurred while checking verification.',
+      badgeVariant: 'destructive',
+    }
+  }
+
+  if (data?.verified) {
+    return {
+      status: 'verified',
+      title: 'Verified',
+      message: 'This wallet has been successfully verified.',
+      badgeVariant: 'success',
+    }
+  }
+
+  return {
+    status: 'unverified',
+    title: 'Not Verified',
+    message: 'This wallet is not yet verified.',
+    badgeVariant: 'warning',
   }
 }
