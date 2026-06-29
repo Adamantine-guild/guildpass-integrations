@@ -53,3 +53,16 @@
 body {
   @apply bg-background text-foreground;
 }
+
+@layer base {
+  a {
+    @apply rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background;
+  }
+
+  @media (forced-colors: active) {
+    *:focus-visible {
+      outline: 2px solid CanvasText;
+      outline-offset: 2px;
+    }
+  }
+}

@@ -24,8 +24,8 @@ import {
   useEffect,
   useState,
 } from 'react'
-import { WagmiProvider, createConfig, http, injected, useSignMessage, useAccount, useDisconnect } from 'wagmi'
-import { mainnet, base, sepolia } from 'wagmi/chains'
+import { WagmiProvider, createConfig, useSignMessage, useAccount, useDisconnect } from 'wagmi'
+import { walletConfig } from '@/lib/wallet/config'
 import { QueryClient, QueryClientProvider, useQueryClient, QueryCache } from '@tanstack/react-query'
 import { getApi } from '@/lib/api'
 import { config } from '@/lib/config'
@@ -34,17 +34,9 @@ import { clearAuthSession, loadAuthSession, storeAuthSession } from '@/lib/sessi
 import { isApiError } from '@/lib/api/errors'
 import { accessKeys, queryKeys } from '@/lib/query'
 
-// ── Wagmi config (unchanged) ──────────────────────────────────────────────────
+// ── Wagmi config ─────────────────────────────────────────────────────────────
 
-const wagmiConfig = createConfig({
-  chains: [mainnet, base, sepolia],
-  connectors: [injected()],
-  transports: {
-    [mainnet.id]: http(),
-    [base.id]: http(),
-    [sepolia.id]: http(),
-  },
-})
+const wagmiConfig = createConfig(walletConfig)
 
 // ── SIWE Auth Context ─────────────────────────────────────────────────────────
 
@@ -101,18 +93,38 @@ function SiweAuthProvider({ children }: PropsWithChildren) {
       setAuthSession(stored)
       setIsExpired(false)
     } else {
-      // Address changed (e.g. different MetaMask account) — clear stale session
+      // Address changed (e.g. different MetaMask account) — clear stale session and queries
       setAuthSession(null)
       setIsExpired(false)
+      if (stored) {
+        clearAuthSession()
+      }
+      // Clear all wallet-scoped and admin queries
+      queryClient.removeQueries({ queryKey: queryKeys.session.all })
+      queryClient.removeQueries({ queryKey: queryKeys.profile.all })
+      queryClient.removeQueries({ queryKey: queryKeys.walletVerification.all })
+      queryClient.removeQueries({ queryKey: accessKeys.all })
+      queryClient.removeQueries({ queryKey: queryKeys.members.all })
+      queryClient.removeQueries({ queryKey: queryKeys.policies.all })
+      queryClient.removeQueries({ queryKey: queryKeys.resources.all })
+      queryClient.removeQueries({ queryKey: queryKeys.webhookEvents.all })
     }
-  }, [address])
+  }, [address, queryClient])
 
   // Clear session and cached access decisions when wallet disconnects
   useEffect(() => {
     if (!address && authSession) {
       setAuthSession(null)
       clearAuthSession()
+      // Clear all wallet-scoped and admin queries
+      queryClient.removeQueries({ queryKey: queryKeys.session.all })
+      queryClient.removeQueries({ queryKey: queryKeys.profile.all })
+      queryClient.removeQueries({ queryKey: queryKeys.walletVerification.all })
       queryClient.removeQueries({ queryKey: accessKeys.all })
+      queryClient.removeQueries({ queryKey: queryKeys.members.all })
+      queryClient.removeQueries({ queryKey: queryKeys.policies.all })
+      queryClient.removeQueries({ queryKey: queryKeys.resources.all })
+      queryClient.removeQueries({ queryKey: queryKeys.webhookEvents.all })
     }
   }, [address, authSession, queryClient])
 
@@ -131,8 +143,15 @@ function SiweAuthProvider({ children }: PropsWithChildren) {
       } catch {
         // ignore
       }
+      // Clear all wallet-scoped and admin queries
       queryClient.removeQueries({ queryKey: queryKeys.session.all })
+      queryClient.removeQueries({ queryKey: queryKeys.profile.all })
+      queryClient.removeQueries({ queryKey: queryKeys.walletVerification.all })
       queryClient.removeQueries({ queryKey: accessKeys.all })
+      queryClient.removeQueries({ queryKey: queryKeys.members.all })
+      queryClient.removeQueries({ queryKey: queryKeys.policies.all })
+      queryClient.removeQueries({ queryKey: queryKeys.resources.all })
+      queryClient.removeQueries({ queryKey: queryKeys.webhookEvents.all })
     }
 
     window.addEventListener('siwe:invalidated', handler)
@@ -203,8 +222,15 @@ function SiweAuthProvider({ children }: PropsWithChildren) {
     setIsExpired(false)
     setError(null)
     disconnect()
+    // Clear all wallet-scoped and admin queries
     queryClient.removeQueries({ queryKey: queryKeys.session.all })
+    queryClient.removeQueries({ queryKey: queryKeys.profile.all })
+    queryClient.removeQueries({ queryKey: queryKeys.walletVerification.all })
     queryClient.removeQueries({ queryKey: accessKeys.all })
+    queryClient.removeQueries({ queryKey: queryKeys.members.all })
+    queryClient.removeQueries({ queryKey: queryKeys.policies.all })
+    queryClient.removeQueries({ queryKey: queryKeys.resources.all })
+    queryClient.removeQueries({ queryKey: queryKeys.webhookEvents.all })
   }, [authSession, address, disconnect, queryClient])
 
   /** Called by admin mutation error handlers when the backend returns 401. */
@@ -268,7 +294,13 @@ export function RootProviders({ children }: PropsWithChildren) {
   useEffect(() => {
     const handler = () => {
       queryClient.removeQueries({ queryKey: queryKeys.session.all })
+      queryClient.removeQueries({ queryKey: queryKeys.profile.all })
+      queryClient.removeQueries({ queryKey: queryKeys.walletVerification.all })
       queryClient.removeQueries({ queryKey: accessKeys.all })
+      queryClient.removeQueries({ queryKey: queryKeys.members.all })
+      queryClient.removeQueries({ queryKey: queryKeys.policies.all })
+      queryClient.removeQueries({ queryKey: queryKeys.resources.all })
+      queryClient.removeQueries({ queryKey: queryKeys.webhookEvents.all })
     }
     window.addEventListener('siwe:invalidated', handler)
     return () => window.removeEventListener('siwe:invalidated', handler)

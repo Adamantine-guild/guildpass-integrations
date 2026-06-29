@@ -1,16 +1,34 @@
-'use client'
-import { useAccount } from 'wagmi'
-import { useQuery } from '@tanstack/react-query'
-import { getApi, type MemberProfile, type Membership, type Session, type WalletVerification } from '@/lib/api'
-import { queryKeys } from '@/lib/query'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Badge } from '@/components/ui/badge'
-import Link from 'next/link'
-import { buttonVariants } from '@/components/ui/button'
-import { LoadingState, ErrorState, EmptyState, DeniedState, safeErrorMessage } from '@/components/ui/api-states'
-import { AddressText } from '@/components/wallet/address-text'
+"use client";
+import { useAccount } from "wagmi";
+import { useQuery } from "@tanstack/react-query";
+import {
+  getApi,
+  type MemberProfile,
+  type Membership,
+  type Session,
+  type WalletVerification,
+} from "@/lib/api";
+import { queryKeys } from "@/lib/query";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import Link from "next/link";
+import { buttonVariants } from "@/components/ui/button";
+import {
+  LoadingState,
+  ErrorState,
+  EmptyState,
+  DeniedState,
+  safeErrorMessage,
+} from "@/components/ui/api-states";
+import { AddressText } from "@/components/wallet/address-text";
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Section({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
   return (
     <Card>
       <CardHeader>
@@ -18,17 +36,23 @@ function Section({ title, children }: { title: string; children: React.ReactNode
       </CardHeader>
       <CardContent>{children}</CardContent>
     </Card>
-  )
+  );
 }
 
 export default function DashboardPage() {
-  const { address, isConnected } = useAccount()
-  const { data: session, isLoading, isError, error, refetch } = useQuery<Session>({
-    queryKey: queryKeys.session.byAddress(address ?? ''),
+  const { address, isConnected } = useAccount();
+  const {
+    data: session,
+    isLoading,
+    isError,
+    error,
+    refetch,
+  } = useQuery<Session>({
+    queryKey: queryKeys.session.byAddress(address ?? ""),
     queryFn: () => getApi(address).getSession(),
     enabled: !!address,
     retry: 1,
-  })
+  });
 
   const {
     data: verification,
@@ -37,11 +61,11 @@ export default function DashboardPage() {
     error: verifyError,
     refetch: refetchVerification,
   } = useQuery<WalletVerification>({
-    queryKey: queryKeys.walletVerification.byAddress(address ?? ''),
+    queryKey: queryKeys.walletVerification.byAddress(address ?? ""),
     queryFn: () => getApi(address).verifyWallet(address as string),
     enabled: !!address,
     retry: 1,
-  })
+  });
 
   const {
     data: profile,
@@ -50,27 +74,34 @@ export default function DashboardPage() {
     error: profileError,
     refetch: refetchProfile,
   } = useQuery<MemberProfile | null>({
-    queryKey: queryKeys.profile.byAddress(address ?? ''),
+    queryKey: queryKeys.profile.byAddress(address ?? ""),
     queryFn: () => getApi(address).getProfile(address as string),
     enabled: !!address,
     retry: 1,
-  })
+  });
 
-  const membership: Membership | undefined = session?.membership
+  const membership: Membership | undefined = session?.membership;
 
   return (
     <div className="grid gap-6">
-      <div className="flex items-end justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold">Member Dashboard</h1>
-          <p className="text-sm text-muted-foreground">Wallet-aware member experience</p>
+          <p className="text-sm text-muted-foreground">
+            Wallet-aware member experience
+          </p>
         </div>
-        <div className="text-right">
+        <div className="text-left sm:text-right">
           <div className="text-sm">
             {isConnected ? (
-              <AddressText address={address} className="text-muted-foreground" />
+              <AddressText
+                address={address}
+                className="text-muted-foreground"
+              />
             ) : (
-              <span className="text-muted-foreground">Wallet not connected</span>
+              <span className="text-muted-foreground">
+                Wallet not connected
+              </span>
             )}
           </div>
         </div>
@@ -93,15 +124,28 @@ export default function DashboardPage() {
             />
           ) : (
             <div className="space-y-2">
-              <div className="text-lg font-medium">{session?.community?.name ?? "Unknown"}</div>
-              <div className="text-sm text-muted-foreground">
-                Tier: <Badge className="ml-1" variant="outline">{membership?.tier ?? "—"}</Badge>
+              <div className="text-lg font-medium">
+                {session?.community?.name ?? "Unknown"}
               </div>
               <div className="text-sm text-muted-foreground">
-                Status: {membership?.active ? <Badge variant="success">Active</Badge> : <Badge variant="destructive">Inactive</Badge>}
+                Tier:{" "}
+                <Badge className="ml-1" variant="outline">
+                  {membership?.tier ?? "—"}
+                </Badge>
               </div>
               <div className="text-sm text-muted-foreground">
-                Expires: {membership?.expiresAt ? new Date(membership.expiresAt).toLocaleDateString() : "N/A"}
+                Status:{" "}
+                {membership?.active ? (
+                  <Badge variant="success">Active</Badge>
+                ) : (
+                  <Badge variant="destructive">Inactive</Badge>
+                )}
+              </div>
+              <div className="text-sm text-muted-foreground">
+                Expires:{" "}
+                {membership?.expiresAt
+                  ? new Date(membership.expiresAt).toLocaleDateString()
+                  : "N/A"}
               </div>
             </div>
           )}
@@ -124,7 +168,8 @@ export default function DashboardPage() {
           ) : verification ? (
             <div className="space-y-2">
               <div className="text-sm text-muted-foreground">
-                Verification: {verification.verified ? (
+                Verification:{" "}
+                {verification.verified ? (
                   <Badge variant="success">Verified</Badge>
                 ) : (
                   <Badge variant="destructive">Not verified</Badge>
@@ -179,14 +224,31 @@ export default function DashboardPage() {
           <div className="space-y-2">
             <div className="text-sm">Explore resources based on your tier.</div>
             <div className="flex flex-wrap items-center gap-2">
-              <Link href="/resources/alpha" className={buttonVariants()}>Alpha Docs</Link>
-              <Link href="/resources/pro-reports" className={buttonVariants({ variant: 'outline' })}>Pro Reports</Link>
-              <Link href="/resources/mem-updates" className={buttonVariants({ variant: 'outline' })}>Member Updates</Link>
-              <Link href="/events/demo" className={buttonVariants({ variant: 'secondary' })}>Demo Event</Link>
+              <Link href="/resources/alpha" className={buttonVariants()}>
+                Alpha Docs
+              </Link>
+              <Link
+                href="/resources/pro-reports"
+                className={buttonVariants({ variant: "outline" })}
+              >
+                Pro Reports
+              </Link>
+              <Link
+                href="/resources/mem-updates"
+                className={buttonVariants({ variant: "outline" })}
+              >
+                Member Updates
+              </Link>
+              <Link
+                href="/events/demo"
+                className={buttonVariants({ variant: "secondary" })}
+              >
+                Demo Event
+              </Link>
             </div>
           </div>
         </Section>
       </div>
     </div>
-  )
+  );
 }
