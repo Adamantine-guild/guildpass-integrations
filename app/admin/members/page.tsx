@@ -13,8 +13,9 @@ import { useSiweAuth } from '@/lib/wallet/providers'
 import { AuthError } from '@/lib/api/live'
 import { queryKeys } from '@/lib/query'
 import { LoadingState, ErrorState, EmptyState, DeniedState, safeErrorMessage } from '@/components/ui/api-states'
-import { applyOptimisticRole } from '@/lib/api/optimistic'
+import { applyOptimisticRole, applyOptimisticRemoveRole } from '@/lib/api/optimistic'
 import { AddressText } from '@/components/wallet/address-text'
+import { MembershipTier } from '@/lib/api/types'
 
 type AssignRoleInput = {
   address: string
@@ -65,7 +66,35 @@ export default function MembersPage() {
   const [role, setRole] = useState<Role>('member')
   const [pendingAssignment, setPendingAssignment] = useState<AssignRoleInput | null>(null)
   const [successAssignment, setSuccessAssignment] = useState<AssignRoleInput | null>(null)
+  const [successMessage, setSuccessMessage] = useState('')
   const [rollbackMessage, setRollbackMessage] = useState('')
+
+  // Filter state
+  const [searchQuery, setSearchQuery] = useState('')
+  const [roleFilter, setRoleFilter] = useState<Role | 'all'>('all')
+  const [tierFilter, setTierFilter] = useState<MembershipTier | 'all'>('all')
+  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all')
+
+  const resetFilters = () => {
+    setSearchQuery('')
+    setRoleFilter('all')
+    setTierFilter('all')
+    setStatusFilter('all')
+  }
+
+  const filteredMembers = members?.filter((m) => {
+    const matchesSearch = !searchQuery || m.address.toLowerCase().includes(searchQuery.toLowerCase())
+    const matchesRole = roleFilter === 'all' || m.roles.includes(roleFilter)
+    const matchesTier = tierFilter === 'all' || m.tier === tierFilter
+    const matchesStatus =
+      statusFilter === 'all' ||
+      (statusFilter === 'active' && m.active) ||
+      (statusFilter === 'inactive' && !m.active)
+
+    return matchesSearch && matchesRole && matchesTier && matchesStatus
+  })
+
+  const isFiltered = searchQuery || roleFilter !== 'all' || tierFilter !== 'all' || statusFilter !== 'all'
 
   const {
     mutate,
@@ -122,6 +151,7 @@ export default function MembersPage() {
       await qc.cancelQueries({ queryKey: queryKeys.members.all })
       const previousMembers = qc.getQueryData<MemberRow[]>(queryKeys.members.all)
       setPendingAssignment(input)
+      setSuccessAssignment(null)
       setSuccessMessage('')
       setRollbackMessage('')
       setSessionExpired(false)
@@ -185,12 +215,17 @@ export default function MembersPage() {
             </div>
             {successAssignment && (
               <div className="text-sm text-green-700 dark:text-green-400" role="status">
-                Role "{successAssignment.role}" saved for{' '}
+                Role &quot;{successAssignment.role}&quot; saved for{' '}
                 <AddressText
                   address={successAssignment.address}
                   className="text-green-700 dark:text-green-400"
                 />
                 .
+              </div>
+            )}
+            {successMessage && (
+              <div className="text-sm text-green-700 dark:text-green-400" role="status">
+                {successMessage}
               </div>
             )}
             {rollbackMessage && (
@@ -209,8 +244,53 @@ export default function MembersPage() {
         </Card>
 
         <Card>
-          <CardHeader><CardTitle>Member List</CardTitle></CardHeader>
-          <CardContent>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle>Member List</CardTitle>
+            {isFiltered && (
+              <Button variant="ghost" size="sm" onClick={resetFilters}>
+                Clear Filters
+              </Button>
+            )}
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+              <Input
+                placeholder="Search wallet..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="md:col-span-1"
+              />
+              <select
+                className="border rounded-md h-9 px-2 text-sm bg-background"
+                value={roleFilter}
+                onChange={(e) => setRoleFilter(e.target.value as Role | 'all')}
+              >
+                <option value="all">All Roles</option>
+                <option value="member">Member</option>
+                <option value="moderator">Moderator</option>
+                <option value="admin">Admin</option>
+              </select>
+              <select
+                className="border rounded-md h-9 px-2 text-sm bg-background"
+                value={tierFilter}
+                onChange={(e) => setTierFilter(e.target.value as MembershipTier | 'all')}
+              >
+                <option value="all">All Tiers</option>
+                <option value="free">Free</option>
+                <option value="standard">Standard</option>
+                <option value="pro">Pro</option>
+              </select>
+              <select
+                className="border rounded-md h-9 px-2 text-sm bg-background"
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value as 'all' | 'active' | 'inactive')}
+              >
+                <option value="all">All Status</option>
+                <option value="active">Active</option>
+                <option value="inactive">Inactive</option>
+              </select>
+            </div>
+
             {isLoading ? (
               <LoadingState message="Loading members…" />
             ) : isError ? (
@@ -221,9 +301,19 @@ export default function MembersPage() {
               />
             ) : !members?.length ? (
               <EmptyState title="No members yet" message="No members have been added to this community." />
+            ) : !filteredMembers?.length ? (
+              <EmptyState
+                title="No members found"
+                message="No members match the selected filters."
+                actions={
+                  <Button variant="outline" size="sm" onClick={resetFilters}>
+                    Clear all filters
+                  </Button>
+                }
+              />
             ) : (
               <div className="space-y-2">
-                {members.map((m) => (
+                {filteredMembers.map((m) => (
                   <div
                     key={m.address}
                     className="flex items-center justify-between border rounded-md p-2"
