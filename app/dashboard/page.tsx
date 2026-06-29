@@ -1,13 +1,14 @@
 'use client'
 import { useAccount } from 'wagmi'
 import { useQuery } from '@tanstack/react-query'
-import { getApi, type MemberProfile, type Membership, type Session, type WalletVerification } from '@/lib/api'
+import { getApi, type MemberProfile, type Membership, type Resource, type Session, type WalletVerification } from '@/lib/api'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import Link from 'next/link'
 import { buttonVariants } from '@/components/ui/button'
 import { LoadingState, ErrorState, EmptyState, DeniedState, safeErrorMessage } from '@/components/ui/api-states'
 import { AddressText } from '@/components/wallet/address-text'
+import { features } from '@/lib/features'
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -55,7 +56,34 @@ export default function DashboardPage() {
     retry: 1,
   })
 
+  const {
+    data: resources,
+    isLoading: resourcesLoading,
+    isError: resourcesIsError,
+    error: resourcesError,
+    refetch: refetchResources,
+  } = useQuery<Resource[]>({
+    queryKey: ['resources', address],
+    queryFn: () => getApi(address).listResources(),
+    enabled: !!address && features.resources,
+    retry: 1,
+  })
+
   const membership: Membership | undefined = session?.membership
+
+  function hasAccessToResource(resource: Resource): boolean {
+    if (!membership) return false
+    if (!resource.minTier) return true
+    const tierOrder = ['free', 'standard', 'pro']
+    const userTierIndex = tierOrder.indexOf(membership.tier)
+    const requiredTierIndex = tierOrder.indexOf(resource.minTier)
+    return userTierIndex >= requiredTierIndex
+  }
+
+  function getResourceHref(resource: Resource): string | null {
+    if (features.resources) return `/resources/${resource.id}`
+    return null
+  }
 
   return (
     <div className="grid gap-6">
@@ -175,15 +203,58 @@ export default function DashboardPage() {
         </Section>
 
         <Section title="Gated Resources">
-          <div className="space-y-2">
-            <div className="text-sm">Explore resources based on your tier.</div>
-            <div className="flex flex-wrap items-center gap-2">
-              <Link href="/resources/alpha" className={buttonVariants()}>Alpha Docs</Link>
-              <Link href="/resources/pro-reports" className={buttonVariants({ variant: 'outline' })}>Pro Reports</Link>
-              <Link href="/resources/mem-updates" className={buttonVariants({ variant: 'outline' })}>Member Updates</Link>
-              <Link href="/events/demo" className={buttonVariants({ variant: 'secondary' })}>Demo Event</Link>
+          {!address ? (
+            <DeniedState
+              title="Wallet connection required"
+              message="Connect your wallet to view available resources."
+            />
+          ) : !features.resources ? (
+            <EmptyState
+              title="Resources not enabled"
+              message="Resources are not available in the current environment."
+            />
+          ) : resourcesLoading ? (
+            <LoadingState message="Loading resources..." />
+          ) : resourcesIsError ? (
+            <ErrorState
+              title="Failed to load resources"
+              message={safeErrorMessage(resourcesError)}
+              onRetry={() => refetchResources()}
+            />
+          ) : resources && resources.length > 0 ? (
+            <div className="space-y-2">
+              <div className="text-sm">Explore resources based on your tier.</div>
+              <div className="flex flex-wrap items-center gap-2">
+                {resources.map((resource) => {
+                  const href = getResourceHref(resource)
+                  const accessible = hasAccessToResource(resource)
+                  if (!href) {
+                    return (
+                      <Badge key={resource.id} variant="outline" className="opacity-60">
+                        {resource.title}
+                      </Badge>
+                    )
+                  }
+                  return (
+                    <Link
+                      key={resource.id}
+                      href={href}
+                      className={buttonVariants({
+                        variant: accessible ? 'default' : 'outline',
+                      })}
+                    >
+                      {resource.title}
+                    </Link>
+                  )
+                })}
+              </div>
             </div>
-          </div>
+          ) : (
+            <EmptyState
+              title="No resources available"
+              message="No resources have been configured for this community yet."
+            />
+          )}
         </Section>
       </div>
     </div>
