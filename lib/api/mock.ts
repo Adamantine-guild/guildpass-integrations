@@ -476,9 +476,11 @@ export class MockAccessApi implements AccessApi {
   /**
    * Mock SIWE verification — skips actual signature checking.
    *
-   * - Default:          Returns a session token expiring in 1 hour.
-   * - expired mode:     Returns an already-expired token (1 ms in the past) so
-   *                     the provider immediately marks the session as expired.
+   * - Default:          Returns a session token expiring in 1 hour, plus a
+   *                     refresh token expiring in 7 days.
+   * - expired mode:     Returns an already-expired access token (1 ms in the
+   *                     past) with a valid refresh token so that the silent
+   *                     renewal path can be exercised in tests.
    * - unauthenticated:  Throws a 401 ApiError to simulate backend rejection.
    */
   async siweVerify(_message: string, _signature: string): Promise<SiweAuthSession> {
@@ -491,11 +493,61 @@ export class MockAccessApi implements AccessApi {
         ? new Date(Date.now() - 1).toISOString()   // already expired
         : new Date(Date.now() + 60 * 60 * 1000).toISOString()
 
+    // Refresh token is always valid for 7 days in mock mode so the renewal
+    // path can be tested even when the access token is intentionally expired.
+    const refreshExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
+
     return {
       isAuthenticated: true,
       token: `mock-jwt-${randomHex()}`,
       address: this.address ?? '0x0000000000000000000000000000000000000000',
       expiresAt,
+      refreshToken: `mock-refresh-${randomHex()}`,
+      refreshExpiresAt,
+    }
+  }
+
+  /**
+   * Mock silent token renewal via refresh token.
+   *
+   * Validates that the provided refresh token looks like a mock refresh token
+   * (prefix check only — no cryptography in mock mode).  Returns a fresh
+   * access token expiring 1 hour from now and a rotated refresh token.
+   *
+   * Throws a 401 if the token is missing or malformed to demonstrate the
+   * "refresh failed → sign-out" flow in tests.
+   *
+   * Set NEXT_PUBLIC_MOCK_SESSION_STATE=expired to force siweRefresh to also
+   * fail (simulates a fully-expired or revoked refresh token).
+   */
+  async siweRefresh(refreshToken: string): Promise<SiweAuthSession> {
+    if (MOCK_SESSION_STATE === 'expired' || MOCK_SESSION_STATE === 'unauthenticated') {
+      throw new ApiError({
+        status: 401,
+        code: 'unauthorized',
+        safeMessage: 'Refresh token expired. Please sign in again.',
+      })
+    }
+
+    if (!refreshToken || !refreshToken.startsWith('mock-refresh-')) {
+      throw new ApiError({
+        status: 401,
+        code: 'unauthorized',
+        safeMessage: 'Invalid refresh token.',
+      })
+    }
+
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString()
+    const refreshExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
+
+    return {
+      isAuthenticated: true,
+      // Issue a fresh access token and rotate the refresh token
+      token: `mock-jwt-${randomHex()}`,
+      address: this.address ?? '0x0000000000000000000000000000000000000000',
+      expiresAt,
+      refreshToken: `mock-refresh-${randomHex()}`,
+      refreshExpiresAt,
     }
   }
 

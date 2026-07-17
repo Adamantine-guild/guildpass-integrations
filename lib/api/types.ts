@@ -160,9 +160,20 @@ export const ApiErrorBodySchema = z.object({
 
 export interface SiweAuthSession {
   isAuthenticated: true
+  /** Short-lived access token (typically 1 h). Attach as `Authorization: Bearer` on admin mutations. */
   token: string
   address: string
+  /** ISO 8601 expiry of the access token. */
   expiresAt: string
+  /**
+   * Opaque longer-lived refresh credential (typically 7 d).
+   * Must be treated as a secret — never log or expose it.
+   * Optional so that existing persisted sessions without a refresh token
+   * are still valid (they will just not support silent renewal).
+   */
+  refreshToken?: string
+  /** ISO 8601 expiry of the refresh token. Absence means no refresh is available. */
+  refreshExpiresAt?: string
 }
 
 export const SiweAuthSessionSchema = z.object({
@@ -170,6 +181,8 @@ export const SiweAuthSessionSchema = z.object({
   token: z.string(),
   address: z.string(),
   expiresAt: z.string(),
+  refreshToken: z.string().optional(),
+  refreshExpiresAt: z.string().optional(),
 })
 
 export const WalletVerificationSchema = z.object({
@@ -435,9 +448,19 @@ export interface SiweAuthApi {
   getNonce(address: string): Promise<string>
   /**
    * Submit a signed EIP-4361 message and receive an authenticated session
-   * token. The backend verifies the signature and returns a short-lived token.
+   * token. The backend verifies the signature and returns a short-lived access
+   * token plus a longer-lived refresh token.
    */
   siweVerify(message: string, signature: string): Promise<SiweAuthSession>
+  /**
+   * Exchange a valid refresh token for a fresh access token (and a new
+   * refresh token — token rotation). The caller must immediately persist the
+   * returned session and discard the old refresh token.
+   *
+   * Throws a 401 ApiError when the refresh token is expired or invalid,
+   * signalling that the user must re-sign with their wallet.
+   */
+  siweRefresh(refreshToken: string): Promise<SiweAuthSession>
   /** Invalidate the current server-side session (no-op for stateless JWTs). */
   siweLogout(token: string): Promise<void>
   verifyWallet(address: string): Promise<WalletVerification>

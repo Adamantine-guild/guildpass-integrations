@@ -125,6 +125,8 @@ sequenceDiagram
     actor User
     participant UI as Browser UI
     participant SIWEP as SiweAuthProvider
+    participant BC as BroadcastChannel<br/>(guildpass:auth)
+    participant Tab2 as Peer Tab
     participant Backend as guildpass-core
 
     User->>UI: Connect wallet
@@ -135,16 +137,31 @@ sequenceDiagram
     SIWEP->>User: wagmi signMessage (EIP-4361, gasless)
     User-->>SIWEP: signature
     SIWEP->>Backend: POST /v1/auth/siwe/verify { message, signature }
-    Backend-->>SIWEP: { token, address, expiresAt }
+    Backend-->>SIWEP: { token, address, expiresAt, refreshToken, refreshExpiresAt }
     SIWEP->>SIWEP: storeAuthSession() → sessionStorage
-    Note over SIWEP: Token auto-attached as Bearer<br/>on all admin mutations
+    SIWEP->>BC: broadcast { type: "signed-in", session }
+    BC->>Tab2: propagate → Tab2 writes session, becomes authenticated
+    Note over SIWEP: Access token auto-attached as Bearer<br/>on all admin mutations
+
+    Note over SIWEP: 60 s before expiry — silent renewal
+    SIWEP->>Backend: POST /v1/auth/siwe/refresh { refreshToken }
+    Backend-->>SIWEP: { token, expiresAt, refreshToken (rotated), refreshExpiresAt }
+    SIWEP->>SIWEP: storeAuthSession() → update sessionStorage
+    SIWEP->>BC: broadcast { type: "refreshed", session }
+    BC->>Tab2: propagate → Tab2 updates stored token
+
     User->>UI: Logout
     SIWEP->>Backend: POST /v1/auth/siwe/logout (Bearer)
     SIWEP->>SIWEP: clearAuthSession()
+    SIWEP->>BC: broadcast { type: "signed-out" }
+    BC->>Tab2: propagate → Tab2 clears session, shows re-auth prompt
 ```
 
-> In **mock mode** all three SIWE endpoints are simulated in `lib/api/mock.ts`
-> — no backend or MetaMask signature required.
+> In **mock mode** all SIWE endpoints (including `/refresh`) are simulated in
+> `lib/api/mock.ts` — no backend or MetaMask signature required.
+>
+> See [docs/refresh-token-contract.md](./refresh-token-contract.md) for the
+> precise backend contract that `guildpass-core` must implement.
 
 ---
 

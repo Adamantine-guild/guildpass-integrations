@@ -572,9 +572,39 @@ export class LiveAccessApi implements AccessApi {
       token: string
       address: string
       expiresAt: string
+      refreshToken?: string
+      refreshExpiresAt?: string
     }>('/v1/auth/siwe/verify', {
       method: 'POST',
       body: JSON.stringify({ message, signature }),
+    }, SiweAuthSessionSchema)
+
+    return { isAuthenticated: true, ...data }
+  }
+
+  /**
+   * Exchange a refresh token for a new access token (and rotated refresh
+   * token).  Calls the proposed `POST /v1/auth/siwe/refresh` endpoint.
+   *
+   * The backend contract is:
+   *   Request body:  `{ "refreshToken": "<opaque>" }`
+   *   Success (200): same shape as `/v1/auth/siwe/verify` response
+   *   Failure (401): refresh token expired or invalid → must re-sign
+   *
+   * This method is intentionally *not* best-effort: if the network call
+   * fails for any reason, the error propagates so the caller can decide
+   * whether to retry or transition the user to the 'expired' state.
+   */
+  async siweRefresh(refreshToken: string): Promise<SiweAuthSession> {
+    const data = await getJson<{
+      token: string
+      address: string
+      expiresAt: string
+      refreshToken?: string
+      refreshExpiresAt?: string
+    }>('/v1/auth/siwe/refresh', {
+      method: 'POST',
+      body: JSON.stringify({ refreshToken }),
     }, SiweAuthSessionSchema)
 
     return { isAuthenticated: true, ...data }

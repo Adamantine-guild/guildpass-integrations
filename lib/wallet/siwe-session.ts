@@ -35,6 +35,7 @@ export type SiweSessionAction =
   | { type: 'sign-in-start' }
   | { type: 'sign-in-success'; session: SiweAuthSession }
   | { type: 'sign-in-error'; message: string }
+  | { type: 'refresh-success'; session: SiweAuthSession }
   | { type: 'mark-expired' }
   | { type: 'clear' }
 
@@ -57,6 +58,9 @@ export function siweSessionReducer(
         isSigningIn: false,
         error: null,
       }
+    case 'refresh-success':
+      // Silent token renewal — update the session without touching signing state
+      return { ...state, authSession: action.session, expired: false, error: null }
     case 'sign-in-error':
       return { ...state, isSigningIn: false, error: action.message }
     case 'mark-expired':
