@@ -30,6 +30,11 @@ export function Nav() {
     { href: "/dashboard" as Route, label: "Dashboard", enabled: true },
     { href: "/admin" as Route, label: "Admin", enabled: isAdmin },
     {
+      href: "/admin/analytics" as Route,
+      label: "Analytics",
+      enabled: isAdmin && features.analytics,
+    },
+    {
       href: "/resources/alpha" as Route,
       label: "Gated",
       enabled: features.resources,

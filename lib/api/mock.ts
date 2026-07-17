@@ -28,6 +28,7 @@ import { PolicyValidationError, validatePolicy } from '../validation/policy'
 import {
   AccessApi,
   AccessPolicy,
+  AnalyticsSummary,
   Community,
   MemberProfile,
   MemberRow,
@@ -113,6 +114,44 @@ const DEFAULT_WEBHOOK_EVENTS: WebhookEventLog[] = [
     payloadSummary: { network: "ethereum", reason: "Gas limit hit execution revert" }
   }
 ]
+
+/**
+ * Generates a seeded member growth time series for the last 30 days.
+ * Starts at 80 members and grows by 1–4 per day with a mild upward trend.
+ */
+function generateMockMemberGrowth(): AnalyticsSummary['memberGrowth'] {
+  const days = 30
+  const points: AnalyticsSummary['memberGrowth'] = []
+  let total = 80
+
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date()
+    d.setDate(d.getDate() - i)
+    const dateStr = d.toISOString().slice(0, 10)
+    // Weekday gets more sign-ups; weekend less
+    const dayOfWeek = d.getDay()
+    const isWeekend = dayOfWeek === 0 || dayOfWeek === 6
+    const newMembers = isWeekend
+      ? Math.floor(Math.random() * 2)           // 0–1 on weekends
+      : Math.floor(Math.random() * 4) + 1       // 1–4 on weekdays
+    total += newMembers
+    points.push({ date: dateStr, newMembers, totalMembers: total })
+  }
+
+  return points
+}
+
+const MOCK_ANALYTICS_SUMMARY: AnalyticsSummary = {
+  totalMembers: 124,
+  activeMembers: 98,
+  memberGrowth: generateMockMemberGrowth(),
+  resourceAccess: [
+    { resourceId: 'alpha',       resourceTitle: 'Alpha Docs',     accessCount: 312, deniedCount: 47  },
+    { resourceId: 'pro-reports', resourceTitle: 'Pro Reports',    accessCount: 189, deniedCount: 103 },
+    { resourceId: 'mem-updates', resourceTitle: 'Member Updates', accessCount: 541, deniedCount: 12  },
+  ],
+  generatedAt: new Date().toISOString(),
+}
 
 const DEFAULT_MEMBER_STORE: Record<string, { membership: Membership; roles: Role[]; profile: MemberProfile }> = {}
 
@@ -343,6 +382,13 @@ export class MockAccessApi implements AccessApi {
 
   async listWebhookEvents(): Promise<WebhookEventLog[]> {
     return new Promise((resolve) => setTimeout(() => resolve(mockWebhookEvents), 300))
+  }
+
+  async getAnalyticsSummary(): Promise<AnalyticsSummary> {
+    // Simulate a short network delay so the loading state is exercisable
+    return new Promise((resolve) =>
+      setTimeout(() => resolve({ ...MOCK_ANALYTICS_SUMMARY }), 300),
+    )
   }
 
   async assignRole(address: string, role: Role): Promise<void> {
