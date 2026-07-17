@@ -14,6 +14,7 @@
     "../lib/api/optimistic.ts",
     "../lib/api/types.ts",
     "../lib/api/access-decision.ts",
+    "../lib/api/verify.ts",
     "../lib/api/mock.ts",
     "../lib/wallet/address.ts",
     "../lib/config.ts",

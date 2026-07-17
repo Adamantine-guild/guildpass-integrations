@@ -46,6 +46,8 @@ export { ApiError as AuthError } from './errors'
 
 import { PolicyValidationError, validatePolicy } from '@/lib/validation/policy'
 import { config } from '@/lib/config'
+import { verifySignedResponseRaw, MOCK_PUBLIC_KEY, hexToBytes } from './verify'
+import type { VerificationMode } from './types'
 
 const BASE = config.apiUrl
 
@@ -240,10 +242,35 @@ function parseJsonResponse<T>(text: string, path?: string): T {
 // ── LiveAccessApi ─────────────────────────────────────────────────────────────
 
 export class LiveAccessApi implements AccessApi {
+  private readonly verifyMode: VerificationMode
+
   constructor(
     private readonly address?: string,
     private readonly token?: string,
-  ) { }
+  ) {
+    this.verifyMode = config.responseVerification
+  }
+
+  private getVerificationKey(): Uint8Array {
+    if (config.signingPublicKey) {
+      return hexToBytes(config.signingPublicKey)
+    }
+    if (this.verifyMode === 'enforce') {
+      console.warn(
+        '[guildpass-verify] No signingPublicKey configured. Falling back to mock key — this is INSECURE for production.',
+      )
+    }
+    return MOCK_PUBLIC_KEY
+  }
+
+  private verifyOrPassthrough<T>(raw: unknown): T {
+    const mode = this.verifyMode
+    if (mode === 'off') {
+      return raw as T
+    }
+    const pk = this.getVerificationKey()
+    return verifySignedResponseRaw(raw, pk, mode) as T
+  }
 
   private authHeaders(): HeadersInit {
     return this.token ? { Authorization: `Bearer ${this.token}` } : {}
@@ -254,14 +281,14 @@ export class LiveAccessApi implements AccessApi {
       ? `?address=${encodeURIComponent(this.address)}`
       : ''
     const path = `/v1/session${addr}`
-    const raw = await getJson<BackendSession>(path)
-    validateSessionResponse(raw, path)
-    const session = mapSession(raw)
+    const raw = await getJson<unknown>(path)
+    const verified = this.verifyOrPassthrough<BackendSession>(raw)
+    validateSessionResponse(verified, path)
+    const session = mapSession(verified)
 
     if (this.address) {
-      const mPath = `/api/integration/membership?address=${encodeURIComponent(this.address)}`
+      const integrationPath = `/api/integration/membership?address=${encodeURIComponent(this.address)}`
       try {
-        const integrationPath = `/api/integration/membership?address=${encodeURIComponent(this.address)}`
         const integrationMembership = await getIntegrationJson<BackendMember | null>(
           integrationPath,
         )
@@ -286,10 +313,11 @@ export class LiveAccessApi implements AccessApi {
   }
 
   async getMembership(address: string): Promise<Membership | null> {
-    const raw = await getIntegrationJson<BackendMember | null>(
+    const raw = await getIntegrationJson<unknown>(
       `/api/integration/membership?address=${encodeURIComponent(address)}`,
     )
-    return raw ? mapMembership(raw) : null
+    const verified = this.verifyOrPassthrough<BackendMember | null>(raw)
+    return verified ? mapMembership(verified) : null
   }
 
   async verifyWallet(address: string): Promise<WalletVerification> {
@@ -321,9 +349,10 @@ export class LiveAccessApi implements AccessApi {
 
   async listPolicies(): Promise<AccessPolicy[]> {
     const path = '/v1/policies'
-    const raw = await getJson<BackendPolicy[]>(path)
-    validatePoliciesResponse(raw, path)
-    return raw.map(mapPolicy)
+    const raw = await getJson<unknown>(path)
+    const verified = this.verifyOrPassthrough<BackendPolicy[]>(raw)
+    validatePoliciesResponse(verified, path)
+    return verified.map(mapPolicy)
   }
 
   async getResource(id: string): Promise<Resource | null> {
@@ -348,10 +377,11 @@ export class LiveAccessApi implements AccessApi {
   async getPolicy(resourceId: string): Promise<AccessPolicy | null> {
     const path = `/v1/policies/${encodeURIComponent(resourceId)}`
     try {
-      const raw = await getJson<BackendPolicy>(path)
-      if (raw && Object.keys(raw).length > 0) {
-        validatePolicyResponse(raw, path)
-        return mapPolicy(raw)
+      const raw = await getJson<unknown>(path)
+      const verified = this.verifyOrPassthrough<BackendPolicy>(raw)
+      if (verified && Object.keys(verified).length > 0) {
+        validatePolicyResponse(verified, path)
+        return mapPolicy(verified)
       }
     } catch (err) {
       if (!(err instanceof ApiError && err.status === 404)) {

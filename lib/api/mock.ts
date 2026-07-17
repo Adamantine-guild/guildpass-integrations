@@ -40,6 +40,7 @@ import {
   WebhookEventLog,
 } from './types'
 import { ApiError } from './errors'
+import { wrapInSignedEnvelope, verifySignedResponse, MOCK_PRIVATE_KEY, MOCK_PUBLIC_KEY } from './verify'
 
 /** Read once at module load so it is stable across renders. */
 const MOCK_SESSION_STATE =
@@ -282,20 +283,23 @@ export class MockAccessApi implements AccessApi {
   async getSession(): Promise<Session> {
     const MOCK_SESSION_STATE = process.env.NEXT_PUBLIC_MOCK_SESSION_STATE || 'valid'
     if (MOCK_SESSION_STATE === 'cleared') {
-      return {
-        // No authenticated session
+      const session: Session = {
         roles: [],
         community,
       }
+      const signed = wrapInSignedEnvelope(session, '/v1/session', MOCK_PRIVATE_KEY)
+      return verifySignedResponse<Session>(signed, MOCK_PUBLIC_KEY, 'enforce')
     }
 
     const data = ensureAddress(this.address)
-    return {
+    const session: Session = {
       address: this.address,
       roles: data ? data.roles : [],
       membership: data ? data.membership : undefined,
       community,
     }
+    const signed = wrapInSignedEnvelope(session, '/v1/session', MOCK_PRIVATE_KEY)
+    return verifySignedResponse<Session>(signed, MOCK_PUBLIC_KEY, 'enforce')
   }
 
   async getCommunity(): Promise<Community> {
@@ -304,7 +308,9 @@ export class MockAccessApi implements AccessApi {
 
   async getMembership(address: string): Promise<Membership | null> {
     const data = ensureAddress(address)
-    return data?.membership ?? null
+    if (!data?.membership) return null
+    const signed = wrapInSignedEnvelope(data.membership, `/v1/members/${address}`, MOCK_PRIVATE_KEY)
+    return verifySignedResponse<Membership>(signed, MOCK_PUBLIC_KEY, 'enforce')
   }
 
   async getProfile(address: string): Promise<MemberProfile | null> {
@@ -326,7 +332,9 @@ export class MockAccessApi implements AccessApi {
   }
 
   async listPolicies(): Promise<AccessPolicy[]> {
-    return policies.map((p) => ({ ...p, roles: p.roles ?? [] }))
+    const data = policies.map((p) => ({ ...p, roles: p.roles ?? [] }))
+    const signed = wrapInSignedEnvelope(data, '/v1/policies', MOCK_PRIVATE_KEY)
+    return verifySignedResponse<AccessPolicy[]>(signed, MOCK_PUBLIC_KEY, 'enforce')
   }
 
   async getResource(id: string): Promise<Resource | null> {
@@ -336,7 +344,10 @@ export class MockAccessApi implements AccessApi {
 
   async getPolicy(resourceId: string): Promise<AccessPolicy | null> {
     const p = policies.find((x) => x.resourceId === resourceId)
-    return p ? { ...p, roles: p.roles ?? [] } : null
+    if (!p) return null
+    const data = { ...p, roles: p.roles ?? [] }
+    const signed = wrapInSignedEnvelope(data, `/v1/policies/${resourceId}`, MOCK_PRIVATE_KEY)
+    return verifySignedResponse<AccessPolicy>(signed, MOCK_PUBLIC_KEY, 'enforce')
   }
 
   // ── Admin queries & mutations ──────────────────────────────────────────────

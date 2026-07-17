@@ -275,5 +275,19 @@ export interface AdminActivityEvent {
   details: { role?: string; reason?: string; errorSummary?: string }
 }
 
+export type VerificationMode = 'off' | 'warn' | 'enforce'
+
+export interface SignatureEnvelope {
+  payload: string
+  value: string
+  algorithm: 'ed25519'
+  key_id: string
+}
+
+export interface SignedResponse<T> {
+  data: T
+  signature: SignatureEnvelope
+}
+
 export type AccessApi = MemberAccessApi & AdminAccessApi & SiweAuthApi
 

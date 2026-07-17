@@ -13,6 +13,8 @@
 
 export type ApiMode = 'mock' | 'live'
 
+export type VerificationMode = 'off' | 'warn' | 'enforce'
+
 export interface SiweConfig {
   domain: string
   statement: string
@@ -40,6 +42,22 @@ export interface AppConfig {
   siwe: SiweConfig
   /** Feature flag booleans */
   features: FeatureFlags
+  /**
+   * Response verification mode for signed access-policy responses.
+   * - 'off' (default): No verification. Responses are processed as-is.
+   * - 'warn': Verify signatures, log warnings on failure, but still process.
+   * - 'enforce': Verify signatures, refuse to render gated content on failure.
+   *
+   * Set via NEXT_PUBLIC_RESPONSE_VERIFICATION.
+   */
+  responseVerification: VerificationMode
+  /**
+   * Ed25519 public key (hex-encoded) for verifying signed responses.
+   * Required when responseVerification is 'enforce' in live mode.
+   * In mock mode, the hardcoded MOCK_PUBLIC_KEY is always used.
+   * Set via NEXT_PUBLIC_SIGNING_PUBLIC_KEY.
+   */
+  signingPublicKey?: string
 }
 
 // ── Error type ────────────────────────────────────────────────────────────────
@@ -130,9 +148,26 @@ const features: FeatureFlags = {
   governance: flag('NEXT_PUBLIC_FEATURE_GOVERNANCE', false),
 }
 
+// -- Signed Response Verification config ---------------------------------------
+
+const validModes = ['off', 'warn', 'enforce'] as const
+const rawVerificationMode = env('NEXT_PUBLIC_RESPONSE_VERIFICATION') ?? 'off'
+const responseVerification: VerificationMode = validModes.includes(
+  rawVerificationMode as VerificationMode,
+)
+  ? (rawVerificationMode as VerificationMode)
+  : 'off'
+
+const rawSigningKey = env('NEXT_PUBLIC_SIGNING_PUBLIC_KEY')
+const signingPublicKey: string | undefined = rawSigningKey?.trim()
+  ? rawSigningKey.trim()
+  : undefined
+
 export const config: AppConfig = Object.freeze({
   apiMode,
   apiUrl,
   siwe: Object.freeze(siwe),
   features: Object.freeze(features),
+  responseVerification,
+  signingPublicKey,
 })
