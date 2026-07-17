@@ -1,7 +1,8 @@
-import { http, injected } from 'wagmi'
+import { http, injected, fallback } from 'wagmi'
 import { mainnet, base, sepolia } from 'wagmi/chains'
 import type { Chain } from 'viem'
 import type { CreateConnectorFn } from 'wagmi'
+import type { Transport } from 'viem'
 import { config as appConfig, ConfigError } from '@/lib/config'
 
 export const supportedWalletChains = {
@@ -18,7 +19,7 @@ type WalletConnectorName = 'injected'
 
 export interface WalletRuntimeConfig {
   chains: readonly [SupportedWalletChain, ...SupportedWalletChain[]]
-  transports: Record<SupportedWalletChain['id'], ReturnType<typeof http>>
+  transports: Record<SupportedWalletChain['id'], Transport>
   connectors: CreateConnectorFn[]
   connectorNames: readonly WalletConnectorName[]
 }
@@ -91,7 +92,10 @@ function buildTransports(chains: readonly [SupportedWalletChain, ...SupportedWal
   return chains.reduce<WalletRuntimeConfig['transports']>((transports, chain) => {
     const envName = rpcEnvName(chain)
     const rpcUrl = env(envName)
-    transports[chain.id] = rpcUrl ? http(validateBrowserUrl(rpcUrl, envName)) : http()
+    const primaryTransport = rpcUrl ? http(validateBrowserUrl(rpcUrl, envName)) : null
+    transports[chain.id] = primaryTransport
+      ? fallback([primaryTransport, http()])
+      : http()
     return transports
   }, {} as WalletRuntimeConfig['transports'])
 }
