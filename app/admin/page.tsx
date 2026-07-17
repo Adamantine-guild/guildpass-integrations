@@ -1,19 +1,20 @@
-"use client";
+'use client';
 
-import { useState } from 'react'
-import { useAccount } from 'wagmi'
-import { useQuery } from '@tanstack/react-query'
-import { getApi } from '@/lib/api'
-import { isApiError } from '@/lib/api/errors'
-import { queryKeys } from '@/lib/query'
-import { EmptyState, ErrorState, LoadingState, safeErrorMessage } from "@/components/ui/api-states"
-import { AddressText } from '@/components/wallet/address-text'
-import { AdminGuard } from '@/components/admin-guard'
-import { useSiweAuth } from '@/lib/wallet/providers'
-import { Button } from '@/components/ui/button'
+import { useState } from 'react';
+import { useAccount } from 'wagmi';
+import { useQuery } from '@tanstack/react-query';
+import { getApi } from '@/lib/api';
+import { isApiError } from '@/lib/api/errors';
+import { queryKeys } from '@/lib/query';
+import { EmptyState, ErrorState, LoadingState, safeErrorMessage } from '@/components/ui/api-states';
+import { AddressText } from '@/components/wallet/address-text';
+import { AdminGuard } from '@/components/admin-guard';
+import { useSiweAuth } from '@/lib/wallet/providers';
+import { Button } from '@/components/ui/button';
+import { Select } from "@/components/ui/select";
 
 function SessionExpiredState() {
-  const { signIn, isSigningIn } = useSiweAuth()
+  const { signIn, isSigningIn } = useSiweAuth();
 
   return (
     <EmptyState
@@ -31,15 +32,15 @@ function SessionExpiredState() {
         </Button>
       }
     />
-  )
+  );
 }
 
 function WebhookLogsContent() {
-  const { address } = useAccount()
-  const { authSession, markExpired, sessionStatus } = useSiweAuth()
-  const [sessionExpired, setSessionExpired] = useState(false)
-  const [statusFilter, setStatusFilter] = useState<string>('all')
-  const [typeFilter, setTypeFilter] = useState<string>('all')
+  const { address } = useAccount();
+  const { authSession, markExpired, sessionStatus } = useSiweAuth();
+  const [sessionExpired, setSessionExpired] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [typeFilter, setTypeFilter] = useState<string>('all');
 
   const {
     data: events = [],
@@ -51,25 +52,25 @@ function WebhookLogsContent() {
     queryKey: [...queryKeys.webhookEvents.all, address, authSession?.token ?? 'anonymous'],
     queryFn: async () => {
       try {
-        return await getApi(address, authSession?.token).listWebhookEvents()
+        return await getApi(address, authSession?.token).listWebhookEvents();
       } catch (err) {
         if (isApiError(err) && err.code === 'unauthorized') {
-          setSessionExpired(true)
-          markExpired()
+          setSessionExpired(true);
+          markExpired();
         }
-        throw err
+        throw err;
       }
     },
     enabled: !!address && sessionStatus === 'authenticated',
     retry: (failureCount, err) => {
-      if (isApiError(err) && err.code === 'unauthorized') return false
-      return failureCount < 1
+      if (isApiError(err) && err.code === 'unauthorized') return false;
+      return failureCount < 1;
     },
   });
 
   const filteredEvents = events.filter((evt) => {
-    const matchStatus = statusFilter === "all" || evt.status === statusFilter;
-    const matchType = typeFilter === "all" || evt.eventType === typeFilter;
+    const matchStatus = statusFilter === 'all' || evt.status === statusFilter;
+    const matchType = typeFilter === 'all' || evt.eventType === typeFilter;
     return matchStatus && matchType;
   });
 
@@ -88,8 +89,8 @@ function WebhookLogsContent() {
           Ecosystem Webhook Logs
         </h1>
         <p className="text-sm text-muted-foreground">
-          Operational telemetry stream for community subscription events,
-          upgrades, and access switches.
+          Operational telemetry stream for community subscription events, upgrades, and access
+          switches.
         </p>
       </div>
 
@@ -97,10 +98,7 @@ function WebhookLogsContent() {
 
       <div className="flex flex-wrap gap-3 items-center">
         <div className="flex flex-col gap-1">
-          <label
-            htmlFor="event-type-filter"
-            className="text-xs font-medium text-muted-foreground"
-          >
+          <label htmlFor="event-type-filter" className="text-xs font-medium text-muted-foreground">
             Filter by Action
           </label>
           <Select
@@ -167,10 +165,7 @@ function WebhookLogsContent() {
               </thead>
               <tbody className="divide-y divide-border bg-transparent text-card-foreground">
                 {filteredEvents.map((evt) => (
-                  <tr
-                    key={evt.id}
-                    className="hover:bg-muted/50 transition-colors"
-                  >
+                  <tr key={evt.id} className="hover:bg-muted/50 transition-colors">
                     <td className="px-6 py-4 whitespace-nowrap text-muted-foreground font-mono text-xs">
                       {new Date(evt.timestamp).toLocaleString()}
                     </td>
@@ -188,11 +183,11 @@ function WebhookLogsContent() {
                     <td className="px-6 py-4 whitespace-nowrap">
                       <span
                         className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold tracking-wide uppercase ${
-                          evt.status === "success"
-                            ? "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400"
-                            : evt.status === "failed"
-                              ? "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400"
-                              : "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400"
+                          evt.status === 'success'
+                            ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400'
+                            : evt.status === 'failed'
+                              ? 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400'
+                              : 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400'
                         }`}
                       >
                         {evt.status}
@@ -217,5 +212,5 @@ export default function AdminEventsPage() {
     <AdminGuard>
       <WebhookLogsContent />
     </AdminGuard>
-  )
+  );
 }
