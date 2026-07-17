@@ -174,6 +174,17 @@ npm run check-types # Validate that types in lib/api/types.ts match the schema
 
 ## Architecture
 
+For a full visual overview of the request flow, SIWE authentication sequence, and integration gateway, see **[docs/architecture.md](./docs/architecture.md)**.
+
+The diagram covers:
+
+- The `getApi()` mock ↔ live switch and both data paths
+- Where `SiweAuthProvider` and `sessionStorage` fit in the auth flow
+- The three-state `AdminGuard` and the `Gated` access-decision chain
+- The optional server-side integration gateway and when it returns a 503
+
+### Module reference
+
 | Path | Purpose |
 | ---- | ------- |
 | `app/*` | Next.js App Router pages |
