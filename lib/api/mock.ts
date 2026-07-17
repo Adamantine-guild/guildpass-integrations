@@ -36,8 +36,12 @@ import {
   Role,
   Session,
   SiweAuthSession,
+  Unsubscribe,
   WalletVerification,
   WebhookEventLog,
+  WebhookEventType,
+  WebhookEventStatus,
+  WebhookStreamOptions,
 } from './types'
 import { ApiError } from './errors'
 
@@ -265,6 +269,40 @@ function randomHex(): string {
   ).join('')
 }
 
+const MOCK_EVENT_TYPES: WebhookEventType[] = [
+  'membership.created',
+  'membership.renewed',
+  'membership.expired',
+  'tier.upgraded',
+  'policy.updated',
+]
+
+const MOCK_EVENT_STATUSES: WebhookEventStatus[] = ['success', 'failed', 'pending']
+
+const MOCK_ADDRESSES = [
+  '0x71C...3A90',
+  '0x94F...8B21',
+  '0xF39...2441',
+  '0x8A2...5C67',
+  '0xD54...9E12',
+]
+
+const MOCK_TIERS = ['free', 'standard', 'pro']
+
+function generateMockWebhookEvent(): WebhookEventLog {
+  return {
+    id: `wh_${Date.now()}_${randomHex().slice(0, 4)}`,
+    eventType: MOCK_EVENT_TYPES[Math.floor(Math.random() * MOCK_EVENT_TYPES.length)],
+    status: MOCK_EVENT_STATUSES[Math.floor(Math.random() * MOCK_EVENT_STATUSES.length)],
+    timestamp: new Date().toISOString(),
+    affectedIdentifier: MOCK_ADDRESSES[Math.floor(Math.random() * MOCK_ADDRESSES.length)],
+    payloadSummary: {
+      network: 'ethereum',
+      tier: MOCK_TIERS[Math.floor(Math.random() * MOCK_TIERS.length)],
+    },
+  }
+}
+
 /** Throw a mock 401 ApiError — mirrors what the live API throws on expired tokens. */
 function throwMockUnauthorized(): never {
   throw new ApiError({
@@ -343,6 +381,49 @@ export class MockAccessApi implements AccessApi {
 
   async listWebhookEvents(): Promise<WebhookEventLog[]> {
     return new Promise((resolve) => setTimeout(() => resolve(mockWebhookEvents), 300))
+  }
+
+  subscribeWebhookEvents({
+    onEvent,
+    onStateChange,
+    signal,
+  }: WebhookStreamOptions): Unsubscribe {
+    const seen = new Set<string>()
+    let cancelled = false
+    let intervalId: ReturnType<typeof setInterval> | null = null
+
+    const cancel = () => {
+      cancelled = true
+      if (intervalId !== null) clearInterval(intervalId)
+    }
+
+    if (signal) {
+      signal.addEventListener('abort', cancel, { once: true })
+    }
+
+    // Push existing events immediately
+    for (const event of mockWebhookEvents) {
+      seen.add(event.id)
+      onEvent(event)
+    }
+
+    onStateChange?.('connected')
+
+    // Emit a random new event every 8–12 seconds
+    const scheduleNext = () => {
+      const delay = 8000 + Math.random() * 4000
+      intervalId = setTimeout(() => {
+        if (cancelled) return
+        const event = generateMockWebhookEvent()
+        mockWebhookEvents = [event, ...mockWebhookEvents]
+        seen.add(event.id)
+        onEvent(event)
+        scheduleNext()
+      }, delay) as unknown as ReturnType<typeof setInterval>
+    }
+    scheduleNext()
+
+    return cancel
   }
 
   async assignRole(address: string, role: Role): Promise<void> {

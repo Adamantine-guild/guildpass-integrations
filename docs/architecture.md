@@ -114,6 +114,8 @@ flowchart TD
 | `lib/integration-client.ts` | Loads the optional private package at runtime; normalises its responses; never runs in the browser |
 | `test/fixtures/openapi.json` | OpenAPI schema that defines the canonical contract for `lib/api/types.ts` |
 | `scripts/sync-api-types.js` | Zero-dependency compiler: converts `openapi.json` → `lib/api/types.ts` |
+| `lib/hooks/use-webhook-event-stream.ts` | React hook wrapping `subscribeWebhookEvents()` — returns `events`, `streamState`, `isLive` |
+| `app/admin/page.tsx` | Admin webhook logs page — uses `useWebhookEventStream()` instead of `useQuery`; shows `ConnectionBadge` |
 
 ---
 
@@ -144,6 +146,41 @@ sequenceDiagram
 
 > In **mock mode** all three SIWE endpoints are simulated in `lib/api/mock.ts`
 > — no backend or MetaMask signature required.
+
+---
+
+## Real-time event stream flow
+
+```mermaid
+flowchart TD
+    AdminPage["app/admin/page.tsx\nWebhookLogsContent"]
+    Hook["lib/hooks/use-webhook-event-stream.ts\nuseWebhookEventStream()"]
+    API["getApi(address, token)\nreturns MockAccessApi | LiveAccessApi"]
+    Mock["MockAccessApi.subscribeWebhookEvents()\npushes existing events immediately\nemits random new events every 8-12s"]
+    Live["LiveAccessApi.subscribeWebhookEvents()"]
+    SSE["EventSource → /v1/admin/events/stream\n(provisional)"]
+    Poll["setInterval 5s → GET /v1/admin/events"]
+    SSE_ERR["SSE onerror\nor 404 / proxy failure"]
+    UI["ConnectionBadge\nLive / Polling / Connecting / Error"]
+
+    AdminPage --> Hook
+    Hook --> API
+    API -- mock --> Mock
+    API -- live --> Live
+
+    Live --> SSE
+    SSE -- "SSE onopen → onmessage" --> UI
+    SSE -- "State: connected" --> UI
+    SSE -- SSE_ERR --> Poll
+    Poll -- "State: polling" --> UI
+    Poll -- "401 → State: error" --> UI
+
+    Mock -- "State: connected" --> UI
+
+    Hook -- "events, streamState" --> AdminPage
+```
+
+> **SSE transport detail:** The SIWE Bearer token is passed as a query parameter (`?token=…`) because the browser `EventSource` API does not support custom `Authorization` headers. This is a recognised limitation; the polling fallback uses the standard `Authorization: Bearer` header via `fetch()`.
 
 ---
 

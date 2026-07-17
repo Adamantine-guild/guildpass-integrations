@@ -231,9 +231,39 @@ export interface MemberAccessApi {
  * Authenticated admin queries and mutations.
  * These methods require a valid SIWE token context.
  */
+export type WebhookEventCallback = (event: WebhookEventLog) => void
+
+export type WebhookEventStreamState = 'connecting' | 'connected' | 'polling' | 'error'
+
+export type Unsubscribe = () => void
+
+export interface WebhookStreamOptions {
+  onEvent: WebhookEventCallback
+  onStateChange?: (state: WebhookEventStreamState) => void
+  signal?: AbortSignal
+}
+
 export interface AdminAccessApi {
-  // â”€â”€ Admin queries & mutations (require a valid SIWE token context) â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── Admin queries & mutations (require a valid SIWE token context) ──
   listWebhookEvents(): Promise<WebhookEventLog[]>
+  /**
+   * Subscribe to real-time webhook events via SSE (Server-Sent Events).
+   *
+   * Live mode:
+   *   Attempts to connect to /v1/admin/events/stream (provisional — see README).
+   *   If the stream cannot be established (404, proxy incompatibility, or any
+   *   transport error) the implementation automatically falls back to polling
+   *   /v1/admin/events on a 5-second interval.
+   *
+   * Mock mode:
+   *   Pushes all existing events immediately, then emits randomly generated
+   *   events on an interval to simulate real-time delivery.
+   *
+   * The callback `onEvent` is called once per event with the full
+   * WebhookEventLog object. The callee is responsible for deduplication
+   * (the implementation tracks seen IDs internally).
+   */
+  subscribeWebhookEvents(options: WebhookStreamOptions): Unsubscribe
   assignRole(address: string, role: Role): Promise<void>
   removeRole(address: string, role: Role): Promise<void>
   updatePolicy(policy: AccessPolicy): Promise<void>

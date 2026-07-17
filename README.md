@@ -226,11 +226,29 @@ All live requests are sent to `NEXT_PUBLIC_CORE_API_URL` (default `http://localh
 | `GET` | `/v1/policies` | — | All access policies |
 | `GET` | `/v1/policies/:resourceId` | — | Single policy lookup (with list fallback) |
 | `GET` | `/v1/admin/events` | Bearer | Admin webhook event feed |
+| `GET` | `/v1/admin/events/stream` ⚠️ | Bearer | **Provisional** — Server-Sent Events stream for real-time webhook event delivery. Falls back to polling `/v1/admin/events` if unavailable. |
 | `POST` | `/v1/members/:address/roles` | Bearer | Assign role to member |
 | `PUT` | `/v1/policies/:resourceId` | Bearer | Update access policy |
 | `POST` | `/v1/auth/siwe/nonce` | — | Request SIWE nonce |
 | `POST` | `/v1/auth/siwe/verify` | — | Verify SIWE signature → token |
 | `POST` | `/v1/auth/siwe/logout` | Bearer | Invalidate session |
+
+### Real-time Event Stream
+
+The admin dashboard consumes webhook events through a resilient push-based transport layer.
+
+**Transport strategy (in order of preference):**
+1. **SSE (Server-Sent Events)** — The client attempts to connect to the provisional `/v1/admin/events/stream` endpoint using the standard `EventSource` API. The SIWE token is passed as a query parameter (`?token=…`) since `EventSource` does not support custom headers.
+2. **Polling fallback** — If the SSE endpoint returns an error (404, proxy incompatibility, network failure, or missing `EventSource` API), the client automatically falls back to polling `GET /v1/admin/events` every 5 seconds. New events (by `id`) are forwarded to the UI; the polling layer silently retries transient errors and only surfaces 401/session-expired errors.
+
+**For local development / mock mode**, the simulated stream emits randomly generated events every 8–12 seconds, demonstrating real-time delivery without any backend.
+
+Both the `LiveAccessApi` and `MockAccessApi` implement the `subscribeWebhookEvents()` method defined on the `AdminAccessApi` interface. The React hook `useWebhookEventStream()` wraps this subscription and exposes `events`, `streamState` (`connecting` | `connected` | `polling` | `error`), and the `isLive` boolean to the UI.
+
+A **ConnectionBadge** in the admin dashboard header shows the current transport state (Live / Polling / Connecting / Error) at a glance.
+
+> ⚠️ **`/v1/admin/events/stream` is a provisional endpoint proposed for `guildpass-core`.**
+> It does not yet exist in the backend. The frontend implementation is designed to gracefully fall back to polling if the endpoint is missing, so the feature works today and will automatically upgrade to push-based delivery once the backend supports it.
 
 ### Safe Fallback Mechanism
 

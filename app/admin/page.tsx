@@ -1,11 +1,10 @@
 "use client";
 
-import { useState } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useAccount } from 'wagmi'
-import { useQuery } from '@tanstack/react-query'
 import { getApi } from '@/lib/api'
 import { isApiError } from '@/lib/api/errors'
-import { queryKeys } from '@/lib/query'
+import { useWebhookEventStream } from '@/lib/hooks/use-webhook-event-stream'
 import { EmptyState, ErrorState, LoadingState, safeErrorMessage } from "@/components/ui/api-states"
 import { AddressText } from '@/components/wallet/address-text'
 import { AdminGuard } from '@/components/admin-guard'
@@ -34,6 +33,46 @@ function SessionExpiredState() {
   )
 }
 
+function ConnectionBadge({ state }: { state: 'connected' | 'polling' | 'connecting' | 'error' }) {
+  const config = {
+    connected: {
+      label: 'Live',
+      style: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400',
+    },
+    polling: {
+      label: 'Polling',
+      style: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400',
+    },
+    connecting: {
+      label: 'Connecting',
+      style: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400',
+    },
+    error: {
+      label: 'Error',
+      style: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400',
+    },
+  }[state]
+
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold tracking-wide uppercase ${config.style}`}
+    >
+      <span
+        className={`w-1.5 h-1.5 rounded-full ${
+          state === 'connected'
+            ? 'bg-green-500 animate-pulse'
+            : state === 'polling'
+              ? 'bg-yellow-500'
+              : state === 'connecting'
+                ? 'bg-blue-500 animate-pulse'
+                : 'bg-red-500'
+        }`}
+      />
+      {config.label}
+    </span>
+  )
+}
+
 function WebhookLogsContent() {
   const { address } = useAccount()
   const { authSession, markExpired, sessionStatus } = useSiweAuth()
@@ -41,31 +80,29 @@ function WebhookLogsContent() {
   const [statusFilter, setStatusFilter] = useState<string>('all')
   const [typeFilter, setTypeFilter] = useState<string>('all')
 
+  const enabled = !!address && sessionStatus === 'authenticated' && !sessionExpired
+
   const {
-    data: events = [],
-    isLoading,
-    isError,
+    events,
+    streamState,
     error,
-    refetch,
-  } = useQuery({
-    queryKey: [...queryKeys.webhookEvents.all, address, authSession?.token ?? 'anonymous'],
-    queryFn: async () => {
-      try {
-        return await getApi(address, authSession?.token).listWebhookEvents()
-      } catch (err) {
-        if (isApiError(err) && err.code === 'unauthorized') {
-          setSessionExpired(true)
-          markExpired()
-        }
-        throw err
-      }
-    },
-    enabled: !!address && sessionStatus === 'authenticated',
-    retry: (failureCount, err) => {
-      if (isApiError(err) && err.code === 'unauthorized') return false
-      return failureCount < 1
-    },
-  });
+  } = useWebhookEventStream({
+    address,
+    token: authSession?.token,
+    enabled,
+  })
+
+  const handleReconnect = useCallback(() => {
+    setSessionExpired(false)
+  }, [])
+
+  // Surface 401 errors from the stream/polling layer
+  useEffect(() => {
+    if (error && isApiError(error) && error.code === 'unauthorized') {
+      setSessionExpired(true)
+      markExpired()
+    }
+  }, [error, markExpired])
 
   const filteredEvents = events.filter((evt) => {
     const matchStatus = statusFilter === "all" || evt.status === statusFilter;
@@ -73,20 +110,18 @@ function WebhookLogsContent() {
     return matchStatus && matchType;
   });
 
-  if (error) {
-    return (
-      <div className="p-6">
-        <EmptyState title="Error loading log feed" message={error} />
-      </div>
-    );
-  }
+  const isConnecting = streamState === 'connecting' && events.length === 0;
+  const hasFatalError = streamState === 'error' && events.length === 0;
 
   return (
     <div className="space-y-6 p-4 sm:p-6">
       <div className="flex flex-col gap-1">
-        <h1 className="text-2xl font-bold tracking-tight text-foreground">
-          Ecosystem Webhook Logs
-        </h1>
+        <div className="flex items-center gap-3">
+          <h1 className="text-2xl font-bold tracking-tight text-foreground">
+            Ecosystem Webhook Logs
+          </h1>
+          {enabled && <ConnectionBadge state={streamState} />}
+        </div>
         <p className="text-sm text-muted-foreground">
           Operational telemetry stream for community subscription events,
           upgrades, and access switches.
@@ -103,10 +138,11 @@ function WebhookLogsContent() {
           >
             Filter by Action
           </label>
-          <Select
+          <select
             id="event-type-filter"
             value={typeFilter}
             onChange={(e) => setTypeFilter(e.target.value)}
+            className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           >
             <option value="all">All Actions</option>
             <option value="membership.created">membership.created</option>
@@ -114,7 +150,7 @@ function WebhookLogsContent() {
             <option value="membership.expired">membership.expired</option>
             <option value="tier.upgraded">tier.upgraded</option>
             <option value="policy.updated">policy.updated</option>
-          </Select>
+          </select>
         </div>
 
         <div className="flex flex-col gap-1">
@@ -124,28 +160,29 @@ function WebhookLogsContent() {
           >
             Filter by Telemetry Status
           </label>
-          <Select
+          <select
             id="event-status-filter"
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
+            className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           >
             <option value="all">All States</option>
             <option value="success">Success</option>
             <option value="failed">Failed</option>
             <option value="pending">Pending</option>
-          </Select>
+          </select>
         </div>
       </div>
 
       {sessionExpired ? (
         <SessionExpiredState />
-      ) : isLoading ? (
-        <LoadingState message="Ingesting latest system events..." />
-      ) : isError ? (
+      ) : isConnecting ? (
+        <LoadingState message="Connecting to event stream..." />
+      ) : hasFatalError ? (
         <ErrorState
           title="Error loading log feed"
           message={safeErrorMessage(error)}
-          onRetry={() => refetch()}
+          onRetry={handleReconnect}
         />
       ) : filteredEvents.length === 0 ? (
         <EmptyState

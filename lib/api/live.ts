@@ -10,12 +10,14 @@ import {
   Role,
   Session,
   SiweAuthSession,
+  Unsubscribe,
   WalletVerification,
+  WebhookEventLog,
+  WebhookStreamOptions,
   BackendSession,
   BackendMember,
   BackendResource,
   BackendPolicy,
-  WebhookEventLog,
 } from './types'
 import {
   mapCommunity,
@@ -374,6 +376,124 @@ export class LiveAccessApi implements AccessApi {
     })
     validateWebhookEventsResponse(raw, path)
     return raw.map(mapWebhookEvent)
+  }
+
+  subscribeWebhookEvents({
+    onEvent,
+    onStateChange,
+    signal,
+  }: WebhookStreamOptions): Unsubscribe {
+    const seen = new Set<string>()
+    let cancelled = false
+    let pollingInterval: ReturnType<typeof setInterval> | null = null
+    let eventSource: EventSource | null = null
+    let cleanup: Unsubscribe = () => {}
+
+    const cancel = () => {
+      cancelled = true
+      eventSource?.close()
+      if (pollingInterval !== null) clearInterval(pollingInterval)
+      cleanup()
+    }
+
+    if (signal) {
+      signal.addEventListener('abort', cancel, { once: true })
+    }
+
+    // ── Initial seed: load all existing events ──
+    const seedExisting = async () => {
+      try {
+        const events = await this.listWebhookEvents()
+        if (cancelled) return
+        for (const event of events) {
+          if (!seen.has(event.id)) {
+            seen.add(event.id)
+            onEvent(event)
+          }
+        }
+      } catch {
+        // Will be handled by SSE or polling fallback
+      }
+    }
+
+    // ── Polling fallback ──
+    const startPolling = () => {
+      onStateChange?.('polling')
+      let errored = false
+
+      const poll = async () => {
+        if (cancelled) return
+        try {
+          const events = await this.listWebhookEvents()
+          errored = false
+          for (const event of events) {
+            if (!seen.has(event.id)) {
+              seen.add(event.id)
+              onEvent(event)
+            }
+          }
+        } catch (err) {
+          if (cancelled) return
+          if (err instanceof ApiError && err.code === 'unauthorized') {
+            onStateChange?.('error')
+            cancel()
+            return
+          }
+          if (!errored) {
+            errored = true
+          }
+        }
+      }
+
+      poll()
+      pollingInterval = setInterval(poll, 5000)
+    }
+
+    // ── SSE transport ──
+    const trySSE = () => {
+      if (typeof EventSource === 'undefined') {
+        startPolling()
+        return
+      }
+
+      try {
+        const params = this.token
+          ? `?token=${encodeURIComponent(this.token)}`
+          : ''
+        eventSource = new EventSource(`${BASE}/v1/admin/events/stream${params}`)
+
+        eventSource.onmessage = (e: MessageEvent) => {
+          if (cancelled) return
+          try {
+            const event = mapWebhookEvent(JSON.parse(e.data))
+            if (!seen.has(event.id)) {
+              seen.add(event.id)
+              onEvent(event)
+            }
+          } catch {
+            // Skip malformed SSE data
+          }
+        }
+
+        eventSource.onopen = () => {
+          if (!cancelled) onStateChange?.('connected')
+        }
+
+        eventSource.onerror = () => {
+          if (cancelled) return
+          eventSource?.close()
+          eventSource = null
+          startPolling()
+        }
+      } catch {
+        if (!cancelled) startPolling()
+      }
+    }
+
+    // Boot sequence: seed existing events, then try SSE
+    seedExisting().finally(trySSE)
+
+    return cancel
   }
 
   async assignRole(address: string, role: Role): Promise<void> {
