@@ -43,4 +43,9 @@ export const queryKeys = {
   webhookEvents: {
     all: ['webhookEvents'] as const,
   },
+
+  // Analytics (admin, NEXT_PUBLIC_FEATURE_ANALYTICS)
+  analytics: {
+    summary: ['analytics', 'summary'] as const,
+  },
 }

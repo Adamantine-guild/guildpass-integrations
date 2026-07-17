@@ -2,6 +2,8 @@ import { z } from 'zod'
 import {
   AccessApi,
   AccessPolicy,
+  AnalyticsSummary,
+  AnalyticsSummarySchema,
   ApiErrorBody,
   Community,
   MemberProfile,
@@ -497,6 +499,25 @@ export class LiveAccessApi implements AccessApi {
     }, z.array(WebhookEventLogSchema))
     validateWebhookEventsResponse(raw, path)
     return raw.map(mapWebhookEvent)
+  }
+
+  /**
+   * Fetch the analytics summary for the admin dashboard.
+   *
+   * PROVISIONAL — `GET /v1/admin/analytics` does not yet exist in guildpass-core.
+   * This endpoint path is a proposal based on the existing `/v1/admin/*` namespace
+   * convention. The live implementation is included so the contract is visible and
+   * the backend team can confirm or adjust the path before the endpoint ships.
+   * Tracked in issue #157.
+   *
+   * Expected response shape: {@link AnalyticsSummary}
+   */
+  async getAnalyticsSummary(): Promise<AnalyticsSummary> {
+    const path = '/v1/admin/analytics'
+    return getJson<AnalyticsSummary>(path, {
+      method: 'GET',
+      headers: this.authHeaders(),
+    }, AnalyticsSummarySchema)
   }
 
   async assignRole(address: string, role: Role): Promise<void> {

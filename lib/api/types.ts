@@ -214,6 +214,77 @@ export interface ApiErrorBody {
   details?: Record<string, unknown>
 }
 
+// ── Analytics Types ──────────────────────────────────────────────────────────
+// NOTE: The analytics endpoint is PROVISIONAL. The path /v1/admin/analytics
+// has not yet been confirmed by guildpass-core. This contract is documented
+// here so the frontend and backend can align. Tracked in issue #157.
+
+/**
+ * A single data point in the member growth time series.
+ */
+export interface MemberGrowthDataPoint {
+  /** ISO 8601 date (YYYY-MM-DD) representing the start of the interval. */
+  date: string
+  /** Number of new members who joined during this interval. */
+  newMembers: number
+  /** Cumulative total member count at end of interval. */
+  totalMembers: number
+}
+
+export const MemberGrowthDataPointSchema = z.object({
+  date: z.string(),
+  newMembers: z.number().int().nonnegative(),
+  totalMembers: z.number().int().nonnegative(),
+})
+
+/**
+ * Access attempt counts for a single gated resource.
+ */
+export interface ResourceAccessCount {
+  resourceId: string
+  resourceTitle: string
+  /** Total number of access attempts for this resource. */
+  accessCount: number
+  /** Number of denied access attempts (insufficient tier/role). */
+  deniedCount: number
+}
+
+export const ResourceAccessCountSchema = z.object({
+  resourceId: z.string(),
+  resourceTitle: z.string(),
+  accessCount: z.number().int().nonnegative(),
+  deniedCount: z.number().int().nonnegative(),
+})
+
+/**
+ * Top-level analytics summary for the admin dashboard.
+ *
+ * @provisional Endpoint `/v1/admin/analytics` is not yet implemented in
+ * guildpass-core. This type definition captures the proposed contract so
+ * frontend and backend can align. The mock implementation uses seeded data;
+ * the live implementation will use this schema once the backend ships.
+ */
+export interface AnalyticsSummary {
+  /** Total community member count. */
+  totalMembers: number
+  /** Count of members with an active membership. */
+  activeMembers: number
+  /** Member growth time series (most recent 30 days, daily intervals). */
+  memberGrowth: MemberGrowthDataPoint[]
+  /** Per-resource access and denial counts. */
+  resourceAccess: ResourceAccessCount[]
+  /** ISO timestamp when this summary was generated. */
+  generatedAt: string
+}
+
+export const AnalyticsSummarySchema = z.object({
+  totalMembers: z.number().int().nonnegative(),
+  activeMembers: z.number().int().nonnegative(),
+  memberGrowth: z.array(MemberGrowthDataPointSchema),
+  resourceAccess: z.array(ResourceAccessCountSchema),
+  generatedAt: z.string(),
+})
+
 // ── Access Decision (cached per wallet + resource) ───────────────────────────
 
 /**
@@ -343,6 +414,13 @@ export interface MemberAccessApi {
 export interface AdminAccessApi {
   // ── Admin queries & mutations (require a valid SIWE token context) ────────
   listWebhookEvents(): Promise<WebhookEventLog[]>
+  /**
+   * Fetch the analytics summary for the admin dashboard.
+   *
+   * @provisional Calls `GET /v1/admin/analytics` — endpoint not yet live in
+   * guildpass-core. Contract tracked in issue #157; pending backend confirmation.
+   */
+  getAnalyticsSummary(): Promise<AnalyticsSummary>
   assignRole(address: string, role: Role): Promise<void>
   removeRole(address: string, role: Role): Promise<void>
   updatePolicy(policy: AccessPolicy): Promise<void>
