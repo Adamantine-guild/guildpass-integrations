@@ -16,6 +16,7 @@
     "../lib/api/access-decision.ts",
     "../lib/api/mock.ts",
     "../lib/wallet/address.ts",
+    "../lib/wallet/connectors.ts",
     "../lib/config.ts",
     "../lib/features.ts",
     "../components/feature-gate.tsx",

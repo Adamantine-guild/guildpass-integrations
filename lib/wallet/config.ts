@@ -4,6 +4,10 @@ import type { Chain } from 'viem'
 import type { CreateConnectorFn } from 'wagmi'
 import type { Transport } from 'viem'
 import { config as appConfig, ConfigError } from '@/lib/config'
+import {
+  parseConnectorNames as parseConnectorNamesCsv,
+  type WalletConnectorName,
+} from '@/lib/wallet/connectors'
 
 export const supportedWalletChains = {
   mainnet,
@@ -14,8 +18,6 @@ export const supportedWalletChains = {
 type SupportedWalletChainName = keyof typeof supportedWalletChains
 
 type SupportedWalletChain = (typeof supportedWalletChains)[SupportedWalletChainName]
-
-type WalletConnectorName = 'injected'
 
 export interface WalletRuntimeConfig {
   chains: readonly [SupportedWalletChain, ...SupportedWalletChain[]]
@@ -101,15 +103,7 @@ function buildTransports(chains: readonly [SupportedWalletChain, ...SupportedWal
 }
 
 function parseConnectorNames(): readonly WalletConnectorName[] {
-  const configuredNames = splitCsv(env('NEXT_PUBLIC_WALLET_CONNECTORS'))
-  const names = configuredNames.length > 0 ? configuredNames : ['injected']
-
-  return names.map((name) => {
-    if (name !== 'injected') {
-      fail('NEXT_PUBLIC_WALLET_CONNECTORS currently supports only "injected".')
-    }
-    return name
-  })
+  return parseConnectorNamesCsv(env('NEXT_PUBLIC_WALLET_CONNECTORS'))
 }
 
 function buildConnectors(connectorNames: readonly WalletConnectorName[]): CreateConnectorFn[] {

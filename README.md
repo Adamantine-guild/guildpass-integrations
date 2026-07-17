@@ -118,13 +118,31 @@ immediately rather than at runtime.
 | `NEXT_PUBLIC_WALLET_RPC_MAINNET` | No | Optional browser-safe RPC URL for Ethereum mainnet when enabled |
 | `NEXT_PUBLIC_WALLET_RPC_BASE` | No | Optional browser-safe RPC URL for Base when enabled |
 | `NEXT_PUBLIC_WALLET_RPC_SEPOLIA` | No | Optional browser-safe RPC URL for Sepolia when enabled |
-| `NEXT_PUBLIC_WALLET_CONNECTORS` | No | Comma-separated wallet connectors; currently supports `injected` and defaults to it |
+| `NEXT_PUBLIC_WALLET_CONNECTORS` | No | Comma-separated wallet connectors; see [Wallet connectors](#wallet-connectors) for supported values (defaults to `injected`) |
 
 See [`.env.example`](./.env.example) for a ready-to-copy template.
 
 Wallet chain settings are built by [`lib/wallet/config.ts`](./lib/wallet/config.ts). Invalid chain names, empty chain lists, unsupported connectors, or malformed RPC URLs throw a `ConfigError` during development so deployment mistakes are visible before users connect a wallet. In mock mode, leaving these variables unset preserves the local default of `mainnet`, `base`, and `sepolia` with default transports.
 
 Only expose RPC URLs that are safe to bundle into browser JavaScript. Do not put private RPC credentials in `NEXT_PUBLIC_*` variables unless your provider explicitly documents that the key is public and browser-safe.
+
+### Wallet connectors
+
+`NEXT_PUBLIC_WALLET_CONNECTORS` selects which wagmi connectors are offered in the connect dialog.
+
+Currently supported values:
+
+| Value | Connector |
+| ----- | --------- |
+| `injected` | Browser-extension / injected wallets (MetaMask, Rabby, etc.) — the default |
+
+Setting any other value (for example `walletconnect`) throws a `ConfigError` at startup that lists the supported values and links back to this section — connectors are compiled into the bundle, so an unrecognized name can never work at runtime and is better caught early.
+
+To add support for a new connector:
+
+1. Add its name to `SUPPORTED_CONNECTOR_NAMES` in [`lib/wallet/connectors.ts`](./lib/wallet/connectors.ts).
+2. Map the name to a wagmi connector factory in `buildConnectors()` in [`lib/wallet/config.ts`](./lib/wallet/config.ts) (e.g. `walletConnect({ projectId })` from `@wagmi/connectors`, including any env variables it needs).
+3. Document the new value in this table and in [`.env.example`](./.env.example).
 
 ---
 
