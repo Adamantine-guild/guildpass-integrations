@@ -220,6 +220,20 @@ The diagram covers:
 | `test/fixtures/openapi.json` | OpenAPI schema contract fixture representing core API models |
 | `scripts/sync-api-types.js` | Zero-dependency compiler converting openapi.json to typescript types |
 
+### Composable access rules
+
+Access policies support an optional composable rule tree in addition to the legacy single-condition `minTier`/`roles` fields:
+
+```ts
+// "standard tier AND moderator role"
+{ type: 'and', rules: [{ type: 'tier', minTier: 'standard' }, { type: 'role', role: 'moderator' }] }
+
+// "pro tier OR the Early Member badge"
+{ type: 'or', rules: [{ type: 'tier', minTier: 'pro' }, { type: 'badge', badge: 'Early Member' }] }
+```
+
+Primitive conditions are `tier` (tier ≥ X), `role` (has role Y), and `badge` (has badge Z); `and`/`or` nodes nest arbitrarily. When a policy sets `rule`, it takes precedence over `minTier`/`roles`; legacy policies are evaluated by wrapping them into an equivalent one-node tree, so behavior is unchanged. The recursive evaluator lives in [`lib/api/access-decision.ts`](./lib/api/access-decision.ts) (`evaluateAccessRule`), and the mock data seeds two demo policies (`mod-lounge` — a genuine AND, `insider-hub` — a genuine OR).
+
 ---
 
 ## Integration Points

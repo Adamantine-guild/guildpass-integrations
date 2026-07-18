@@ -97,6 +97,9 @@ export function mapPolicy(raw: any): AccessPolicy {
     resourceId: raw.resourceId ?? raw.resource_id ?? '',
     minTier: raw.minTier ?? raw.min_tier ?? 'free',
     roles: raw.roles ?? [],
+    // Only include the composable rule tree when the backend provides one so
+    // legacy policies keep their exact shape.
+    ...(raw.rule !== undefined ? { rule: raw.rule } : {}),
   }
 }
 
@@ -110,6 +113,9 @@ export function mapSession(raw: any): Session {
       ? mapMembership(raw.membership as BackendMember)
       : undefined,
     community: raw.community ? mapCommunity(raw.community) : undefined,
+    // Badges feed badge-based access rules; omitted when the backend does not
+    // provide them so legacy sessions keep their exact shape.
+    ...(raw.badges !== undefined ? { badges: raw.badges } : {}),
   }
 }
 

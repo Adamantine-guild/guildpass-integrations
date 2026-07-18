@@ -88,6 +88,33 @@ const DEFAULT_POLICIES: AccessPolicy[] = [
   { resourceId: 'alpha', minTier: 'standard' },
   { resourceId: 'pro-reports', minTier: 'pro' },
   { resourceId: 'mem-updates', minTier: 'free' },
+  // Composable-rule demos. Legacy minTier/roles fields are kept as the closest
+  // single-condition approximation for older clients; `rule` is authoritative.
+  {
+    // Moderator Lounge: standard tier AND the moderator role.
+    resourceId: 'mod-lounge',
+    minTier: 'standard',
+    roles: ['moderator'],
+    rule: {
+      type: 'and',
+      rules: [
+        { type: 'tier', minTier: 'standard' },
+        { type: 'role', role: 'moderator' },
+      ],
+    },
+  },
+  {
+    // Insider Hub: pro tier OR the "Early Member" badge.
+    resourceId: 'insider-hub',
+    minTier: 'pro',
+    rule: {
+      type: 'or',
+      rules: [
+        { type: 'tier', minTier: 'pro' },
+        { type: 'badge', badge: 'Early Member' },
+      ],
+    },
+  },
 ]
 
 const DEFAULT_WEBHOOK_EVENTS: WebhookEventLog[] = [
@@ -359,6 +386,7 @@ export class MockAccessApi implements AccessApi {
       roles: data ? data.roles : [],
       membership: data ? data.membership : undefined,
       community,
+      ...(data ? { badges: data.profile.badges } : {}),
     }
   }
 

@@ -12,6 +12,7 @@ export const session = {
     description: 'Demo space for membership and gating',
     tiers: ['free', 'standard', 'pro'],
   },
+  badges: ['Early Member', 'Beta Tester'],
 }
 
 export const community = {
@@ -87,6 +88,29 @@ export const policies = [
   policy,
   { resource_id: 'pro-reports', min_tier: 'pro' },
   { resource_id: 'mem-updates', min_tier: 'free' },
+  {
+    resource_id: 'mod-lounge',
+    min_tier: 'standard',
+    roles: ['moderator'],
+    rule: {
+      type: 'and',
+      rules: [
+        { type: 'tier', minTier: 'standard' },
+        { type: 'role', role: 'moderator' },
+      ],
+    },
+  },
+  {
+    resource_id: 'insider-hub',
+    min_tier: 'pro',
+    rule: {
+      type: 'or',
+      rules: [
+        { type: 'tier', minTier: 'pro' },
+        { type: 'badge', badge: 'Early Member' },
+      ],
+    },
+  },
 ]
 
 export const nonce = { nonce: 'aabbccdd11223344' }

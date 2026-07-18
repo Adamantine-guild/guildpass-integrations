@@ -2,7 +2,7 @@
 import { ReactNode, useMemo } from 'react'
 import { useAccount } from 'wagmi'
 import { useQuery } from '@tanstack/react-query'
-import { getApi, type MembershipTier, type Role } from '@/lib/api'
+import { getApi, type AccessRule, type MembershipTier, type Role } from '@/lib/api'
 import { computeAccessDecision } from '@/lib/api/access-decision'
 import {
   accessKeys,
@@ -18,15 +18,19 @@ export function Gated({
   children,
   minTier,
   roles,
+  rule,
   resourceId
 }: {
   children: ReactNode
   minTier?: MembershipTier
   roles?: Role[]
+  /** Composable AND/OR rule tree; takes precedence over minTier/roles. */
+  rule?: AccessRule
   resourceId?: string
 }) {
   const { address, chain } = useAccount()
   const env = String(chain?.id ?? 1)
+  const hasExplicitRequirements = minTier !== undefined || roles !== undefined || rule !== undefined
 
   const { data: session, isLoading: sessionLoading, isError, error, refetch } = useQuery({
     queryKey: queryKeys.session.byAddress(address ?? ''),
@@ -38,14 +42,14 @@ export function Gated({
   const { data: policies, isLoading: policiesLoading } = useQuery({
     queryKey: queryKeys.policies.all,
     queryFn: () => getApi(address).listPolicies(),
-    enabled: !!address && minTier === undefined && roles === undefined && !!resourceId,
+    enabled: !!address && !hasExplicitRequirements && !!resourceId,
     retry: 1,
   })
 
   const { data: resources, isLoading: resourcesLoading } = useQuery({
     queryKey: queryKeys.resources.all,
     queryFn: () => getApi(address).listResources(),
-    enabled: !!address && minTier === undefined && roles === undefined && !!resourceId,
+    enabled: !!address && !hasExplicitRequirements && !!resourceId,
     retry: 1,
   })
 
@@ -67,15 +71,22 @@ export function Gated({
     ? roles
     : (dynamicPolicy?.roles !== undefined ? dynamicPolicy.roles : dynamicResource?.roles)
 
+  // A composable rule (from props or the resource's policy) supersedes the
+  // legacy single-condition minTier/roles requirements.
+  const effectiveRule = hasExplicitRequirements ? rule : dynamicPolicy?.rule
+
+  const requirements = effectiveRule
+    ? { rule: effectiveRule }
+    : { minTier: effectiveMinTier, roles: effectiveRoles }
+
   const requirementsLoaded =
-    minTier !== undefined ||
-    roles !== undefined ||
+    hasExplicitRequirements ||
     !resourceId ||
     (policies !== undefined && resources !== undefined)
 
   const { data: cachedDecision, isLoading: decisionLoading } = useQuery({
     queryKey: accessKeys.decision(env, address ?? '', resourceId ?? ''),
-    queryFn: () => computeAccessDecision(session!, { minTier: effectiveMinTier, roles: effectiveRoles }),
+    queryFn: () => computeAccessDecision(session!, requirements),
     enabled: !!session && !!resourceId && requirementsLoaded,
     staleTime: ACCESS_DECISION_STALE_TIME,
     gcTime: ACCESS_DECISION_GC_TIME,
@@ -83,12 +94,12 @@ export function Gated({
   })
 
   const fallbackDecision = useMemo(
-    () => session ? computeAccessDecision(session, { minTier: effectiveMinTier, roles: effectiveRoles }) : undefined,
-    [session, effectiveMinTier, effectiveRoles]
+    () => session ? computeAccessDecision(session, { minTier: effectiveMinTier, roles: effectiveRoles, rule: effectiveRule }) : undefined,
+    [session, effectiveMinTier, effectiveRoles, effectiveRule]
   )
 
   const decision = resourceId ? cachedDecision : fallbackDecision
-  const isRequirementsLoading = !!resourceId && minTier === undefined && roles === undefined && (policiesLoading || resourcesLoading)
+  const isRequirementsLoading = !!resourceId && !hasExplicitRequirements && (policiesLoading || resourcesLoading)
   const isLoading = resourceId ? (sessionLoading || decisionLoading || isRequirementsLoading) : sessionLoading
 
   if (!address) {

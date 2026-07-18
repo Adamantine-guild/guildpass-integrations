@@ -82,6 +82,7 @@ export interface Session {
   roles: Role[]
   membership?: Membership
   community?: Community
+  badges?: string[]
 }
 
 export const SessionSchema = z.object({
@@ -89,6 +90,7 @@ export const SessionSchema = z.object({
   roles: z.array(RoleSchema),
   membership: MembershipSchema.optional(),
   community: CommunitySchema.optional(),
+  badges: z.array(z.string()).optional(),
 })
 
 export interface ResourceContentBlock {
@@ -125,16 +127,35 @@ export const ResourceSchema = z.object({
   content: z.array(ResourceContentBlockSchema).optional(),
 })
 
+export type AccessRule =
+  | { type: 'tier'; minTier: MembershipTier }
+  | { type: 'role'; role: Role }
+  | { type: 'badge'; badge: string }
+  | { type: 'and'; rules: AccessRule[] }
+  | { type: 'or'; rules: AccessRule[] }
+
+export const AccessRuleSchema: z.ZodType<AccessRule> = z.lazy(() =>
+  z.union([
+    z.object({ type: z.enum(['tier']), minTier: MembershipTierSchema }),
+    z.object({ type: z.enum(['role']), role: RoleSchema }),
+    z.object({ type: z.enum(['badge']), badge: z.string() }),
+    z.object({ type: z.enum(['and']), rules: z.array(AccessRuleSchema) }),
+    z.object({ type: z.enum(['or']), rules: z.array(AccessRuleSchema) }),
+  ]),
+)
+
 export interface AccessPolicy {
   resourceId: string
   minTier?: MembershipTier
   roles?: Role[]
+  rule?: AccessRule
 }
 
 export const AccessPolicySchema = z.object({
   resourceId: z.string(),
   minTier: MembershipTierSchema.optional(),
   roles: z.array(RoleSchema).optional(),
+  rule: AccessRuleSchema.optional(),
 })
 
 export interface MemberRow {
@@ -367,6 +388,7 @@ export interface BackendPolicy {
   minTier?: MembershipTier
   min_tier?: MembershipTier
   roles?: Role[]
+  rule?: AccessRule
 }
 
 export interface BackendSession {

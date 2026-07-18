@@ -123,6 +123,7 @@ export interface BackendPolicy {
   minTier?: MembershipTier
   min_tier?: MembershipTier
   roles?: Role[]
+  rule?: AccessRule
 }
 
 export interface BackendSession {
@@ -316,6 +317,9 @@ import { z } from 'zod';
           .map((v) => (typeof v === 'string' ? `'${v}'` : v))
           .join(' | ');
         output += `export type ${schemaName} = ${enumVals}\n\n`;
+      } else if (schemaVal.oneOf) {
+        const variants = schemaVal.oneOf.map((variant) => getTsType(variant));
+        output += `export type ${schemaName} =\n  | ${variants.join('\n  | ')}\n\n`;
       } else if (schemaVal.type === 'object') {
         output += `export interface ${schemaName} {\n`;
         const props = schemaVal.properties || {};
@@ -338,6 +342,11 @@ import { z } from 'zod';
           .join(', ');
         output += `export const ${schemaName}Schema = z.enum([${enumVals}])\n\n`;
       }
+    } else if (schemaVal.oneOf) {
+      // z.lazy so union schemas may reference themselves recursively (e.g.
+      // AccessRule's and/or variants contain nested AccessRule arrays).
+      const variants = schemaVal.oneOf.map((variant) => getZodType(variant));
+      output += `export const ${schemaName}Schema: z.ZodType<${schemaName}> = z.lazy(() =>\n  z.union([\n    ${variants.join(',\n    ')},\n  ]),\n)\n\n`;
     } else if (schemaVal.type === 'object') {
       output += `export const ${schemaName}Schema = z.object({\n`;
       const props = schemaVal.properties || {};
