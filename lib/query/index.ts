@@ -1,4 +1,11 @@
 export { accessKeys } from './access-keys'
+export { queryKeys } from './query-keys'
+export { reconcileMemberRoleCache } from './member-cache'
+export type {
+  MemberCacheClient,
+  MemberCacheReconcileResult,
+  MemberRoleAction,
+} from './member-cache'
 export { retryOnApiError } from './retry'
 export {
   ACCESS_DECISION_STALE_TIME,

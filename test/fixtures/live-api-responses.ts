@@ -12,6 +12,7 @@ export const session = {
     description: 'Demo space for membership and gating',
     tiers: ['free', 'standard', 'pro'],
   },
+  badges: ['Early Member', 'Beta Tester'],
 }
 
 export const community = {
@@ -29,7 +30,7 @@ export const membership = {
 
 export const profile = {
   display_name: 'User 0xabc',
-  badges: [],
+  badges: ['Early Member', 'Beta Tester'],
 }
 
 export const members = [
@@ -47,18 +48,31 @@ export const members = [
   },
 ]
 
+export const resource = {
+  id: 'alpha',
+  name: 'Alpha Docs',
+  description: 'Internal docs',
+  min_tier: 'standard',
+  content: [
+    { type: 'text', body: 'Welcome to the Alpha Docs. This is a restricted area.' },
+    { type: 'callout', title: 'Confidential', body: 'Do not share these documents outside the organization.', level: 'warning' },
+    { type: 'markdown', body: '### Getting Started\n\n1. Clone the repo\n2. Run `npm install`' },
+    { type: 'link', title: 'Internal Wiki', url: 'https://wiki.internal' },
+  ],
+}
+
 export const resources = [
-  {
-    id: 'alpha',
-    name: 'Alpha Docs',
-    description: 'Internal docs',
-    min_tier: 'standard',
-  },
+  resource,
   {
     id: 'pro-reports',
     title: 'Pro Reports',
     description: 'Advanced insight',
     min_tier: 'pro',
+    content: [
+      { type: 'text', body: 'Quarterly Analysis Report' },
+      { type: 'video', url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ', title: 'Market Overview' },
+      { type: 'file', title: 'Q3_Data.csv', url: '/files/q3_data.csv' },
+    ],
   },
   {
     id: 'mem-updates',
@@ -68,10 +82,35 @@ export const resources = [
   },
 ]
 
+export const policy = { resource_id: 'alpha', min_tier: 'standard' }
+
 export const policies = [
-  { resource_id: 'alpha', min_tier: 'standard' },
+  policy,
   { resource_id: 'pro-reports', min_tier: 'pro' },
   { resource_id: 'mem-updates', min_tier: 'free' },
+  {
+    resource_id: 'mod-lounge',
+    min_tier: 'standard',
+    roles: ['moderator'],
+    rule: {
+      type: 'and',
+      rules: [
+        { type: 'tier', minTier: 'standard' },
+        { type: 'role', role: 'moderator' },
+      ],
+    },
+  },
+  {
+    resource_id: 'insider-hub',
+    min_tier: 'pro',
+    rule: {
+      type: 'or',
+      rules: [
+        { type: 'tier', minTier: 'pro' },
+        { type: 'badge', badge: 'Early Member' },
+      ],
+    },
+  },
 ]
 
 export const nonce = { nonce: 'aabbccdd11223344' }

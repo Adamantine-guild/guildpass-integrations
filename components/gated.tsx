@@ -2,10 +2,11 @@
 import { ReactNode, useMemo } from 'react'
 import { useAccount } from 'wagmi'
 import { useQuery } from '@tanstack/react-query'
-import { getApi, type MembershipTier, type Role } from '@/lib/api'
+import { getApi, type AccessRule, type MembershipTier, type Role } from '@/lib/api'
 import { computeAccessDecision } from '@/lib/api/access-decision'
 import {
   accessKeys,
+  queryKeys,
   ACCESS_DECISION_STALE_TIME,
   ACCESS_DECISION_GC_TIME,
 } from '@/lib/query'
@@ -17,39 +18,89 @@ export function Gated({
   children,
   minTier,
   roles,
+  rule,
   resourceId
 }: {
   children: ReactNode
   minTier?: MembershipTier
   roles?: Role[]
+  /** Composable AND/OR rule tree; takes precedence over minTier/roles. */
+  rule?: AccessRule
   resourceId?: string
 }) {
   const { address, chain } = useAccount()
   const env = String(chain?.id ?? 1)
+  const hasExplicitRequirements = minTier !== undefined || roles !== undefined || rule !== undefined
 
   const { data: session, isLoading: sessionLoading, isError, error, refetch } = useQuery({
-    queryKey: ['session', address],
+    queryKey: queryKeys.session.byAddress(address ?? ''),
     queryFn: () => getApi(address).getSession(),
     enabled: !!address,
     retry: 1,
   })
 
+  const { data: policies, isLoading: policiesLoading } = useQuery({
+    queryKey: queryKeys.policies.all,
+    queryFn: () => getApi(address).listPolicies(),
+    enabled: !!address && !hasExplicitRequirements && !!resourceId,
+    retry: 1,
+  })
+
+  const { data: resources, isLoading: resourcesLoading } = useQuery({
+    queryKey: queryKeys.resources.all,
+    queryFn: () => getApi(address).listResources(),
+    enabled: !!address && !hasExplicitRequirements && !!resourceId,
+    retry: 1,
+  })
+
+  const dynamicPolicy = useMemo(() => {
+    if (!policies || !resourceId) return undefined
+    return policies.find((p) => p.resourceId === resourceId)
+  }, [policies, resourceId])
+
+  const dynamicResource = useMemo(() => {
+    if (!resources || !resourceId) return undefined
+    return resources.find((r) => r.id === resourceId)
+  }, [resources, resourceId])
+
+  const effectiveMinTier = minTier !== undefined
+    ? minTier
+    : (dynamicPolicy?.minTier !== undefined ? dynamicPolicy.minTier : dynamicResource?.minTier)
+
+  const effectiveRoles = roles !== undefined
+    ? roles
+    : (dynamicPolicy?.roles !== undefined ? dynamicPolicy.roles : dynamicResource?.roles)
+
+  // A composable rule (from props or the resource's policy) supersedes the
+  // legacy single-condition minTier/roles requirements.
+  const effectiveRule = hasExplicitRequirements ? rule : dynamicPolicy?.rule
+
+  const requirements = effectiveRule
+    ? { rule: effectiveRule }
+    : { minTier: effectiveMinTier, roles: effectiveRoles }
+
+  const requirementsLoaded =
+    hasExplicitRequirements ||
+    !resourceId ||
+    (policies !== undefined && resources !== undefined)
+
   const { data: cachedDecision, isLoading: decisionLoading } = useQuery({
     queryKey: accessKeys.decision(env, address ?? '', resourceId ?? ''),
-    queryFn: () => computeAccessDecision(session!, { minTier, roles }),
-    enabled: !!session && !!resourceId,
+    queryFn: () => computeAccessDecision(session!, requirements),
+    enabled: !!session && !!resourceId && requirementsLoaded,
     staleTime: ACCESS_DECISION_STALE_TIME,
     gcTime: ACCESS_DECISION_GC_TIME,
     retry: 1,
   })
 
   const fallbackDecision = useMemo(
-    () => session ? computeAccessDecision(session, { minTier, roles }) : undefined,
-    [session, minTier, roles]
+    () => session ? computeAccessDecision(session, { minTier: effectiveMinTier, roles: effectiveRoles, rule: effectiveRule }) : undefined,
+    [session, effectiveMinTier, effectiveRoles, effectiveRule]
   )
 
   const decision = resourceId ? cachedDecision : fallbackDecision
-  const isLoading = resourceId ? (sessionLoading || decisionLoading) : sessionLoading
+  const isRequirementsLoading = !!resourceId && !hasExplicitRequirements && (policiesLoading || resourcesLoading)
+  const isLoading = resourceId ? (sessionLoading || decisionLoading || isRequirementsLoading) : sessionLoading
 
   if (!address) {
     return <AccessDenied reason="Please connect your wallet to continue." />

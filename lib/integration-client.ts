@@ -28,19 +28,52 @@ function normalizeVerification(raw: any): WalletVerification {
   }
 }
 
+export class GatewayConfigurationError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'GatewayConfigurationError'
+  }
+}
+
+export class GatewayDependencyError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'GatewayDependencyError'
+  }
+}
+
+export class GatewayMethodError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'GatewayMethodError'
+  }
+}
+
 async function createIntegrationClient() {
   const apiKey = process.env.INTEGRATION_API_KEY
   if (!apiKey) {
-    throw new Error(
+    throw new GatewayConfigurationError(
       'INTEGRATION_API_KEY is required to initialize @guildpass/integration-client.',
     )
   }
 
-  const module = (await import('@guildpass/integration-client')) as IntegrationClientModule
-  const Client = module.IntegrationClient ?? module.default
+  let clientModule: IntegrationClientModule
+  try {
+    // @ts-ignore
+    clientModule = (await import('@guildpass/integration-client')) as IntegrationClientModule
+  } catch (error: any) {
+    if (error.code === 'MODULE_NOT_FOUND') {
+      throw new GatewayDependencyError(
+        'Optional dependency @guildpass/integration-client is not installed.',
+      )
+    }
+    throw error
+  }
+
+  const Client = clientModule.IntegrationClient ?? clientModule.default
 
   if (typeof Client !== 'function') {
-    throw new Error(
+    throw new GatewayMethodError(
       'Unable to resolve IntegrationClient from @guildpass/integration-client.',
     )
   }
@@ -71,7 +104,7 @@ export async function fetchMembershipByWallet(address: string): Promise<Membersh
   const method = getMembershipMethod(client)
 
   if (typeof method !== 'function') {
-    throw new Error('IntegrationClient does not expose a wallet membership lookup method.')
+    throw new GatewayMethodError('IntegrationClient does not expose a wallet membership lookup method.')
   }
 
   const raw = await method.call(client, address)
@@ -83,9 +116,50 @@ export async function verifyWallet(address: string): Promise<WalletVerification>
   const method = getVerificationMethod(client)
 
   if (typeof method !== 'function') {
-    throw new Error('IntegrationClient does not expose a wallet verification method.')
+    throw new GatewayMethodError('IntegrationClient does not expose a wallet verification method.')
   }
 
   const raw = await method.call(client, address)
   return normalizeVerification(raw)
+}
+
+/**
+ * Returns true when INTEGRATION_API_KEY is set.
+ * Does not expose the key value.
+ */
+export function isGatewayConfigured(): boolean {
+  return Boolean(process.env.INTEGRATION_API_KEY?.trim())
+}
+
+/**
+ * Returns true when the optional @guildpass/integration-client package can be imported.
+ */
+export function isGatewayDependencyAvailable(): boolean {
+  try {
+    require.resolve('@guildpass/integration-client')
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Returns true when the resolved client exposes a membership lookup method.
+ */
+export function isGatewayMethodSupported(): boolean {
+  try {
+    const mod = require('@guildpass/integration-client') as IntegrationClientModule
+    const Client = mod.IntegrationClient ?? mod.default
+    if (typeof Client !== 'function') return false
+    // Instantiate without calling — just check the prototype has the method
+    const instance = Object.create(Client.prototype)
+    return (
+      typeof instance.getMembershipByWallet === 'function' ||
+      typeof instance.membershipByWallet === 'function' ||
+      typeof instance.getMembership === 'function' ||
+      typeof instance.membership === 'function'
+    )
+  } catch {
+    return false
+  }
 }

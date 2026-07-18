@@ -10,3 +10,7 @@ test-dist
 .env.test.local
 *.log
 *.DS_Store
+
+CLAUDE.md
+PLAN.md
+tasks/

@@ -1,4 +1,5 @@
-import type { AccessPolicy, MembershipTier, Role } from '@/lib/api'
+import { AccessRuleSchema } from '../api/types'
+import type { AccessPolicy, MembershipTier, Role } from '../api/types'
 
 const ALLOWED_TIERS: MembershipTier[] = ['free', 'standard', 'pro']
 const ALLOWED_ROLES: Role[] = ['member', 'moderator', 'admin']
@@ -55,16 +56,24 @@ export function validatePolicy(
 
   const normalizedRoles = normalizeRoles(policy.roles)
 
-  if (!policy.minTier && (!normalizedRoles || normalizedRoles.length === 0)) {
-    errors.combination =
-      'Policy must define at least one restriction: a minimum tier or one or more roles.'
+  if (policy.rule !== undefined && !AccessRuleSchema.safeParse(policy.rule).success) {
+    errors.combination = 'The composable access rule is malformed.'
   }
 
-  // Frontend contract assumption:
-  // minTier=free with no roles effectively grants unrestricted access.
-  if (policy.minTier === 'free' && (!normalizedRoles || normalizedRoles.length === 0)) {
-    errors.combination =
-      'A free-tier policy without role restrictions does not restrict access.'
+  // A composable rule tree is a restriction in its own right, so the legacy
+  // minTier/roles combination requirements only apply when no rule is set.
+  if (policy.rule === undefined) {
+    if (!policy.minTier && (!normalizedRoles || normalizedRoles.length === 0)) {
+      errors.combination =
+        'Policy must define at least one restriction: a minimum tier or one or more roles.'
+    }
+
+    // Frontend contract assumption:
+    // minTier=free with no roles effectively grants unrestricted access.
+    if (policy.minTier === 'free' && (!normalizedRoles || normalizedRoles.length === 0)) {
+      errors.combination =
+        'A free-tier policy without role restrictions does not restrict access.'
+    }
   }
 
   if (Object.keys(errors).length > 0) {
@@ -77,6 +86,7 @@ export function validatePolicy(
       resourceId,
       minTier: policy.minTier,
       roles: normalizedRoles,
+      ...(policy.rule !== undefined ? { rule: policy.rule } : {}),
     },
   }
 }

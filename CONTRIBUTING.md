@@ -73,13 +73,13 @@ NEXT_PUBLIC_MOCK_MODE=true npm run dev
 
 ### Architecture overview
 
-| Path | Purpose |
-| ---- | ------- |
-| `app/*` | Next.js App Router pages |
-| `lib/api/*` | API layer (mock ↔ live switch) |
-| `components/ui/*` | Shadcn-style UI primitives |
-| `components/gated.tsx` | Access-gate component |
-| `components/nav.tsx` | Navigation bar |
+| Path                   | Purpose                        |
+| ---------------------- | ------------------------------ |
+| `app/*`                | Next.js App Router pages       |
+| `lib/api/*`            | API layer (mock ↔ live switch) |
+| `components/ui/*`      | Shadcn-style UI primitives     |
+| `components/gated.tsx` | Access-gate component          |
+| `components/nav.tsx`   | Navigation bar                 |
 
 ---
 
@@ -130,3 +130,12 @@ npm run lint        # Fix all reported issues
 
 - GitHub Issues: preferred for task discussion and bug reports
 - Contact: cerealboxx123@gmail.com
+
+## Accessibility expectations
+
+- Every interactive control must have a visible text label or an `aria-label`/`aria-labelledby` that describes the action clearly.
+- Form inputs and selects must be associated with labels using `htmlFor`/`id`, and validation messages should be connected with `aria-describedby` where useful.
+- Preserve visible keyboard focus. Do not remove outlines unless replacing them with a high-contrast `focus-visible` ring.
+- Wallet addresses and other long identifiers should be visually truncated with reusable helpers such as `AddressText`, while keeping the full value available through accessible text or a title.
+- Responsive layouts should remain usable at narrow viewport widths: wrap navigation/actions, avoid fixed-width content that overflows, and keep data tables horizontally scrollable when necessary.
+- Loading, error, denied, and success messages should use semantic status roles (`status`, `alert`, or equivalent) so screen readers receive important updates.

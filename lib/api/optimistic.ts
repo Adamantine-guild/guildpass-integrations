@@ -31,6 +31,21 @@ export function applyOptimisticRole(
   })
 }
 
+export function applyOptimisticRemoveRole(
+  members: MemberRow[] | undefined,
+  address: string,
+  role: Role,
+): MemberRow[] {
+  const currentMembers = members ?? []
+  return currentMembers.map((member) => {
+    if (member.address.toLowerCase() !== address.toLowerCase()) return member
+    return {
+      ...member,
+      roles: member.roles.filter((r) => r !== role),
+    }
+  })
+}
+
 export function applyOptimisticPolicy(
   policies: AccessPolicy[] | undefined,
   policy: AccessPolicy,

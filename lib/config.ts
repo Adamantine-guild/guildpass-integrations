@@ -40,6 +40,8 @@ export interface AppConfig {
   siwe: SiweConfig
   /** Feature flag booleans */
   features: FeatureFlags
+  /** Whether to validate API responses in log-only mode */
+  apiValidationLogOnly: boolean
 }
 
 // ── Error type ────────────────────────────────────────────────────────────────
@@ -78,6 +80,33 @@ function validateUrl(value: string, name: string): string {
   }
 }
 
+/**
+ * The EIP-4361 statement field is a single line embedded in the message the
+ * user signs. Newlines/control characters would break the message format, and
+ * an excessively long statement is unreadable in wallet UIs.
+ */
+const SIWE_STATEMENT_MAX_LENGTH = 200
+// eslint-disable-next-line no-control-regex
+const CONTROL_CHARS = /[\u0000-\u001f\u007f]/
+
+function validateSiweStatement(value: string): string {
+  if (CONTROL_CHARS.test(value)) {
+    throw new ConfigError(
+      'NEXT_PUBLIC_SIWE_STATEMENT must be a single line without control ' +
+        'characters (no \\n, \\r, tabs, etc.) — the EIP-4361 statement field ' +
+        'is single-line.',
+    )
+  }
+  if (value.length > SIWE_STATEMENT_MAX_LENGTH) {
+    throw new ConfigError(
+      `NEXT_PUBLIC_SIWE_STATEMENT must be at most ${SIWE_STATEMENT_MAX_LENGTH} ` +
+        `characters (got ${value.length}) so the signing message stays ` +
+        'readable in wallet UIs.',
+    )
+  }
+  return value
+}
+
 // ── Mode ──────────────────────────────────────────────────────────────────────
 
 function parseApiMode(): ApiMode {
@@ -111,7 +140,9 @@ const apiUrl: string = (() => {
 
 const siwe: SiweConfig = {
   domain: env('NEXT_PUBLIC_SIWE_DOMAIN') ?? 'localhost:3000',
-  statement: env('NEXT_PUBLIC_SIWE_STATEMENT') ?? 'Sign in to GuildPass Admin',
+  statement: validateSiweStatement(
+    env('NEXT_PUBLIC_SIWE_STATEMENT') ?? 'Sign in to GuildPass Admin',
+  ),
 }
 
 const isMock = apiMode === 'mock'
@@ -135,4 +166,7 @@ export const config: AppConfig = Object.freeze({
   apiUrl,
   siwe: Object.freeze(siwe),
   features: Object.freeze(features),
+  get apiValidationLogOnly() {
+    return flag('NEXT_PUBLIC_API_VALIDATION_LOG_ONLY', false)
+  },
 })

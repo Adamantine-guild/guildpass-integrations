@@ -1,3 +1,4 @@
+import './setup-env'
 import { test } from 'node:test'
 import * as assert from 'node:assert/strict'
 import { LiveAccessApi } from '../lib/api/live'

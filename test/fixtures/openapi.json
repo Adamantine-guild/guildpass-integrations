@@ -5,8 +5,158 @@
     "description": "API contract for the GuildPass core access API, used to sync and validate frontend types.",
     "version": "1.0.0"
   },
-  "paths": {},
+  "paths": {
+    "/v1/resources": {
+      "get": {
+        "summary": "List gated resources",
+        "operationId": "listResources",
+        "responses": {
+          "200": {
+            "description": "List of available resources.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/Resource" }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/resources/{id}": {
+      "get": {
+        "summary": "Get a single resource by ID",
+        "operationId": "getResource",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The requested resource.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Resource" }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found."
+          }
+        }
+      }
+    },
+    "/v1/policies": {
+      "get": {
+        "summary": "List all access policies",
+        "operationId": "listPolicies",
+        "responses": {
+          "200": {
+            "description": "List of access policies.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/AccessPolicy" }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/policies/{resourceId}": {
+      "get": {
+        "summary": "Get access policy for a specific resource",
+        "operationId": "getPolicy",
+        "parameters": [
+          {
+            "name": "resourceId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The access policy for the resource.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/AccessPolicy" }
+              }
+            }
+          },
+          "404": {
+            "description": "Policy not found."
+          }
+        }
+      }
+    },
+    "/v1/admin/analytics": {
+      "get": {
+        "summary": "Get analytics summary",
+        "description": "Returns a summary of community analytics including member growth over time and resource access counts. PROVISIONAL — endpoint path not yet confirmed by guildpass-core. Tracked in issue #157.",
+        "operationId": "getAnalyticsSummary",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "Analytics summary.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/AnalyticsSummary" }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token."
+          },
+          "403": {
+            "description": "Authenticated user is not allowed to view analytics."
+          }
+        }
+      }
+    },
+    "/v1/admin/events": {
+      "get": {
+        "summary": "List webhook event logs",
+        "description": "Returns admin-only webhook event log entries with safe payload summary fields for operational monitoring.",
+        "operationId": "listWebhookEvents",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "Webhook event log feed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/WebhookEventLog" }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token."
+          },
+          "403": {
+            "description": "Authenticated user is not allowed to view webhook events."
+          }
+        }
+      }
+    }
+  },
   "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    },
     "schemas": {
       "Role": {
         "type": "string",
@@ -15,6 +165,52 @@
       "MembershipTier": {
         "type": "string",
         "enum": ["free", "standard", "pro"]
+      },
+      "WebhookEventStatus": {
+        "type": "string",
+        "enum": ["success", "failed", "pending"]
+      },
+      "WebhookEventType": {
+        "type": "string",
+        "enum": [
+          "membership.created",
+          "membership.renewed",
+          "membership.expired",
+          "tier.upgraded",
+          "policy.updated"
+        ]
+      },
+      "WebhookPayloadSummary": {
+        "type": "object",
+        "description": "Safe, redacted webhook payload fields suitable for admin UI display.",
+        "properties": {
+          "network": { "type": "string" },
+          "txHash": { "type": "string" },
+          "tier": { "type": "string" },
+          "reason": { "type": "string" }
+        }
+      },
+      "WebhookEventLog": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "eventType": { "$ref": "#/components/schemas/WebhookEventType" },
+          "status": { "$ref": "#/components/schemas/WebhookEventStatus" },
+          "timestamp": { "type": "string", "format": "date-time" },
+          "affectedIdentifier": {
+            "type": "string",
+            "description": "Wallet address, resource id, or other safe identifier affected by the event."
+          },
+          "payloadSummary": { "$ref": "#/components/schemas/WebhookPayloadSummary" }
+        },
+        "required": [
+          "id",
+          "eventType",
+          "status",
+          "timestamp",
+          "affectedIdentifier",
+          "payloadSummary"
+        ]
       },
       "Community": {
         "type": "object",
@@ -61,9 +257,24 @@
             "items": { "$ref": "#/components/schemas/Role" }
           },
           "membership": { "$ref": "#/components/schemas/Membership" },
-          "community": { "$ref": "#/components/schemas/Community" }
+          "community": { "$ref": "#/components/schemas/Community" },
+          "badges": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
         },
         "required": ["roles"]
+      },
+      "ResourceContentBlock": {
+        "type": "object",
+        "properties": {
+          "type": { "type": "string" },
+          "body": { "type": "string" },
+          "url": { "type": "string" },
+          "title": { "type": "string" },
+          "level": { "type": "string" }
+        },
+        "required": ["type"]
       },
       "Resource": {
         "type": "object",
@@ -75,9 +286,64 @@
           "roles": {
             "type": "array",
             "items": { "$ref": "#/components/schemas/Role" }
+          },
+          "content": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/ResourceContentBlock" }
           }
         },
         "required": ["id", "title"]
+      },
+      "AccessRule": {
+        "description": "Composable access rule tree. Leaves are primitive conditions (tier >= X, has role Y, has badge Z); 'and'/'or' nodes combine nested rules. An 'and' with no rules evaluates to true; an 'or' with no rules evaluates to false.",
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "type": { "enum": ["tier"] },
+              "minTier": { "$ref": "#/components/schemas/MembershipTier" }
+            },
+            "required": ["type", "minTier"]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": { "enum": ["role"] },
+              "role": { "$ref": "#/components/schemas/Role" }
+            },
+            "required": ["type", "role"]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": { "enum": ["badge"] },
+              "badge": { "type": "string" }
+            },
+            "required": ["type", "badge"]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": { "enum": ["and"] },
+              "rules": {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/AccessRule" }
+              }
+            },
+            "required": ["type", "rules"]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": { "enum": ["or"] },
+              "rules": {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/AccessRule" }
+              }
+            },
+            "required": ["type", "rules"]
+          }
+        ]
       },
       "AccessPolicy": {
         "type": "object",
@@ -87,7 +353,8 @@
           "roles": {
             "type": "array",
             "items": { "$ref": "#/components/schemas/Role" }
-          }
+          },
+          "rule": { "$ref": "#/components/schemas/AccessRule" }
         },
         "required": ["resourceId"]
       },
@@ -104,6 +371,85 @@
         },
         "required": ["address", "roles", "tier", "active"]
       },
+      "MemberGrowthDataPoint": {
+        "type": "object",
+        "description": "A single data point in the member growth time series.",
+        "properties": {
+          "date": {
+            "type": "string",
+            "format": "date",
+            "description": "ISO 8601 date (YYYY-MM-DD) representing the start of the interval."
+          },
+          "newMembers": {
+            "type": "integer",
+            "description": "Number of new members who joined during this interval."
+          },
+          "totalMembers": {
+            "type": "integer",
+            "description": "Cumulative total member count at end of interval."
+          }
+        },
+        "required": ["date", "newMembers", "totalMembers"]
+      },
+      "ResourceAccessCount": {
+        "type": "object",
+        "description": "Access attempt counts for a single gated resource.",
+        "properties": {
+          "resourceId": { "type": "string" },
+          "resourceTitle": { "type": "string" },
+          "accessCount": {
+            "type": "integer",
+            "description": "Total number of access attempts for this resource."
+          },
+          "deniedCount": {
+            "type": "integer",
+            "description": "Number of denied access attempts (insufficient tier/role)."
+          }
+        },
+        "required": ["resourceId", "resourceTitle", "accessCount", "deniedCount"]
+      },
+      "AnalyticsSummary": {
+        "type": "object",
+        "description": "Top-level analytics summary for the admin dashboard.",
+        "properties": {
+          "totalMembers": {
+            "type": "integer",
+            "description": "Total community member count."
+          },
+          "activeMembers": {
+            "type": "integer",
+            "description": "Count of members with an active membership."
+          },
+          "memberGrowth": {
+            "type": "array",
+            "description": "Member growth time series (most recent 30 days, daily intervals).",
+            "items": { "$ref": "#/components/schemas/MemberGrowthDataPoint" }
+          },
+          "resourceAccess": {
+            "type": "array",
+            "description": "Per-resource access and denial counts.",
+            "items": { "$ref": "#/components/schemas/ResourceAccessCount" }
+          },
+          "generatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO timestamp when this summary was generated."
+          }
+        },
+        "required": ["totalMembers", "activeMembers", "memberGrowth", "resourceAccess", "generatedAt"]
+      },
+      "ApiErrorBody": {
+        "type": "object",
+        "properties": {
+          "code": { "type": "string" },
+          "error": { "type": "string" },
+          "message": { "type": "string" },
+          "details": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
       "SiweAuthSession": {
         "type": "object",
         "properties": {
@@ -113,6 +459,15 @@
           "expiresAt": { "type": "string", "format": "date-time" }
         },
         "required": ["isAuthenticated", "token", "address", "expiresAt"]
+      },
+      "WalletVerification": {
+        "type": "object",
+        "properties": {
+          "verified": { "type": "boolean" },
+          "method": { "type": "string" },
+          "checkedAt": { "type": "string", "format": "date-time" }
+        },
+        "required": ["verified", "checkedAt"]
       }
     }
   }

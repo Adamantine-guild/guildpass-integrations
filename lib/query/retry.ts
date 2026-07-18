@@ -1,4 +1,4 @@
-import { ApiError, isApiError } from '@/lib/api/errors'
+import { ApiError, isApiError } from '../api/errors'
 
 /**
  * React Query retry callback that respects the `retryable` flag on ApiError.

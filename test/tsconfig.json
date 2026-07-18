@@ -2,7 +2,7 @@
   "extends": "../tsconfig.json",
   "compilerOptions": {
     "module": "CommonJS",
-    "moduleResolution": "Node",
+    "moduleResolution": "Node10",
     "noEmit": false,
     "outDir": "../test-dist",
     "rootDir": "..",
@@ -10,11 +10,22 @@
     "jsx": "react-jsx"
   },
   "include": [
+    "../lib/api/mappers.ts",
     "../lib/api/optimistic.ts",
     "../lib/api/types.ts",
     "../lib/api/access-decision.ts",
     "../lib/rate-limit.ts",
+    "../lib/api/mock.ts",
+    "../lib/wallet/address.ts",
+    "../lib/wallet/connectors.ts",
+    "../lib/wallet/siwe-session.ts",
+    "../lib/config.ts",
+    "../lib/features.ts",
+    "../components/feature-gate.tsx",
+    "../components/wallet/address-text.tsx",
     "../lib/query/*.ts",
-    "./*.test.ts"
+    "../types/**/*.d.ts",
+    "./*.test.ts",
+    "./*.test.tsx"
   ]
 }

@@ -48,7 +48,17 @@ cp .env.example .env.local
 NEXT_PUBLIC_MOCK_MODE=true npm run dev
 ```
 
-Open http://localhost:3000.
+Open http://localhost:3000. In mock mode, a "Dev" link appears in the navigation, taking you to the developer controls page with tools for resetting mock data and applying scenario presets.
+
+#### Mock Developer Controls
+In mock mode, visit `/developer` (or click "Dev" in the nav) to access:
+- **Reset Mock Data**: Reset all mock data (members, resources, policies, webhook events) to initial state
+- **Scenario Presets**: Apply predefined testing scenarios:
+  - Active Member: Active standard tier user
+  - Expired Member: Inactive user with expired membership
+  - Denied Resource: Free tier user denied access to Alpha Docs
+  - Admin Session Expired: Admin user to test expired SIWE sessions
+  - No Roles: Member with no roles assigned
 
 ### Run against live guildpass-core
 
@@ -104,8 +114,35 @@ immediately rather than at runtime.
 | `NEXT_PUBLIC_CORE_API_URL` | Live mode only (validated) | Base URL of the `guildpass-core` access-api — must be a valid absolute URL in live mode |
 | `NEXT_PUBLIC_SIWE_DOMAIN` | No | Domain field in the EIP-4361 message (defaults to `localhost:3000`) |
 | `NEXT_PUBLIC_SIWE_STATEMENT` | No | Human-readable statement shown in the signed message |
+| `NEXT_PUBLIC_WALLET_CHAINS` | No | Comma-separated supported chains for wagmi; supported values: `mainnet`, `base`, `sepolia`; defaults to all three |
+| `NEXT_PUBLIC_WALLET_RPC_MAINNET` | No | Optional browser-safe RPC URL for Ethereum mainnet when enabled |
+| `NEXT_PUBLIC_WALLET_RPC_BASE` | No | Optional browser-safe RPC URL for Base when enabled |
+| `NEXT_PUBLIC_WALLET_RPC_SEPOLIA` | No | Optional browser-safe RPC URL for Sepolia when enabled |
+| `NEXT_PUBLIC_WALLET_CONNECTORS` | No | Comma-separated wallet connectors; see [Wallet connectors](#wallet-connectors) for supported values (defaults to `injected`) |
 
 See [`.env.example`](./.env.example) for a ready-to-copy template.
+
+Wallet chain settings are built by [`lib/wallet/config.ts`](./lib/wallet/config.ts). Invalid chain names, empty chain lists, unsupported connectors, or malformed RPC URLs throw a `ConfigError` during development so deployment mistakes are visible before users connect a wallet. In mock mode, leaving these variables unset preserves the local default of `mainnet`, `base`, and `sepolia` with default transports.
+
+Only expose RPC URLs that are safe to bundle into browser JavaScript. Do not put private RPC credentials in `NEXT_PUBLIC_*` variables unless your provider explicitly documents that the key is public and browser-safe.
+
+### Wallet connectors
+
+`NEXT_PUBLIC_WALLET_CONNECTORS` selects which wagmi connectors are offered in the connect dialog.
+
+Currently supported values:
+
+| Value | Connector |
+| ----- | --------- |
+| `injected` | Browser-extension / injected wallets (MetaMask, Rabby, etc.) — the default |
+
+Setting any other value (for example `walletconnect`) throws a `ConfigError` at startup that lists the supported values and links back to this section — connectors are compiled into the bundle, so an unrecognized name can never work at runtime and is better caught early.
+
+To add support for a new connector:
+
+1. Add its name to `SUPPORTED_CONNECTOR_NAMES` in [`lib/wallet/connectors.ts`](./lib/wallet/connectors.ts).
+2. Map the name to a wagmi connector factory in `buildConnectors()` in [`lib/wallet/config.ts`](./lib/wallet/config.ts) (e.g. `walletConnect({ projectId })` from `@wagmi/connectors`, including any env variables it needs).
+3. Document the new value in this table and in [`.env.example`](./.env.example).
 
 ---
 
@@ -155,6 +192,17 @@ npm run check-types # Validate that types in lib/api/types.ts match the schema
 
 ## Architecture
 
+For a full visual overview of the request flow, SIWE authentication sequence, and integration gateway, see **[docs/architecture.md](./docs/architecture.md)**.
+
+The diagram covers:
+
+- The `getApi()` mock ↔ live switch and both data paths
+- Where `SiweAuthProvider` and `sessionStorage` fit in the auth flow
+- The three-state `AdminGuard` and the `Gated` access-decision chain
+- The optional server-side integration gateway and when it returns a 503
+
+### Module reference
+
 | Path | Purpose |
 | ---- | ------- |
 | `app/*` | Next.js App Router pages |
@@ -171,6 +219,20 @@ npm run check-types # Validate that types in lib/api/types.ts match the schema
 | `components/nav.tsx` | Navigation bar |
 | `test/fixtures/openapi.json` | OpenAPI schema contract fixture representing core API models |
 | `scripts/sync-api-types.js` | Zero-dependency compiler converting openapi.json to typescript types |
+
+### Composable access rules
+
+Access policies support an optional composable rule tree in addition to the legacy single-condition `minTier`/`roles` fields:
+
+```ts
+// "standard tier AND moderator role"
+{ type: 'and', rules: [{ type: 'tier', minTier: 'standard' }, { type: 'role', role: 'moderator' }] }
+
+// "pro tier OR the Early Member badge"
+{ type: 'or', rules: [{ type: 'tier', minTier: 'pro' }, { type: 'badge', badge: 'Early Member' }] }
+```
+
+Primitive conditions are `tier` (tier ≥ X), `role` (has role Y), and `badge` (has badge Z); `and`/`or` nodes nest arbitrarily. When a policy sets `rule`, it takes precedence over `minTier`/`roles`; legacy policies are evaluated by wrapping them into an equivalent one-node tree, so behavior is unchanged. The recursive evaluator lives in [`lib/api/access-decision.ts`](./lib/api/access-decision.ts) (`evaluateAccessRule`), and the mock data seeds two demo policies (`mod-lounge` — a genuine AND, `insider-hub` — a genuine OR).
 
 ---
 
@@ -192,16 +254,23 @@ All live requests are sent to `NEXT_PUBLIC_CORE_API_URL` (default `http://localh
 | `GET` | `/v1/members/:address/membership` | — | Membership for address |
 | `GET` | `/v1/members/:address/profile` | — | Profile for address |
 | `GET` | `/v1/resources` | — | Available gated resources |
-| `GET` | `/v1/policies` | — | Access policies |
+| `GET` | `/v1/resources/:id` | — | Single resource lookup (with list fallback) |
+| `GET` | `/v1/policies` | — | All access policies |
+| `GET` | `/v1/policies/:resourceId` | — | Single policy lookup (with list fallback) |
+| `GET` | `/v1/admin/events` | Bearer | Admin webhook event feed |
 | `POST` | `/v1/members/:address/roles` | Bearer | Assign role to member |
 | `PUT` | `/v1/policies/:resourceId` | Bearer | Update access policy |
 | `POST` | `/v1/auth/siwe/nonce` | — | Request SIWE nonce |
 | `POST` | `/v1/auth/siwe/verify` | — | Verify SIWE signature → token |
 | `POST` | `/v1/auth/siwe/logout` | Bearer | Invalidate session |
 
+### Safe Fallback Mechanism
+
+For compatibility with older backend versions that do not yet expose direct lookup endpoints (e.g., `GET /v1/resources/:id`), the API client implements a safe fallback. If a direct lookup returns a `404 Not Found`, the client automatically falls back to fetching the full list (e.g., `GET /v1/resources`) and filtering for the requested identifier client-side.
+
 ### Local dashboard integration gateway
 
-When live mode is enabled, the dashboard uses server-side route handlers to access `@guildpass/integration-client` without exposing private credentials.
+When live mode is enabled, the dashboard uses server-side route handlers to access `@guildpass/integration-client` without exposing private credentials. This is an **optional** integration. To enable it, you must install the private `@guildpass/integration-client` package and set `INTEGRATION_API_KEY` in your `.env.local`. If the package or key is missing, the gateway will return safe 503 errors.
 
 | Method | Path | Description |
 |--------|------|-------------|

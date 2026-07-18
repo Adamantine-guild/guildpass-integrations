@@ -1,14 +1,36 @@
 'use client'
 import { useAccount } from 'wagmi'
 import { useQuery } from '@tanstack/react-query'
-import { getApi, type Membership, type Session, type WalletVerification } from '@/lib/api'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Badge } from '@/components/ui/badge'
-import Link from 'next/link'
-import { buttonVariants } from '@/components/ui/button'
-import { LoadingState, ErrorState, EmptyState, DeniedState, safeErrorMessage } from '@/components/ui/api-states'
+import {
+  getApi,
+  type MemberProfile,
+  type Membership,
+  type Resource,
+  type Session,
+  type WalletVerification,
+} from "@/lib/api";
+import { queryKeys } from "@/lib/query";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import Link from "next/link";
+import { buttonVariants } from "@/components/ui/button";
+import {
+  LoadingState,
+  ErrorState,
+  EmptyState,
+  DeniedState,
+  safeErrorMessage,
+} from "@/components/ui/api-states";
+import { AddressText } from "@/components/wallet/address-text";
+import { features } from "@/lib/features";
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Section({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
   return (
     <Card>
       <CardHeader>
@@ -16,17 +38,23 @@ function Section({ title, children }: { title: string; children: React.ReactNode
       </CardHeader>
       <CardContent>{children}</CardContent>
     </Card>
-  )
+  );
 }
 
 export default function DashboardPage() {
-  const { address, isConnected } = useAccount()
-  const { data: session, isLoading, isError, error, refetch } = useQuery<Session>({
-    queryKey: ["session", address],
+  const { address, isConnected } = useAccount();
+  const {
+    data: session,
+    isLoading,
+    isError,
+    error,
+    refetch,
+  } = useQuery<Session>({
+    queryKey: queryKeys.session.byAddress(address ?? ""),
     queryFn: () => getApi(address).getSession(),
     enabled: !!address,
     retry: 1,
-  })
+  });
 
   const {
     data: verification,
@@ -35,27 +63,74 @@ export default function DashboardPage() {
     error: verifyError,
     refetch: refetchVerification,
   } = useQuery<WalletVerification>({
-    queryKey: ['walletVerification', address],
+    queryKey: queryKeys.walletVerification.byAddress(address ?? ""),
     queryFn: () => getApi(address).verifyWallet(address as string),
     enabled: !!address,
     retry: 1,
-  })
+  });
 
-  const membership: Membership | undefined = session?.membership
+  const {
+    data: profile,
+    isLoading: profileLoading,
+    isError: profileIsError,
+    error: profileError,
+    refetch: refetchProfile,
+  } = useQuery<MemberProfile | null>({
+    queryKey: queryKeys.profile.byAddress(address ?? ""),
+    queryFn: () => getApi(address).getProfile(address as string),
+    enabled: !!address,
+    retry: 1,
+  });
+
+  const {
+    data: resources,
+    isLoading: resourcesLoading,
+    isError: resourcesIsError,
+    error: resourcesError,
+    refetch: refetchResources,
+  } = useQuery<Resource[]>({
+    queryKey: queryKeys.resources.all,
+    queryFn: () => getApi(address).listResources(),
+    enabled: !!address && features.resources,
+    retry: 1,
+  });
+
+  const membership: Membership | undefined = session?.membership;
+
+  function hasAccessToResource(resource: Resource): boolean {
+    if (!membership) return false;
+    if (!resource.minTier) return true;
+    const tierOrder = ["free", "standard", "pro"];
+    const userTierIndex = tierOrder.indexOf(membership.tier);
+    const requiredTierIndex = tierOrder.indexOf(resource.minTier);
+    return userTierIndex >= requiredTierIndex;
+  }
+
+  function getResourceHref(resource: Resource): string | null {
+    if (features.resources) return `/resources/${resource.id}`;
+    return null;
+  }
 
   return (
     <div className="grid gap-6">
-      <div className="flex items-end justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold">Member Dashboard</h1>
-          <p className="text-sm text-muted-foreground">Wallet-aware member experience</p>
+          <p className="text-sm text-muted-foreground">
+            Wallet-aware member experience
+          </p>
         </div>
-        <div className="text-right">
+        <div className="text-left sm:text-right">
           <div className="text-sm">
             {isConnected ? (
-              <span className="text-muted-foreground">{address}</span>
+              <AddressText
+                address={address}
+                className="text-muted-foreground"
+              />
             ) : (
-              <span className="text-muted-foreground">Wallet not connected</span>
+              <span className="text-muted-foreground">
+                Wallet not connected
+              </span>
             )}
           </div>
         </div>
@@ -78,20 +153,33 @@ export default function DashboardPage() {
             />
           ) : (
             <div className="space-y-2">
-              <div className="text-lg font-medium">{session?.community?.name ?? "Unknown"}</div>
-              <div className="text-sm text-muted-foreground">
-                Tier: <Badge className="ml-1" variant="outline">{membership?.tier ?? "—"}</Badge>
+              <div className="text-lg font-medium">
+                {session?.community?.name ?? "Unknown"}
               </div>
               <div className="text-sm text-muted-foreground">
-                Status: {membership?.active ? <Badge variant="success">Active</Badge> : <Badge variant="destructive">Inactive</Badge>}
+                Tier:{" "}
+                <Badge className="ml-1" variant="outline">
+                  {membership?.tier ?? "—"}
+                </Badge>
               </div>
               <div className="text-sm text-muted-foreground">
-                Expires: {membership?.expiresAt ? new Date(membership.expiresAt).toLocaleDateString() : "N/A"}
+                Status:{" "}
+                {membership?.active ? (
+                  <Badge variant="success">Active</Badge>
+                ) : (
+                  <Badge variant="destructive">Inactive</Badge>
+                )}
+              </div>
+              <div className="text-sm text-muted-foreground">
+                Expires:{" "}
+                {membership?.expiresAt
+                  ? new Date(membership.expiresAt).toLocaleDateString()
+                  : "N/A"}
               </div>
             </div>
           )}
         </Section>
-
+        
         <Section title="Profile Summary">
           {!address ? (
             <DeniedState
@@ -100,55 +188,131 @@ export default function DashboardPage() {
             />
           ) : isVerifying ? (
             <LoadingState />
-          ) : verifyIsError ? (
-            <ErrorState
-              title="Wallet verification failed"
-              message={safeErrorMessage(verifyError)}
-              onRetry={() => refetchVerification()}
-            />
-          ) : verification ? (
-            <div className="space-y-2">
-              <div className="text-sm text-muted-foreground">
-                Verification: {verification.verified ? (
-                  <Badge variant="success">Verified</Badge>
-                ) : (
-                  <Badge variant="destructive">Not verified</Badge>
-                )}
-              </div>
-              {verification.method ? (
-                <div className="text-sm text-muted-foreground">
-                  Method: {verification.method}
-                </div>
-              ) : null}
-              <div className="text-sm text-muted-foreground">
-                Checked: {new Date(verification.checkedAt).toLocaleString()}
-              </div>
-            </div>
           ) : (
-            <EmptyState
-              title="Profile details unavailable"
-              message="Basic profile details will appear here when they are available."
-            />
+            <div className="space-y-4">
+              {(() => {
+                const display = mapVerificationState(verification, verifyError)
+                return (
+                  <div className="space-y-2">
+                    <div className="text-sm text-muted-foreground flex items-center gap-2">
+                      Verification:{' '}
+                      <Badge variant={display.badgeVariant}>
+                        {display.title}
+                      </Badge>
+                    </div>
+                    <div className="text-sm text-muted-foreground">
+                      {display.message}
+                    </div>
+                    {display.status === 'failed' && (
+                      <button
+                        onClick={() => refetchVerification()}
+                        className="text-xs text-primary underline underline-offset-4"
+                      >
+                        Try again
+                      </button>
+                    )}
+                  </div>
+                )
+              })()}
+              {verification && (
+                <div className="space-y-2 pt-2 border-t">
+                  {verification.method ? (
+                    <div className="text-sm text-muted-foreground">
+                      Method: {verification.method}
+                    </div>
+                  ) : null}
+                  <div className="text-sm text-muted-foreground">
+                    Checked: {new Date(verification.checkedAt).toLocaleString()}
+                  </div>
+                </div>
+              )}
+            </div>
           )}
         </Section>
 
         <Section title="Badges">
-          <div className="flex flex-wrap gap-2">
-            <Badge>Early Member</Badge>
-            <Badge variant="outline">Placeholder</Badge>
-          </div>
+          {!address ? (
+            <DeniedState
+              title="Wallet connection required"
+              message="Connect your wallet to view your badges."
+            />
+          ) : profileLoading ? (
+            <LoadingState />
+          ) : profileIsError ? (
+            <ErrorState
+              title="Failed to load badges"
+              message={safeErrorMessage(profileError)}
+              onRetry={() => refetchProfile()}
+            />
+          ) : profile && profile.badges.length > 0 ? (
+            <div className="flex flex-wrap gap-2">
+              {profile.badges.map((badge) => (
+                <Badge key={badge}>{badge}</Badge>
+              ))}
+            </div>
+          ) : (
+            <EmptyState
+              title="No badges yet"
+              message="Complete community milestones to earn badges."
+            />
+          )}
         </Section>
 
         <Section title="Gated Resources">
-          <div className="space-y-2">
-            <div className="text-sm">Explore resources based on your tier.</div>
-            <div className="flex items-center gap-2">
-              <Link href="/resources/alpha" className={buttonVariants()}>Alpha Docs</Link>
-              <Link href="/events/demo" className={buttonVariants({ variant: 'outline' })}>Demo Event</Link>
+          {!address ? (
+            <DeniedState
+              title="Wallet connection required"
+              message="Connect your wallet to view available resources."
+            />
+          ) : !features.resources ? (
+            <EmptyState
+              title="Resources not enabled"
+              message="Resources are not available in the current environment."
+            />
+          ) : resourcesLoading ? (
+            <LoadingState message="Loading resources..." />
+          ) : resourcesIsError ? (
+            <ErrorState
+              title="Failed to load resources"
+              message={safeErrorMessage(resourcesError)}
+              onRetry={() => refetchResources()}
+            />
+          ) : resources && resources.length > 0 ? (
+            <div className="space-y-2">
+              <div className="text-sm">Explore resources based on your tier.</div>
+              <div className="flex flex-wrap items-center gap-2">
+                {resources.map((resource) => {
+                  const href = getResourceHref(resource);
+                  const accessible = hasAccessToResource(resource);
+                  if (!href) {
+                    return (
+                      <Badge key={resource.id} variant="outline" className="opacity-60">
+                        {resource.title}
+                      </Badge>
+                    );
+                  }
+                  return (
+                    <Link
+                      key={resource.id}
+                      href={href}
+                      className={buttonVariants({
+                        variant: accessible ? "default" : "outline",
+                      })}
+                    >
+                      {resource.title}
+                    </Link>
+                  );
+                })}
+              </div>
             </div>
-          </div>
+          ) : (
+            <EmptyState
+              title="No resources available"
+              message="No resources have been configured for this community yet."
+            />
+          )}
         </Section>
       </div>
     </div>
-  )
+  );
 }
