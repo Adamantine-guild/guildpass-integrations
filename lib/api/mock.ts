@@ -124,7 +124,20 @@ const DEFAULT_WEBHOOK_EVENTS: WebhookEventLog[] = [
     status: "success",
     timestamp: new Date(Date.now() - 1000 * 60 * 15).toISOString(),
     affectedIdentifier: "0x71C...3A90",
-    payloadSummary: { network: "ethereum", txHash: "0xabc...123", tier: "pro" }
+    payloadSummary: { network: "ethereum", txHash: "0xabc...123", tier: "pro" },
+    fullPayload: {
+      event: "membership.created",
+      data: {
+        address: "0x71C7656EC7ab88b098defB751B7401B5f6d8976A",
+        tier: "pro",
+        timestamp: new Date(Date.now() - 1000 * 60 * 15).toISOString(),
+      },
+      metadata: {
+        network: "ethereum",
+        txHash: "0xabc123def456abc123def456abc123def456abc123def456abc123def456abc123",
+        blockNumber: 19548291,
+      },
+    },
   },
   {
     id: "wh_01J2",
@@ -132,7 +145,19 @@ const DEFAULT_WEBHOOK_EVENTS: WebhookEventLog[] = [
     status: "success",
     timestamp: new Date(Date.now() - 1000 * 60 * 120).toISOString(),
     affectedIdentifier: "0x94F...8B21",
-    payloadSummary: { reason: "Subscription term elapsed" }
+    payloadSummary: { reason: "Subscription term elapsed" },
+    fullPayload: {
+      event: "membership.expired",
+      data: {
+        address: "0x94F68E164F64B8A2E2B9E7B1A3Ec5E7E3d8eB2A1",
+        tier: "standard",
+        expiresAt: new Date(Date.now() - 1000 * 60 * 120).toISOString(),
+      },
+      metadata: {
+        reason: "Subscription term elapsed",
+        gracePeriodDays: 7,
+      },
+    },
   },
   {
     id: "wh_01J3",
@@ -140,8 +165,23 @@ const DEFAULT_WEBHOOK_EVENTS: WebhookEventLog[] = [
     status: "failed",
     timestamp: new Date(Date.now() - 1000 * 60 * 360).toISOString(),
     affectedIdentifier: "0xF39...2441",
-    payloadSummary: { network: "ethereum", reason: "Gas limit hit execution revert" }
-  }
+    payloadSummary: { network: "ethereum", reason: "Gas limit hit execution revert" },
+    fullPayload: {
+      event: "tier.upgraded",
+      data: {
+        address: "0xF39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+        fromTier: "free",
+        toTier: "standard",
+      },
+      metadata: {
+        network: "ethereum",
+        txHash: "0xdef789abc456def789abc456def789abc456def789abc456def789abc456def789",
+        error: "Gas limit hit execution revert",
+        gasUsed: "850000",
+        gasLimit: "800000",
+      },
+    },
+  },
 ]
 
 /**
@@ -239,6 +279,38 @@ type MockScenario =
   | 'denied-resource' 
   | 'admin-session-expired' 
   | 'no-roles'
+
+/**
+ * Replay a webhook event by cloning it into the mock event store.
+ * The clone is marked with `isReplay: true` and inserted at the top
+ * of the feed with a `pending` status so it is visually distinct.
+ *
+ * This function operates directly on the module-level mock store and
+ * is intended for use by the admin event replay tool. It must only be
+ * called when `config.apiMode === 'mock'`.
+ */
+export function replayMockEvent(eventId: string): WebhookEventLog {
+  const original = mockWebhookEvents.find((e) => e.id === eventId)
+  if (!original) {
+    throw new ApiError({
+      status: 404,
+      code: 'not_found',
+      safeMessage: `Event "${eventId}" not found in mock store.`,
+    })
+  }
+
+  const replay: WebhookEventLog = {
+    ...original,
+    id: `replay_${eventId}_${Date.now()}`,
+    timestamp: new Date().toISOString(),
+    isReplay: true,
+    status: 'pending',
+    fullPayload: original.fullPayload ?? { ...original.payloadSummary },
+  }
+
+  mockWebhookEvents.unshift(replay)
+  return replay
+}
 
 /**
  * Reset all mock data to its initial state.
@@ -455,6 +527,38 @@ export class MockAccessApi implements AccessApi {
 
   async listWebhookEvents(): Promise<WebhookEventLog[]> {
     return new Promise((resolve) => setTimeout(() => resolve(mockWebhookEvents), 300))
+  }
+
+  /**
+   * Replay a webhook event by cloning it and adding the clone to the mock
+   * event store. The clone is clearly marked as a replayed entry so the UI
+   * can distinguish it from original events.
+   *
+   * This method is intentionally only available on MockAccessApi — it is
+   * NOT part of the AccessApi interface and must never be called in live mode.
+   */
+  async replayEvent(eventId: string): Promise<WebhookEventLog> {
+    const original = mockWebhookEvents.find((e) => e.id === eventId)
+    if (!original) {
+      throw new ApiError({
+        status: 404,
+        code: 'not_found',
+        safeMessage: `Event "${eventId}" not found in mock store.`,
+      })
+    }
+
+    const replay: WebhookEventLog = {
+      ...original,
+      id: `replay_${eventId}_${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      isReplay: true,
+      status: 'pending',
+      fullPayload: original.fullPayload ?? { ...original.payloadSummary },
+    }
+
+    // Insert at the beginning so it appears at the top of the feed
+    mockWebhookEvents.unshift(replay)
+    return replay
   }
 
   async getAnalyticsSummary(): Promise<AnalyticsSummary> {

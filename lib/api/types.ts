@@ -33,6 +33,10 @@ export const WebhookEventLogSchema = z.object({
   timestamp: z.string(),
   affectedIdentifier: z.string(),
   payloadSummary: WebhookPayloadSummarySchema,
+  /** Raw event payload for detail inspection (optional — added by the replay/debug tool). */
+  fullPayload: z.record(z.unknown()).optional(),
+  /** True when this entry was injected via the replay/debug tool rather than ingested from a real webhook. */
+  isReplay: z.boolean().optional(),
 })
 
 export interface Community {
@@ -233,6 +237,10 @@ export interface WebhookEventLog {
     tier?: string;
     reason?: string;
   };
+  /** Raw event payload for detail inspection (optional — added by the replay/debug tool). */
+  fullPayload?: Record<string, unknown>;
+  /** True when this entry was injected via the replay/debug tool rather than ingested from a real webhook. */
+  isReplay?: boolean;
 }
 
 export interface WalletVerification {
