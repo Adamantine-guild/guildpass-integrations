@@ -7,7 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { useState } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { AdminGuard } from '@/components/admin-guard'
 import { useSiweAuth } from '@/lib/wallet/providers'
 import { AuthError } from '@/lib/api/live'
@@ -22,6 +22,9 @@ type AssignRoleInput = {
 type AssignRoleRollback = {
   previousMembers?: MemberRow[]
 }
+
+const TIERS: Array<MemberRow['tier'] | 'all'> = ['all', 'free', 'standard', 'pro']
+const ROLES: Array<Role | 'all'> = ['all', 'member', 'moderator', 'admin']
 
 function SessionExpiredBanner() {
   const { signIn, isSigningIn } = useSiweAuth()
@@ -64,6 +67,29 @@ export default function MembersPage() {
   const [pendingAssignment, setPendingAssignment] = useState<AssignRoleInput | null>(null)
   const [successMessage, setSuccessMessage] = useState('')
   const [rollbackMessage, setRollbackMessage] = useState('')
+
+  // Search / filter state for the member list
+  const [searchInput, setSearchInput] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  const [tierFilter, setTierFilter] = useState<MemberRow['tier'] | 'all'>('all')
+  const [roleFilter, setRoleFilter] = useState<Role | 'all'>('all')
+
+  useEffect(() => {
+    const id = setTimeout(() => setDebouncedSearch(searchInput), 250)
+    return () => clearTimeout(id)
+  }, [searchInput])
+
+  // Client-side filter over the already-fetched members — no extra network requests.
+  const filteredMembers = useMemo(() => {
+    if (!members) return members
+    const needle = debouncedSearch.trim().toLowerCase()
+    return members.filter((m) => {
+      const matchesAddress = !needle || m.address.toLowerCase().includes(needle)
+      const matchesTier = tierFilter === 'all' || m.tier === tierFilter
+      const matchesRole = roleFilter === 'all' || m.roles.includes(roleFilter)
+      return matchesAddress && matchesTier && matchesRole
+    })
+  }, [members, debouncedSearch, tierFilter, roleFilter])
 
   const {
     mutate,
@@ -166,6 +192,54 @@ export default function MembersPage() {
         <Card>
           <CardHeader><CardTitle>Member List</CardTitle></CardHeader>
           <CardContent>
+            <div className="flex flex-wrap items-center gap-2 mb-4">
+              <Input
+                id="member-search"
+                placeholder="Search by address…"
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
+                className="max-w-xs"
+              />
+              <select
+                id="member-tier-filter"
+                className="border rounded-md h-9 px-2 text-sm"
+                value={tierFilter}
+                onChange={(e) => setTierFilter(e.target.value as MemberRow['tier'] | 'all')}
+              >
+                {TIERS.map((t) => (
+                  <option key={t} value={t}>
+                    {t === 'all' ? 'All tiers' : t}
+                  </option>
+                ))}
+              </select>
+              <select
+                id="member-role-filter"
+                className="border rounded-md h-9 px-2 text-sm"
+                value={roleFilter}
+                onChange={(e) => setRoleFilter(e.target.value as Role | 'all')}
+              >
+                {ROLES.map((r) => (
+                  <option key={r} value={r}>
+                    {r === 'all' ? 'All roles' : r}
+                  </option>
+                ))}
+              </select>
+              {(searchInput || tierFilter !== 'all' || roleFilter !== 'all') && (
+                <Button
+                  id="member-clear-filters"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    setSearchInput('')
+                    setDebouncedSearch('')
+                    setTierFilter('all')
+                    setRoleFilter('all')
+                  }}
+                >
+                  Clear
+                </Button>
+              )}
+            </div>
             {isLoading ? (
               <LoadingState message="Loading members…" />
             ) : isError ? (
@@ -174,11 +248,18 @@ export default function MembersPage() {
                 message={safeErrorMessage(error)}
                 onRetry={() => refetch()}
               />
-            ) : !members?.length ? (
-              <EmptyState title="No members yet" message="No members have been added to this community." />
+            ) : !filteredMembers?.length ? (
+              <EmptyState
+                title={members?.length ? 'No matching members' : 'No members yet'}
+                message={
+                  members?.length
+                    ? 'No members match the current search or filters.'
+                    : 'No members have been added to this community.'
+                }
+              />
             ) : (
               <div className="space-y-2">
-                {members.map((m) => (
+                {filteredMembers.map((m) => (
                   <div
                     key={m.address}
                     className="flex items-center justify-between border rounded-md p-2"
