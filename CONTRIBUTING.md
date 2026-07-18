@@ -9,6 +9,7 @@ Thank you for your interest in contributing to the GuildPass Frontend!
 - [Finding Issues](#finding-issues)
 - [Development Setup](#development-setup)
 - [Branching & Commits](#branching--commits)
+- [Working with API Types](#working-with-api-types)
 - [Submitting a Pull Request](#submitting-a-pull-request)
 - [Review Process](#review-process)
 - [Communication](#communication)
@@ -92,6 +93,85 @@ NEXT_PUBLIC_MOCK_MODE=true npm run dev
   - `style: align spacing on admin member list`
   - `test: add mock API test for membership status`
   - `chore: upgrade wagmi to v2.13`
+
+---
+
+## Working with API Types
+
+The frontend's shared API types in [`lib/api/types.ts`](./lib/api/types.ts) are
+**not hand-written**. They are auto-generated from an OpenAPI contract fixture,
+[`test/fixtures/openapi.json`](./test/fixtures/openapi.json), which mirrors the
+models exposed by **guildpass-core** (the backend). A zero-dependency compiler,
+[`scripts/sync-api-types.js`](./scripts/sync-api-types.js), converts the fixture
+into TypeScript.
+
+This split exists so the frontend types and the backend contract can't silently
+drift. If you edit `lib/api/types.ts` by hand, the next type check will fail and
+overwrite your changes — **always edit the fixture instead.**
+
+### When to touch the fixture
+
+Update `test/fixtures/openapi.json` whenever a change you are making depends on
+(or alters) the shape of an API model — for example adding a field to a
+`Membership`, renaming a property, or adding an enum value. If your change only
+touches UI or component logic and reuses existing types, you do **not** need to
+touch the fixture.
+
+### How to regenerate the types
+
+Two npm scripts drive the workflow (see the [Scripts section of the README](../README.md#scripts)):
+
+| Script | What it does |
+| ------ | ------------ |
+| `npm run sync-types` | Compiles `test/fixtures/openapi.json` and **writes** the result into `lib/api/types.ts`. |
+| `npm run check-types` | Validates that `lib/api/types.ts` matches the fixture. Exits non-zero on drift — used by CI and local checks. |
+
+### Worked example
+
+Say you want to add a `joinedAt` timestamp to the `Membership` model:
+
+1. **Edit the fixture** — add the new property to
+   `test/fixtures/openapi.json` under the `Membership` schema's `properties`,
+   and include it in `required` if it should be non-optional:
+
+   ```json
+   "Membership": {
+     "type": "object",
+     "required": ["address", "role", "joinedAt"],
+     "properties": {
+       "address": { "type": "string" },
+       "role": { "type": "string" },
+       "joinedAt": { "type": "string", "format": "date-time" }
+     }
+   }
+   ```
+
+2. **Regenerate the types**:
+
+   ```bash
+   npm run sync-types
+   ```
+
+   This rewrites `lib/api/types.ts`. Inspect the diff — you should see the new
+   `joinedAt: string` field appear on the `Membership` interface.
+
+3. **Confirm there is no drift**:
+
+   ```bash
+   npm run check-types
+   # → SUCCESS: Frontend API types are in sync with openapi.json.
+   ```
+
+4. **Commit both** the fixture change and the regenerated `lib/api/types.ts`
+   together, so they stay in lockstep.
+
+### How drift is caught
+
+`npm run check-types` is the guard rail. Locally you can run it before pushing,
+and CI runs it as part of the checks. If the fixture and `lib/api/types.ts`
+disagree, the script prints `FAIL: Type drift detected!` and exits `1`, blocking
+the build until you re-run `npm run sync-types`. Treat a red `check-types` as a
+signal to re-sync, not to hand-edit the generated file.
 
 ---
 
