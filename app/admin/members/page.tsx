@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
+import { ToastViewport, useToasts } from "@/components/ui/toast";
 import { useState, useMemo, useRef, useEffect } from "react";
 import { AdminGuard } from "@/components/admin-guard";
 import { useSiweAuth } from "@/lib/wallet/providers";
@@ -152,6 +153,7 @@ export default function MembersPage() {
   const { address } = useAccount();
   const { authSession, markExpired, sessionStatus } = useSiweAuth();
   const qc = useQueryClient();
+  const { toasts, addToast, dismissToast } = useToasts();
 
   // Filter state
   const [searchQuery, setSearchQuery] = useState('')
@@ -285,6 +287,11 @@ export default function MembersPage() {
         action: "assign",
       });
       setSuccessAssignment(input);
+      addToast({
+        tone: "success",
+        title: `Role assigned to ${input.address.slice(0, 6)}…${input.address.slice(-4)}`,
+        description: `The ${input.role} role was assigned successfully.`,
+      });
       setAddr("");
       resetMutation();
     },
@@ -295,8 +302,18 @@ export default function MembersPage() {
         }
       }
       void qc.invalidateQueries({ queryKey: queryKeys.members.all });
-      setRollbackMessage(`Change reverted: ${safeErrorMessage(err)}`);
-      if (err instanceof AuthError) {
+      const isExpiredSession = err instanceof AuthError && err.code === "unauthorized";
+      const message = isExpiredSession
+        ? "Session expired. Use the re-authentication banner to sign in again."
+        : safeErrorMessage(err);
+
+      setRollbackMessage(`Change reverted: ${message}`);
+      addToast({
+        tone: isExpiredSession ? "warning" : "error",
+        title: isExpiredSession ? "Admin session expired" : "Failed to assign role",
+        description: message,
+      });
+      if (isExpiredSession) {
         markExpired();
       }
     },
@@ -304,6 +321,9 @@ export default function MembersPage() {
       setPendingAssignment(null);
     },
   });
+
+  const isAssignSessionExpired =
+    mutateErrorValue instanceof AuthError && mutateErrorValue.code === "unauthorized";
 
   const removeRoleMutation = useMutation<
     void,
@@ -387,6 +407,7 @@ export default function MembersPage() {
   return (
     <AdminGuard>
       <div className="space-y-4">
+        <ToastViewport toasts={toasts} onDismiss={dismissToast} />
         <h1 className="text-2xl font-semibold">Members</h1>
 
         {sessionStatus === "expired" && <SessionExpiredBanner />}
@@ -481,7 +502,7 @@ export default function MembersPage() {
                 {rollbackMessage}
               </div>
             )}
-            {mutateError && (
+            {mutateError && !isAssignSessionExpired && (
               <ErrorState
                 title="Failed to assign role"
                 message={safeErrorMessage(mutateErrorValue)}
