@@ -65,6 +65,136 @@ import { config } from '../config'
 
 const BASE = config.apiUrl
 
+type CircuitState = 'closed' | 'open' | 'half-open'
+
+interface CircuitEntry {
+  state: CircuitState
+  failures: number[]
+  openedAt?: number
+  halfOpenProbeInFlight: boolean
+}
+
+const RETRY_MAX_ATTEMPTS = Number(
+  process.env.NEXT_PUBLIC_API_RETRY_MAX_ATTEMPTS ?? 3,
+)
+const RETRY_BASE_DELAY_MS = Number(
+  process.env.NEXT_PUBLIC_API_RETRY_BASE_DELAY_MS ?? 100,
+)
+const RETRY_MAX_DELAY_MS = Number(
+  process.env.NEXT_PUBLIC_API_RETRY_MAX_DELAY_MS ?? 1_000,
+)
+const CIRCUIT_FAILURE_THRESHOLD = Number(
+  process.env.NEXT_PUBLIC_API_CIRCUIT_FAILURE_THRESHOLD ?? 3,
+)
+const CIRCUIT_FAILURE_WINDOW_MS = Number(
+  process.env.NEXT_PUBLIC_API_CIRCUIT_FAILURE_WINDOW_MS ?? 30_000,
+)
+const CIRCUIT_COOLDOWN_MS = Number(
+  process.env.NEXT_PUBLIC_API_CIRCUIT_COOLDOWN_MS ?? 10_000,
+)
+
+const circuitBreakers = new Map<string, CircuitEntry>()
+
+function requestMethod(init?: RequestInit): string {
+  return (init?.method ?? 'GET').toUpperCase()
+}
+
+function shouldRetryRequest(init?: RequestInit): boolean {
+  return requestMethod(init) === 'GET'
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function backoffDelayMs(attemptIndex: number): number {
+  const exponentialDelay = Math.min(
+    RETRY_BASE_DELAY_MS * 2 ** Math.max(0, attemptIndex - 1),
+    RETRY_MAX_DELAY_MS,
+  )
+  const jitter = Math.floor(Math.random() * exponentialDelay * 0.25)
+  return exponentialDelay + jitter
+}
+
+function getCircuit(path: string): CircuitEntry {
+  let circuit = circuitBreakers.get(path)
+  if (!circuit) {
+    circuit = { state: 'closed', failures: [], halfOpenProbeInFlight: false }
+    circuitBreakers.set(path, circuit)
+  }
+  return circuit
+}
+
+function serviceUnavailableError(path: string): ApiError {
+  return new ApiError({
+    status: 503,
+    code: 'service_unavailable',
+    safeMessage: 'Service temporarily unavailable. Please try again shortly.',
+    path,
+    retryable: true,
+  })
+}
+
+function assertCircuitAllowsRequest(path: string): void {
+  const circuit = getCircuit(path)
+  if (circuit.state !== 'open') {
+    return
+  }
+
+  const openedAt = circuit.openedAt ?? 0
+  if (Date.now() - openedAt >= CIRCUIT_COOLDOWN_MS) {
+    circuit.state = 'half-open'
+    circuit.halfOpenProbeInFlight = false
+  } else {
+    throw serviceUnavailableError(path)
+  }
+
+  if (circuit.halfOpenProbeInFlight) {
+    throw serviceUnavailableError(path)
+  }
+  circuit.halfOpenProbeInFlight = true
+}
+
+function recordCircuitSuccess(path: string): void {
+  const circuit = getCircuit(path)
+  circuit.state = 'closed'
+  circuit.failures = []
+  circuit.openedAt = undefined
+  circuit.halfOpenProbeInFlight = false
+}
+
+function recordCircuitFailure(path: string): void {
+  const now = Date.now()
+  const circuit = getCircuit(path)
+  circuit.failures = circuit.failures.filter(
+    (failureAt) => now - failureAt <= CIRCUIT_FAILURE_WINDOW_MS,
+  )
+  circuit.failures.push(now)
+  circuit.halfOpenProbeInFlight = false
+
+  if (
+    circuit.state === 'half-open' ||
+    circuit.failures.length >= CIRCUIT_FAILURE_THRESHOLD
+  ) {
+    circuit.state = 'open'
+    circuit.openedAt = now
+  }
+}
+
+function isRetryableError(err: unknown): boolean {
+  return (
+    err instanceof ApiError &&
+    err.retryable &&
+    (err.code === 'network_error' ||
+      err.code === 'server_error' ||
+      err.code === 'rate_limited')
+  )
+}
+
+export function resetLiveApiResilienceState(): void {
+  circuitBreakers.clear()
+}
+
 function createApiError(status: number, body?: ApiErrorBody, path?: string): ApiError {
   const details =
     body?.details && typeof body.details === 'object'
@@ -311,9 +441,43 @@ async function request<T>(
       cause,
     })
   }
+}
 
-  if (!res.ok) {
-    throw createApiError(res.status, await parseErrorBody(res), path)
+async function getJson<T>(path: string, init?: RequestInit, schema?: z.ZodType<any>): Promise<T> {
+  const retriesEnabled = shouldRetryRequest(init)
+  let res!: Response
+
+  if (retriesEnabled) {
+    assertCircuitAllowsRequest(path)
+  }
+
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      res = await fetchCore(path, init)
+
+      if (!res.ok) {
+        throw createApiError(res.status, await parseErrorBody(res), path)
+      }
+
+      if (retriesEnabled) {
+        recordCircuitSuccess(path)
+      }
+      break
+    } catch (err) {
+      const canRetry =
+        retriesEnabled &&
+        isRetryableError(err) &&
+        attempt < RETRY_MAX_ATTEMPTS
+
+      if (!canRetry) {
+        if (retriesEnabled && isRetryableError(err)) {
+          recordCircuitFailure(path)
+        }
+        throw err
+      }
+
+      await sleep(backoffDelayMs(attempt))
+    }
   }
 
   if (res.status === 204 || res.status === 205) {
