@@ -43,6 +43,12 @@ import {
   WebhookEventLog,
 } from './types'
 import { ApiError } from './errors'
+import {
+  loadPersistedState,
+  persistState,
+  clearPersistedState,
+  LS_KEY,
+} from './mock-storage'
 
 /** Read once at module load so it is stable across renders. */
 const MOCK_SESSION_STATE =
@@ -253,6 +259,41 @@ let policies: AccessPolicy[] = [...DEFAULT_POLICIES]
 let mockWebhookEvents: WebhookEventLog[] = [...DEFAULT_WEBHOOK_EVENTS]
 let memberStore: Record<string, { membership: Membership; roles: Role[]; profile: MemberProfile }> = { ...DEFAULT_MEMBER_STORE }
 
+let saveTimeout: ReturnType<typeof setTimeout> | null = null
+
+const initPromise = loadPersistedState().then((persisted) => {
+  if (!persisted) return
+  community = persisted.community
+  resources = persisted.resources
+  policies = persisted.policies
+  mockWebhookEvents = persisted.webhookEvents
+  memberStore = persisted.memberStore
+})
+
+function schedulePersist(): void {
+  if (saveTimeout) clearTimeout(saveTimeout)
+  saveTimeout = setTimeout(() => {
+    persistState({
+      community,
+      resources,
+      policies,
+      webhookEvents: mockWebhookEvents,
+      memberStore,
+    }).catch(() => {})
+  }, 200)
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('beforeunload', () => {
+    if (saveTimeout) clearTimeout(saveTimeout)
+    try {
+      localStorage.setItem(LS_KEY, JSON.stringify({
+        community, resources, policies, webhookEvents: mockWebhookEvents, memberStore,
+      }))
+    } catch { /* ignore */ }
+  })
+}
+
 function ensureAddress(addr?: string) {
   if (!addr) return null
   if (!memberStore[addr]) {
@@ -289,7 +330,8 @@ type MockScenario =
  * is intended for use by the admin event replay tool. It must only be
  * called when `config.apiMode === 'mock'`.
  */
-export function replayMockEvent(eventId: string): WebhookEventLog {
+export async function replayMockEvent(eventId: string): Promise<WebhookEventLog> {
+  await initPromise
   const original = mockWebhookEvents.find((e) => e.id === eventId)
   if (!original) {
     throw new ApiError({
@@ -309,25 +351,28 @@ export function replayMockEvent(eventId: string): WebhookEventLog {
   }
 
   mockWebhookEvents.unshift(replay)
+  schedulePersist()
   return replay
 }
 
 /**
  * Reset all mock data to its initial state.
  */
-export function resetMockData() {
+export async function resetMockData() {
+  await initPromise
   community = { ...DEFAULT_COMMUNITY }
   resources = [...DEFAULT_RESOURCES]
   policies = [...DEFAULT_POLICIES]
   mockWebhookEvents = [...DEFAULT_WEBHOOK_EVENTS]
   memberStore = { ...DEFAULT_MEMBER_STORE }
+  await clearPersistedState()
 }
 
 /**
  * Apply a predefined scenario preset for testing.
  */
-export function applyMockScenario(scenario: MockScenario, address: string = '0x1234567890123456789012345678901234567890') {
-  resetMockData()
+export async function applyMockScenario(scenario: MockScenario, address: string = '0x1234567890123456789012345678901234567890') {
+  await resetMockData()
   
   switch (scenario) {
     case 'active-member':
@@ -443,6 +488,7 @@ export class MockAccessApi implements AccessApi {
   // ── Read-only ──────────────────────────────────────────────────────────────
 
   async getSession(): Promise<Session> {
+    await initPromise
     const MOCK_SESSION_STATE = process.env.NEXT_PUBLIC_MOCK_SESSION_STATE || 'valid'
     if (MOCK_SESSION_STATE === 'cleared') {
       return {
@@ -463,20 +509,24 @@ export class MockAccessApi implements AccessApi {
   }
 
   async getCommunity(): Promise<Community> {
+    await initPromise
     return community
   }
 
   async getMembership(address: string): Promise<Membership | null> {
+    await initPromise
     const data = ensureAddress(address)
     return data?.membership ?? null
   }
 
   async getProfile(address: string): Promise<MemberProfile | null> {
+    await initPromise
     const data = ensureAddress(address)
     return data?.profile ?? null
   }
 
   async listMembers(params?: { cursor?: string; limit?: number; filter?: string }): Promise<MemberRow[] | PaginatedMembers> {
+    await initPromise
     let list = Object.values(memberStore).map((m) => ({
       address: m.membership.address,
       roles: m.roles,
@@ -506,19 +556,23 @@ export class MockAccessApi implements AccessApi {
   }
 
   async listResources(): Promise<Resource[]> {
+    await initPromise
     return resources.map((r) => ({ ...r, roles: r.roles ?? [] }))
   }
 
   async listPolicies(): Promise<AccessPolicy[]> {
+    await initPromise
     return policies.map((p) => ({ ...p, roles: p.roles ?? [] }))
   }
 
   async getResource(id: string): Promise<Resource | null> {
+    await initPromise
     const r = resources.find((x) => x.id === id)
     return r ? { ...r, roles: r.roles ?? [] } : null
   }
 
   async getPolicy(resourceId: string): Promise<AccessPolicy | null> {
+    await initPromise
     const p = policies.find((x) => x.resourceId === resourceId)
     return p ? { ...p, roles: p.roles ?? [] } : null
   }
@@ -526,6 +580,7 @@ export class MockAccessApi implements AccessApi {
   // ── Admin queries & mutations ──────────────────────────────────────────────
 
   async listWebhookEvents(): Promise<WebhookEventLog[]> {
+    await initPromise
     return new Promise((resolve) => setTimeout(() => resolve(mockWebhookEvents), 300))
   }
 
@@ -538,6 +593,7 @@ export class MockAccessApi implements AccessApi {
    * NOT part of the AccessApi interface and must never be called in live mode.
    */
   async replayEvent(eventId: string): Promise<WebhookEventLog> {
+    await initPromise
     const original = mockWebhookEvents.find((e) => e.id === eventId)
     if (!original) {
       throw new ApiError({
@@ -558,10 +614,12 @@ export class MockAccessApi implements AccessApi {
 
     // Insert at the beginning so it appears at the top of the feed
     mockWebhookEvents.unshift(replay)
+    schedulePersist()
     return replay
   }
 
   async getAnalyticsSummary(): Promise<AnalyticsSummary> {
+    await initPromise
     // Simulate a short network delay so the loading state is exercisable
     return new Promise((resolve) =>
       setTimeout(() => resolve({ ...MOCK_ANALYTICS_SUMMARY }), 300),
@@ -569,20 +627,25 @@ export class MockAccessApi implements AccessApi {
   }
 
   async assignRole(address: string, role: Role): Promise<void> {
+    await initPromise
     if (MOCK_SESSION_STATE === 'expired') throwMockUnauthorized()
     const data = ensureAddress(address)
     if (!data) return
     if (!data.roles.includes(role)) data.roles.push(role)
+    schedulePersist()
   }
 
   async removeRole(address: string, role: Role): Promise<void> {
+    await initPromise
     if (MOCK_SESSION_STATE === 'expired') throwMockUnauthorized()
     const data = memberStore[address]
     if (!data) return
     data.roles = data.roles.filter((r) => r !== role)
+    schedulePersist()
   }
 
   async updatePolicy(policy: AccessPolicy): Promise<void> {
+    await initPromise
     if (MOCK_SESSION_STATE === 'expired') throwMockUnauthorized()
     const result = validatePolicy(policy)
 
@@ -593,6 +656,7 @@ export class MockAccessApi implements AccessApi {
     const idx = policies.findIndex((p) => p.resourceId === result.value.resourceId)
     if (idx >= 0) policies[idx] = result.value
     else policies.push(result.value)
+    schedulePersist()
   }
 
   // ── SIWE mock endpoints ────────────────────────────────────────────────────
@@ -602,6 +666,7 @@ export class MockAccessApi implements AccessApi {
    * stored server-side to prevent replay attacks.
    */
   async getNonce(_address: string): Promise<string> {
+    await initPromise
     return randomHex()
   }
 
@@ -616,6 +681,7 @@ export class MockAccessApi implements AccessApi {
    * - unauthenticated:  Throws a 401 ApiError to simulate backend rejection.
    */
   async siweVerify(_message: string, _signature: string): Promise<SiweAuthSession> {
+    await initPromise
     if (MOCK_SESSION_STATE === 'unauthenticated') {
       throwMockUnauthorized()
     }
@@ -653,6 +719,7 @@ export class MockAccessApi implements AccessApi {
    * fail (simulates a fully-expired or revoked refresh token).
    */
   async siweRefresh(refreshToken: string): Promise<SiweAuthSession> {
+    await initPromise
     if (MOCK_SESSION_STATE === 'expired' || MOCK_SESSION_STATE === 'unauthenticated') {
       throw new ApiError({
         status: 401,
@@ -685,10 +752,12 @@ export class MockAccessApi implements AccessApi {
 
   /** No-op logout — the sessionStorage entry is cleared by the provider. */
   async siweLogout(_token: string): Promise<void> {
+    await initPromise
     // No server-side session to invalidate in mock mode
   }
 
   async verifyWallet(address: string): Promise<WalletVerification> {
+    await initPromise
     return {
       verified: true,
       method: 'mock',

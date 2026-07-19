@@ -3,8 +3,7 @@
 import { useAccount } from 'wagmi'
 import { useQueryClient } from '@tanstack/react-query'
 import { config } from '@/lib/config'
-import { resetMockData, applyMockScenario, getApi } from '@/lib/api'
-import { queryKeys } from '@/lib/query'
+import { resetMockData, applyMockScenario } from '@/lib/api'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -52,17 +51,13 @@ export default function DeveloperPage() {
   }
 
   const handleReset = async () => {
-    resetMockData()
-    await queryClient.invalidateQueries({ queryKey: queryKeys.session.all })
-    await queryClient.invalidateQueries({ queryKey: queryKeys.profile.all })
-    await queryClient.invalidateQueries({ queryKey: queryKeys.walletVerification.all })
+    await resetMockData()
+    await queryClient.invalidateQueries()
   }
 
   const handleApplyScenario = async (scenario: Scenario) => {
-    applyMockScenario(scenario, customAddress)
-    await queryClient.invalidateQueries({ queryKey: queryKeys.session.all })
-    await queryClient.invalidateQueries({ queryKey: queryKeys.profile.all })
-    await queryClient.invalidateQueries({ queryKey: queryKeys.walletVerification.all })
+    await applyMockScenario(scenario, customAddress)
+    await queryClient.invalidateQueries()
   }
 
   return (
