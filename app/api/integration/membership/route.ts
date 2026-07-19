@@ -6,11 +6,15 @@ import {
   GatewayMethodError,
 } from '@/lib/integration-client'
 import { rateLimitRequest } from '@/lib/rate-limit'
+import { validateIntegrationGatewayCsrf } from '@/lib/csrf'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 export async function GET(req: NextRequest) {
+  const csrfError = validateIntegrationGatewayCsrf(req)
+  if (csrfError) return csrfError
+
   const address = req.nextUrl.searchParams.get('address')
 
   // Enforce per-IP / per-wallet rate limit before any downstream call.

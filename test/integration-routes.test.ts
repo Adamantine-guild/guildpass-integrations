@@ -1,4 +1,4 @@
-import { describe, it, mock } from 'node:test'
+import { describe, it, mock, beforeEach, after } from 'node:test'
 import * as assert from 'node:assert/strict'
 
 // ---------------------------------------------------------------------------
@@ -199,5 +199,88 @@ describe('GET /api/integration/verify', () => {
 
     assert.equal(res.status, 502)
     assert.deepEqual(res.body, { error: 'Unable to verify wallet' })
+  })
+})
+// ===========================================================================
+// Tests: CSRF protection for /api/integration/* mutation handlers
+// ===========================================================================
+
+function loadCsrf(): typeof import('../lib/csrf') {
+  delete require.cache[require.resolve('../lib/config')]
+  delete require.cache[require.resolve('../lib/csrf')]
+  return require('../lib/csrf')
+}
+
+function mockCsrfRequest(
+  method: string,
+  headers: Record<string, string>,
+  url = 'https://admin.guildpass.test/api/integration/membership',
+) {
+  return {
+    method,
+    url,
+    headers: {
+      get(name: string) {
+        return headers[name.toLowerCase()] ?? null
+      },
+    },
+  }
+}
+
+describe('integration gateway CSRF protection', () => {
+  const originalEnv = process.env
+
+  beforeEach(() => {
+    process.env = {
+      ...originalEnv,
+      NEXT_PUBLIC_MOCK_MODE: 'true',
+      NEXT_PUBLIC_SIWE_DOMAIN: 'admin.guildpass.test',
+    }
+    delete process.env.INTEGRATION_ALLOWED_ORIGIN
+  })
+
+  after(() => {
+    process.env = originalEnv
+  })
+
+  it('rejects cross-origin mutation requests with 403', async () => {
+    const { validateIntegrationGatewayCsrf } = loadCsrf()
+    const req = mockCsrfRequest('POST', { origin: 'https://evil.example' })
+
+    const res = validateIntegrationGatewayCsrf(req as any)
+
+    assert.ok(res)
+    assert.equal(res.status, 403)
+    assert.deepEqual(await res.json(), {
+      error: 'Cross-origin requests are not allowed for integration gateway mutations.',
+    })
+  })
+
+  it('allows same-origin mutation requests', () => {
+    const { validateIntegrationGatewayCsrf } = loadCsrf()
+    const req = mockCsrfRequest('PUT', { origin: 'https://admin.guildpass.test' })
+
+    const res = validateIntegrationGatewayCsrf(req as any)
+
+    assert.equal(res, null)
+  })
+
+  it('uses the configurable allowed origin when provided', () => {
+    process.env.INTEGRATION_ALLOWED_ORIGIN = 'https://gateway.guildpass.test'
+    const { validateIntegrationGatewayCsrf } = loadCsrf()
+    const req = mockCsrfRequest('POST', { origin: 'https://gateway.guildpass.test' })
+
+    const res = validateIntegrationGatewayCsrf(req as any)
+
+    assert.equal(res, null)
+  })
+
+  it('does not block safe read-only gateway requests', () => {
+    const { validateIntegrationGatewayCsrf } = loadCsrf()
+    const req = mockCsrfRequest('GET', { origin: 'https://evil.example' })
+
+    const res = validateIntegrationGatewayCsrf(req as any)
+
+    assert.equal(res, null)
   })
 })
