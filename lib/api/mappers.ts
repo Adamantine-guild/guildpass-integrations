@@ -11,6 +11,7 @@ import type {
   BackendSession,
   WalletVerification,
 } from './types'
+import { deriveRoleCapabilities } from './capabilities'
 import { isApiError } from './errors'
 
 export interface VerificationDisplay {
@@ -69,6 +70,7 @@ export function mapMemberRow(raw: any): MemberRow {
   return {
     address: raw.address ?? raw.wallet_address ?? '',
     roles: raw.roles ?? [],
+    capabilities: raw.capabilities ?? deriveRoleCapabilities(raw.roles ?? []),
     tier: raw.tier ?? raw.membership_tier ?? 'free',
     active: raw.active ?? raw.is_active ?? false,
   }
@@ -109,6 +111,7 @@ export function mapSession(raw: any): Session {
   return {
     address: raw.address ?? raw.wallet_address ?? '',
     roles: raw.roles ?? [],
+    capabilities: raw.capabilities ?? deriveRoleCapabilities(raw.roles ?? []),
     membership: raw.membership
       ? mapMembership(raw.membership as BackendMember)
       : undefined,

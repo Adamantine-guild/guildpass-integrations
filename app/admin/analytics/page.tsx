@@ -312,7 +312,7 @@ function AnalyticsContent() {
 export default function AnalyticsPage() {
   return (
     <FeatureGate enabled={features.analytics} name="Analytics">
-      <AdminGuard>
+      <AdminGuard requiredCapability="view_events">
         <AnalyticsContent />
       </AdminGuard>
     </FeatureGate>

@@ -11,6 +11,7 @@ import { useSiweAuth } from "@/lib/wallet/providers";
 import { queryKeys } from "@/lib/query";
 import { features } from "@/lib/features";
 import { config } from "@/lib/config";
+import { capabilitiesForSession } from "@/lib/api/capabilities";
 
 export function Nav() {
   const pathname = usePathname();
@@ -25,7 +26,8 @@ export function Nav() {
     retry: 1,
   });
 
-  const isAdmin = !!session?.roles?.includes("admin");
+  const capabilities = capabilitiesForSession(session);
+  const isAdmin = capabilities.length > 0;
   const items = [
     { href: "/dashboard" as Route, label: "Dashboard", enabled: true },
     { href: "/admin" as Route, label: "Admin", enabled: isAdmin },

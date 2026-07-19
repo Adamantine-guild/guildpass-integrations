@@ -1,11 +1,32 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { useAccount } from 'wagmi';
+import { getApi } from '@/lib/api';
+import type { RoleCapability } from '@/lib/api/types';
+import { hasCapability } from '@/lib/api/capabilities';
+import { queryKeys } from '@/lib/query';
 import { useSiweAuth } from '@/lib/wallet/providers';
 
-export function AdminGuard({ children }: { children: React.ReactNode }) {
+interface AdminGuardProps {
+  children: React.ReactNode
+  /** Capability required to render this protected admin route or section. */
+  requiredCapability: RoleCapability
+}
+
+export function AdminGuard({ children, requiredCapability }: AdminGuardProps) {
+  const { address } = useAccount();
   const { sessionStatus, authSession, signIn, isSigningIn } = useSiweAuth();
   const [timeLeft, setTimeLeft] = useState<number | null>(null);
+
+  const { data: session, isLoading } = useQuery({
+    queryKey: queryKeys.session.byAddress(address ?? ''),
+    queryFn: () => getApi(address, authSession?.token).getSession(),
+    staleTime: 10_000,
+    enabled: sessionStatus === 'authenticated' && !!address,
+    retry: 1,
+  });
 
   useEffect(() => {
     if (!authSession) {
@@ -48,6 +69,26 @@ export function AdminGuard({ children }: { children: React.ReactNode }) {
         >
           {isSigningIn ? 'Signing…' : 'Sign In With Ethereum'}
         </button>
+      </div>
+    );
+  }
+
+  if (isLoading) {
+    return (
+      <div className="flex flex-col items-center justify-center p-12 text-center bg-white dark:bg-zinc-950 rounded-lg border border-zinc-200 dark:border-zinc-800">
+        <h2 className="text-xl font-bold mb-2">Checking Permissions</h2>
+        <p className="text-zinc-500 mb-4">Loading your administrative capabilities…</p>
+      </div>
+    );
+  }
+
+  if (!hasCapability(session, requiredCapability)) {
+    return (
+      <div className="flex flex-col items-center justify-center p-12 text-center bg-white dark:bg-zinc-950 rounded-lg border border-zinc-200 dark:border-zinc-800">
+        <h2 className="text-xl font-bold mb-2">Permission Required</h2>
+        <p className="text-zinc-500 mb-4">
+          This section requires the <code className="font-mono">{requiredCapability}</code> capability.
+        </p>
       </div>
     );
   }
