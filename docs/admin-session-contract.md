@@ -44,6 +44,24 @@ The status is exposed via `useSiweAuth().sessionStatus` and is derived from loca
 
 ---
 
+## XSS mitigation (interim)
+
+The session token is stored in `sessionStorage` and is therefore readable by
+any JavaScript running on the page — this is a known XSS exfiltration vector.
+Until the httpOnly cookie migration (see [`http-only-cookie-migration.md`](./http-only-cookie-migration.md))
+is complete, these defenses reduce risk:
+
+| Mitigation | Detail |
+|------------|--------|
+| **CSP headers** | `next.config.mjs` sets a strict `Content-Security-Policy` that constrains `connect-src` to configured origins, blocks `eval()`, and disallows frames and plugins. |
+| **Short access token TTL** | The access token expires after ~1 hour, limiting the window in which a stolen token is usable. |
+| **Refresh token rotation** | Each refresh invalidates the previous refresh token, so a leaked refresh token is worthless after the first legitimate use. |
+| **`lib/session.ts` isolation** | All `sessionStorage` access is confined to `lib/session.ts`; no component reads the storage directly. This enables a future swap to httpOnly cookies without touching call sites. |
+
+See also: `docs/http-only-cookie-migration.md` for the full migration plan.
+
+---
+
 ## Required Backend Endpoints (live mode only)
 
 | Method | Path | Request body | Success response |

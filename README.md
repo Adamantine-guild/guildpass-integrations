@@ -60,6 +60,7 @@ In mock mode, visit `/developer` (or click "Dev" in the nav) to access:
   - Admin Session Expired: Admin user to test expired SIWE sessions
   - No Roles: Member with no roles assigned
   - Partial Capability Admin: Moderator-style admin who can assign roles and view events but cannot edit policies/settings
+  - Multiple Communities: Member active across several communities
 
 ### Run against live guildpass-core
 

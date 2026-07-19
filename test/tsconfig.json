@@ -26,6 +26,8 @@
     "../lib/features.ts",
     "../components/feature-gate.tsx",
     "../components/wallet/address-text.tsx",
+    "../components/admin-guard.tsx",
+    "../lib/wallet/siwe-context.ts",
     "../lib/query/*.ts",
     "../types/**/*.d.ts",
     "./*.test.ts",

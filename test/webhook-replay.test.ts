@@ -9,8 +9,8 @@ import type { WebhookEventLog } from '../lib/api/types'
 describe('Webhook Event Replay / Debug Tool', () => {
   const TEST_ADDRESS = '0x1234567890123456789012345678901234567890'
 
-  beforeEach(() => {
-    resetMockData()
+  beforeEach(async () => {
+    await resetMockData()
   })
 
   // ── replayMockEvent ────────────────────────────────────────────────────────
@@ -30,7 +30,7 @@ describe('Webhook Event Replay / Debug Tool', () => {
       const original = events.find((e) => e.id === 'wh_01J1')
       assert.ok(original, 'Expected wh_01J1 to exist in default events')
 
-      const replay = replayMockEvent('wh_01J1')
+      const replay = await replayMockEvent('wh_01J1')
 
       // The replay must be clearly marked
       assert.strictEqual(replay.isReplay, true, 'Replayed event must have isReplay=true')
@@ -41,15 +41,15 @@ describe('Webhook Event Replay / Debug Tool', () => {
       assert.ok(replay.fullPayload, 'Replay should have fullPayload')
     })
 
-    it('should preserve the original event fullPayload when present', () => {
-      const replay = replayMockEvent('wh_01J1')
+    it('should preserve the original event fullPayload when present', async () => {
+      const replay = await replayMockEvent('wh_01J1')
       assert.ok(replay.fullPayload, 'fullPayload should be present')
       assert.strictEqual(replay.fullPayload!.event, 'membership.created')
       assert.ok(typeof replay.fullPayload!.data === 'object')
     })
 
     it('should insert the replayed event at the top of the feed', async () => {
-      replayMockEvent('wh_01J1')
+      await replayMockEvent('wh_01J1')
       const api = getApi(TEST_ADDRESS)
       const events = await api.listWebhookEvents()
 
@@ -58,8 +58,8 @@ describe('Webhook Event Replay / Debug Tool', () => {
       assert.strictEqual(events.length, 4, 'There should be 4 events (3 original + 1 replay)')
     })
 
-    it('should throw ApiError for unknown event IDs', () => {
-      assert.throws(
+    it('should throw ApiError for unknown event IDs', async () => {
+      await assert.rejects(
         () => replayMockEvent('non-existent-id'),
         { code: 'not_found' },
       )
@@ -70,7 +70,7 @@ describe('Webhook Event Replay / Debug Tool', () => {
       const before = await api.listWebhookEvents()
       const originalBefore = before.find((e) => e.id === 'wh_01J1')
 
-      replayMockEvent('wh_01J1')
+      await replayMockEvent('wh_01J1')
 
       const after = await api.listWebhookEvents()
       const originalAfter = after.find((e) => e.id === 'wh_01J1')
@@ -78,10 +78,10 @@ describe('Webhook Event Replay / Debug Tool', () => {
       assert.deepStrictEqual(originalBefore, originalAfter, 'Original event must not be mutated')
     })
 
-    it('should allow multiple replays of the same event', () => {
-      replayMockEvent('wh_01J1')
-      replayMockEvent('wh_01J1')
-      replayMockEvent('wh_01J1')
+    it('should allow multiple replays of the same event', async () => {
+      await replayMockEvent('wh_01J1')
+      await replayMockEvent('wh_01J1')
+      await replayMockEvent('wh_01J1')
 
       const api = getApi(TEST_ADDRESS)
       // Check the count via the mock store
@@ -153,8 +153,8 @@ describe('Webhook Event Replay / Debug Tool', () => {
 
   describe('Data integrity', () => {
     it('should reset replay data when resetMockData is called', async () => {
-      replayMockEvent('wh_01J1')
-      resetMockData()
+      await replayMockEvent('wh_01J1')
+      await resetMockData()
 
       const api = getApi(TEST_ADDRESS)
       const events = await api.listWebhookEvents()

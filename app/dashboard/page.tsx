@@ -9,6 +9,7 @@ import {
   type Session,
   type WalletVerification,
 } from "@/lib/api";
+import { mapVerificationState } from "@/lib/api/mappers";
 import { queryKeys } from "@/lib/query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -21,8 +22,31 @@ import {
   DeniedState,
   safeErrorMessage,
 } from "@/components/ui/api-states";
+import { SyncStatusBanner } from "@/components/ui/sync-status-banner";
 import { AddressText } from "@/components/wallet/address-text";
 import { features } from "@/lib/features";
+
+/**
+ * staleTime for dashboard queries.
+ *
+ * Using a non-zero staleTime serves two purposes:
+ *   1. React Query won't re-fetch on every re-mount, reducing redundant requests.
+ *   2. When the browser is offline, React Query will return cached data rather
+ *      than immediately erroring, because the data is not yet considered stale.
+ *      The service worker handles the actual HTTP-layer cache; this aligns the
+ *      in-memory RQ cache TTL with that behaviour.
+ *
+ * 5 minutes matches a reasonable "last known good" window for membership data.
+ */
+const DASHBOARD_STALE_TIME = 5 * 60 * 1000
+
+/**
+ * gcTime for dashboard queries.
+ *
+ * Keep query data in memory for 30 minutes after the last observer unmounts
+ * so navigating back to the dashboard within a session shows data immediately.
+ */
+const DASHBOARD_GC_TIME = 30 * 60 * 1000
 
 function Section({
   title,
@@ -82,6 +106,8 @@ export default function DashboardPage() {
     queryFn: () => getApi(address).getSession(),
     enabled: !!address,
     retry: 1,
+    staleTime: DASHBOARD_STALE_TIME,
+    gcTime: DASHBOARD_GC_TIME,
   });
 
   const {
@@ -95,6 +121,8 @@ export default function DashboardPage() {
     queryFn: () => getApi(address).verifyWallet(address as string),
     enabled: !!address,
     retry: 1,
+    staleTime: DASHBOARD_STALE_TIME,
+    gcTime: DASHBOARD_GC_TIME,
   });
 
   const {
@@ -108,6 +136,8 @@ export default function DashboardPage() {
     queryFn: () => getApi(address).getProfile(address as string),
     enabled: !!address,
     retry: 1,
+    staleTime: DASHBOARD_STALE_TIME,
+    gcTime: DASHBOARD_GC_TIME,
   });
 
   const {
@@ -120,6 +150,8 @@ export default function DashboardPage() {
     queryKey: queryKeys.resources.all,
     queryFn: () => getApi(address).listResources(),
     enabled: !!address && features.resources,
+    staleTime: DASHBOARD_STALE_TIME,
+    gcTime: DASHBOARD_GC_TIME,
     retry: 1,
   });
 
@@ -141,6 +173,8 @@ export default function DashboardPage() {
 
   return (
     <div className="grid gap-6">
+      {/* Offline / sync-status indicator — renders only when offline or syncing */}
+      <SyncStatusBanner />
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold">Member Dashboard</h1>

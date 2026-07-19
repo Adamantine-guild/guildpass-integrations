@@ -159,7 +159,7 @@ function WebhookLogsContent() {
   const handleReplay = useCallback(async (eventId: string) => {
     setReplayingId(eventId);
     try {
-      replayMockEvent(eventId);
+      await replayMockEvent(eventId);
       // Invalidate the query so the feed refreshes and shows the replayed entry
       await queryClient.invalidateQueries({
         queryKey: [...queryKeys.webhookEvents.all, address, authSession?.token ?? 'anonymous'],
