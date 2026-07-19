@@ -25,7 +25,16 @@ export function AdminGuard({ children }: { children: React.ReactNode }) {
 
   if (sessionStatus === 'disconnected') {
     return (
-      <div className="flex flex-col items-center justify-center p-12 text-center bg-white dark:bg-zinc-950 rounded-lg border border-zinc-200 dark:border-zinc-800">
+      <div
+        role="status"
+        aria-live="polite"
+        aria-label="Access blocked: wallet disconnected"
+        className="flex flex-col items-center justify-center p-12 text-center bg-white dark:bg-zinc-950 rounded-lg border border-zinc-200 dark:border-zinc-800"
+      >
+        <span style={srOnly}>
+          This administrative section is locked because no wallet is connected.
+          Connect your administrative wallet to continue.
+        </span>
         <h2 className="text-xl font-bold mb-2">Wallet Disconnected</h2>
         <p className="text-zinc-500 mb-4">Please connect your administrative wallet to access this section.</p>
       </div>
@@ -34,7 +43,16 @@ export function AdminGuard({ children }: { children: React.ReactNode }) {
 
   if (sessionStatus !== 'authenticated') {
     return (
-      <div className="flex flex-col items-center justify-center p-12 text-center bg-white dark:bg-zinc-950 rounded-lg border border-zinc-200 dark:border-zinc-800">
+      <div
+        role="status"
+        aria-live="polite"
+        aria-label="Access blocked: sign-in required"
+        className="flex flex-col items-center justify-center p-12 text-center bg-white dark:bg-zinc-950 rounded-lg border border-zinc-200 dark:border-zinc-800"
+      >
+        <span style={srOnly}>
+          Your wallet is connected but not signed in. Sign in with Ethereum to
+          unlock this administrative section.
+        </span>
         <h2 className="text-xl font-bold mb-2">SIWE Authentication Required</h2>
         <p className="text-zinc-500 mb-4">
           {sessionStatus === 'expired'
@@ -59,7 +77,7 @@ export function AdminGuard({ children }: { children: React.ReactNode }) {
       {isExpiring && (
         <div className="flex items-center justify-between p-4 bg-amber-50 border border-amber-200 dark:bg-amber-950/30 dark:border-amber-900/50 rounded-lg text-amber-900 dark:text-amber-200">
           <div className="flex items-center gap-2 text-sm">
-            <span>⚠️</span>
+            <span aria-hidden="true">⚠️</span>
             <span>Your security session will expire in <strong>{timeLeft}s</strong>. Action requests made after expiration will fail.</span>
           </div>
           <button

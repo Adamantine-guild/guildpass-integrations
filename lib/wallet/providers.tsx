@@ -48,7 +48,6 @@
 import {
   createContext,
   useCallback,
-  useContext,
   useEffect,
   useMemo,
   useReducer,
@@ -69,6 +68,7 @@ import { config } from '@/lib/config'
 import { SiweAuthSession, AdminSessionStatus } from '@/lib/api/types'
 import {
   clearAuthSession,
+  getStoredToken,
   isRefreshTokenExpired,
   loadAuthSession,
   loadAuthSessionIncludingExpired,
@@ -97,6 +97,10 @@ type AuthBroadcastMessage =
 const AUTH_CHANNEL_NAME = 'guildpass:auth'
 
 // ── SIWE Auth Context ─────────────────────────────────────────────────────────
+//
+// The context, its type, and the useSiweAuth hook live in
+// '@/lib/wallet/siwe-context' so they can be imported without pulling in the
+// wagmi/wallet stack. This provider supplies the value.
 
 export interface SiweAuthContextValue {
   /** The authenticated session, or null if the user has not signed in. */
@@ -372,7 +376,7 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
 
   const logout = useCallback(async () => {
     cancelRenewal()
-    const token = state.authSession?.token
+    const token = getStoredToken()
     clearAuthSession()
     dispatch({ type: 'clear' })
     broadcast({ type: 'signed-out' })
@@ -382,7 +386,7 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
         // best-effort server-side invalidation
       })
     }
-  }, [address, state.authSession, cancelRenewal, broadcast, disconnect])
+  }, [address, cancelRenewal, broadcast, disconnect])
 
   // ── markExpired ─────────────────────────────────────────────────────────────
 

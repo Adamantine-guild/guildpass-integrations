@@ -176,7 +176,7 @@ function normalizeResponseKeys(data: any): any {
     const res: any = {}
     for (const [key, val] of Object.entries(data)) {
       const normalizedVal = normalizeResponseKeys(val)
-      
+
       let targetKey = key
       if (key === 'wallet_address') targetKey = 'address'
       else if (key === 'membership_tier') targetKey = 'tier'
@@ -190,13 +190,13 @@ function normalizeResponseKeys(data: any): any {
       else if (key === 'affected_identifier') targetKey = 'affectedIdentifier'
       else if (key === 'payload_summary') targetKey = 'payloadSummary'
       else if (key === 'tx_hash') targetKey = 'txHash'
-      
+
       res[targetKey] = normalizedVal
       if (targetKey !== key) {
         res[key] = normalizedVal
       }
     }
-    
+
     // Mappers fallbacks
     if (res.name !== undefined && res.title === undefined) {
       res.title = res.name
@@ -212,7 +212,7 @@ function normalizeResponseKeys(data: any): any {
     if (res.token !== undefined && res.isAuthenticated === undefined) {
       res.isAuthenticated = true
     }
-    
+
     return res
   }
   return data
@@ -226,7 +226,7 @@ function validateResponse(raw: any, schema: z.ZodType<any>, path?: string): void
       .map((issue) => `${issue.path.join('.')}: ${issue.message}`)
       .join(', ')
     const errorMsg = `API contract mismatch at ${path || 'unknown'}: ${issues}`
-    
+
     if (config.apiValidationLogOnly) {
       console.error(errorMsg)
     } else {
@@ -240,22 +240,72 @@ function validateResponse(raw: any, schema: z.ZodType<any>, path?: string): void
   }
 }
 
-async function getJson<T>(path: string, init?: RequestInit, schema?: z.ZodType<any>): Promise<T> {
+// ── Shared HTTP request helper ────────────────────────────────────────────────
+
+/**
+ * Options accepted by {@link request}, extending the standard {@link RequestInit}
+ * with knobs that let a single code path serve both the core API and the
+ * integration gateway without changing observable behavior.
+ */
+interface RequestOptions extends RequestInit {
+  /**
+   * Schema used to validate the parsed JSON response. When omitted, the raw
+   * parsed body is returned without contract validation.
+   */
+  schema?: z.ZodType<any>
+  /**
+   * When `false`, the path is treated as absolute and is NOT prefixed with the
+   * configured core API base URL. Integration-gateway calls hit absolute paths
+   * (e.g. `/api/integration/...`) and must set this to `false`.
+   * Defaults to `true`.
+   */
+  prefixBase?: boolean
+  /**
+   * The `safeMessage` surfaced when the underlying `fetch` throws (network
+   * failure / DNS / offline). Lets the integration gateway present its own
+   * connection-error copy while the core API keeps its own. Defaults to the
+   * core API's connection message.
+   */
+  networkErrorMessage?: string
+}
+
+/**
+ * The single internal HTTP entry point for this module.
+ *
+ * Centralizes base-URL joining, default `Content-Type`, JSON parsing, HTTP
+ * error mapping, empty-body handling, and optional schema validation so no
+ * individual endpoint function has to repeat that logic. Behavior is identical
+ * to the previous `getJson` / `getIntegrationJson` pair; those are now thin
+ * wrappers over this helper.
+ */
+async function request<T>(
+  path: string,
+  options: RequestOptions = {},
+): Promise<T> {
+  const {
+    schema,
+    prefixBase = true,
+    networkErrorMessage = 'Unable to connect. Please check your connection and try again.',
+    headers,
+    ...init
+  } = options
+
+  const url = prefixBase ? `${BASE}${path}` : path
+
   let res: Response
 
   try {
-    res = await fetch(`${BASE}${path}`, {
+    res = await fetch(url, {
       ...init,
       headers: {
         'Content-Type': 'application/json',
-        ...(init?.headers ?? {}),
+        ...(headers ?? {}),
       },
     })
   } catch (cause) {
     throw new ApiError({
       code: 'network_error',
-      safeMessage:
-        'Unable to connect. Please check your connection and try again.',
+      safeMessage: networkErrorMessage,
       retryable: true,
       cause,
     })
@@ -281,43 +331,17 @@ async function getJson<T>(path: string, init?: RequestInit, schema?: z.ZodType<a
   return raw as T
 }
 
+async function getJson<T>(path: string, init?: RequestInit, schema?: z.ZodType<any>): Promise<T> {
+  return request<T>(path, { ...init, schema })
+}
+
 async function getIntegrationJson<T>(path: string, schema?: z.ZodType<any>): Promise<T> {
-  let res: Response
-
-  try {
-    res = await fetch(path, {
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    })
-  } catch (cause) {
-    throw new ApiError({
-      code: 'network_error',
-      safeMessage:
-        'Unable to connect to the integration gateway. Please check your configuration and try again.',
-      retryable: true,
-      cause,
-    })
-  }
-
-  if (!res.ok) {
-    throw createApiError(res.status, await parseErrorBody(res))
-  }
-
-  if (res.status === 204 || res.status === 205) {
-    return {} as T
-  }
-
-  const text = await res.text()
-  if (!text.trim()) {
-    return {} as T
-  }
-
-  const raw = parseJsonResponse<any>(text, path)
-  if (schema) {
-    validateResponse(raw, schema, path)
-  }
-  return raw as T
+  return request<T>(path, {
+    schema,
+    prefixBase: false,
+    networkErrorMessage:
+      'Unable to connect to the integration gateway. Please check your configuration and try again.',
+  })
 }
 
 function parseJsonResponse<T>(text: string, path?: string): T {
@@ -555,7 +579,7 @@ export class LiveAccessApi implements AccessApi {
       }),
     })
   }
-  
+
   async getNonce(address: string): Promise<string> {
     const data = await getJson<{ nonce: string }>('/v1/auth/siwe/nonce', {
       method: 'POST',
