@@ -1,10 +1,8 @@
 'use client';
 
 import {
-  createContext,
   PropsWithChildren,
   useCallback,
-  useContext,
   useEffect,
   useState,
 } from 'react'
@@ -17,47 +15,28 @@ import { SiweAuthSession, AdminSessionStatus } from '@/lib/api/types'
 import { clearAuthSession, loadAuthSession, storeAuthSession } from '@/lib/session'
 import { isApiError } from '@/lib/api/errors'
 import { accessKeys, queryKeys } from '@/lib/query'
+import { SiweAuthContext, useSiweAuth, type SiweAuthContextType } from '@/lib/wallet/siwe-context'
 
 // ── Wagmi config ─────────────────────────────────────────────────────────────
 
 const wagmiConfig = createConfig(walletConfig)
 
 // ── SIWE Auth Context ─────────────────────────────────────────────────────────
+//
+// The context, its type, and the useSiweAuth hook live in
+// '@/lib/wallet/siwe-context' so they can be imported without pulling in the
+// wagmi/wallet stack. This provider supplies the value.
 
-export interface SiweAuthContextValue {
-  /** The authenticated session, or null if the user has not signed in. */
-  authSession: SiweAuthSession | null
-  isAuthenticated: boolean
-  /** Granular status of the admin session. */
-  sessionStatus: AdminSessionStatus
-  /** True while a signature request is in-flight. */
-  isSigningIn: boolean
-  /** Human-readable error from the most recent signIn attempt, if any. */
-  error: string | null
-  /** Trigger the EIP-4361 sign-in flow for the currently connected address. */
-  signIn: () => Promise<void>
-  /** Clear the session and disconnect the wallet. */
-  logout: () => Promise<void>
-  /** Mark the current session as expired (e.g. after a 401 from the backend). */
-  markExpired: () => void
-}
+// Re-export for existing consumers that import useSiweAuth from this module.
+export { useSiweAuth } from '@/lib/wallet/siwe-context'
 
-interface SiweAuthContextType {
-  session: SiweSession | null;
-  status: 'disconnected' | 'unauthenticated' | 'authenticated' | 'expiring';
-  timeLeft: number;
-  login: () => Promise<void>;
-  logout: () => void;
-}
-
-const SiweAuthContext = createContext<SiweAuthContextType | undefined>(undefined);
 const queryClient = new QueryClient();
 
 export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
   const { address, isConnected } = useAccount();
   const { signMessageAsync } = useSignMessage();
   const { disconnect } = useDisconnect();
-  const [session, setSession] = useState<SiweSession | null>(null);
+  const [session, setSession] = useState<SiweAuthSession | null>(null);
   const [timeLeft, setTimeLeft] = useState<number>(0);
 
   const logout = useCallback(() => {
@@ -73,7 +52,7 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
       const stored = sessionStorage.getItem('siwe_session');
       if (stored) {
         try {
-          const parsed = JSON.parse(stored) as SiweSession;
+          const parsed = JSON.parse(stored) as SiweAuthSession;
           if (new Date(parsed.expiresAt).getTime() > Date.now()) {
             setSession(parsed);
           } else {
@@ -130,7 +109,7 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message, signature })
       });
-      
+
       const data = await verifyRes.json();
       if (data.token) {
         setSession(data);
@@ -153,12 +132,6 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
       {children}
     </SiweAuthContext.Provider>
   );
-}
-
-export function useSiweAuth() {
-  const context = useContext(SiweAuthContext);
-  if (!context) throw new Error('useSiweAuth must be used within SiweAuthProvider');
-  return context;
 }
 
 export function RootProviders({ children }: { children: React.ReactNode }) {
