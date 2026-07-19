@@ -27,6 +27,11 @@ export type FeatureFlagKey =
 
 export type FeatureFlags = Record<FeatureFlagKey, boolean>
 
+export interface IntegrationGatewayConfig {
+  /** Expected same-origin value for CSRF checks on /api/integration/* mutations */
+  allowedOrigin?: string
+}
+
 export interface AppConfig {
   /** 'mock' when NEXT_PUBLIC_MOCK_MODE or NEXT_PUBLIC_DEMO_MODE is 'true', otherwise 'live' */
   apiMode: ApiMode
@@ -40,6 +45,8 @@ export interface AppConfig {
   siwe: SiweConfig
   /** Feature flag booleans */
   features: FeatureFlags
+  /** Server route-handler integration gateway security configuration */
+  integrationGateway: IntegrationGatewayConfig
   /** Whether to validate API responses in log-only mode */
   apiValidationLogOnly: boolean
 }
@@ -153,6 +160,10 @@ function flag(varName: string, defaultVal: boolean): boolean {
   return val === 'true'
 }
 
+const integrationGateway: IntegrationGatewayConfig = {
+  allowedOrigin: env('INTEGRATION_ALLOWED_ORIGIN'),
+}
+
 const features: FeatureFlags = {
   adminPolicies: flag('NEXT_PUBLIC_FEATURE_ADMIN_POLICIES', isMock),
   events: flag('NEXT_PUBLIC_FEATURE_EVENTS', isMock),
@@ -166,6 +177,7 @@ export const config: AppConfig = Object.freeze({
   apiUrl,
   siwe: Object.freeze(siwe),
   features: Object.freeze(features),
+  integrationGateway: Object.freeze(integrationGateway),
   get apiValidationLogOnly() {
     return flag('NEXT_PUBLIC_API_VALIDATION_LOG_ONLY', false)
   },
