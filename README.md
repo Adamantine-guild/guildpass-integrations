@@ -59,6 +59,7 @@ In mock mode, visit `/developer` (or click "Dev" in the nav) to access:
   - Denied Resource: Free tier user denied access to Alpha Docs
   - Admin Session Expired: Admin user to test expired SIWE sessions
   - No Roles: Member with no roles assigned
+  - Partial Capability Admin: Moderator-style admin who can assign roles and view events but cannot edit policies/settings
 
 ### Run against live guildpass-core
 
@@ -198,7 +199,7 @@ The diagram covers:
 
 - The `getApi()` mock ↔ live switch and both data paths
 - Where `SiweAuthProvider` and `sessionStorage` fit in the auth flow
-- The three-state `AdminGuard` and the `Gated` access-decision chain
+- The three-state `AdminGuard`, capability-gated admin sections, and the `Gated` access-decision chain
 - The optional server-side integration gateway and when it returns a 503
 
 ### Module reference
@@ -214,13 +215,16 @@ The diagram covers:
 | `lib/session.ts` | `sessionStorage` helpers for SIWE token persistence |
 | `components/ui/*` | Minimal shadcn-style UI primitives |
 | `components/gated.tsx` | Access-gate component |
-| `components/admin-guard.tsx` | 3-layer admin guard (wallet → SIWE → role) with `SiwePrompt` |
+| `components/admin-guard.tsx` | 3-layer admin guard (wallet → SIWE → required capability) with `SiwePrompt` |
 | `components/wallet/connect-button.tsx` | 3-state button (disconnected / connected / authenticated) |
 | `components/nav.tsx` | Navigation bar |
 | `test/fixtures/openapi.json` | OpenAPI schema contract fixture representing core API models |
 | `scripts/sync-api-types.js` | Zero-dependency compiler converting openapi.json to typescript types |
 
 ### Composable access rules
+
+
+Admin routes use typed capabilities instead of a single binary admin-role check. The current capabilities are `assign_roles`, `edit_policies`, `edit_settings`, and `view_events`; `admin` receives all capabilities, while `moderator` receives `assign_roles` and `view_events`. Route-level `AdminGuard` calls pass a `requiredCapability` so a partial-capability admin can render permitted sections while being denied from settings or policy editing.
 
 Access policies support an optional composable rule tree in addition to the legacy single-condition `minTier`/`roles` fields:
 

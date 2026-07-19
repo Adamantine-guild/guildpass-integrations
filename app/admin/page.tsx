@@ -352,7 +352,7 @@ function WebhookLogsContent() {
 
 export default function AdminEventsPage() {
   return (
-    <AdminGuard>
+    <AdminGuard requiredCapability="view_events">
       <WebhookLogsContent />
     </AdminGuard>
   );

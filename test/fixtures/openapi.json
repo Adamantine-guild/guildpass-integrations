@@ -17,7 +17,9 @@
               "application/json": {
                 "schema": {
                   "type": "array",
-                  "items": { "$ref": "#/components/schemas/Resource" }
+                  "items": {
+                    "$ref": "#/components/schemas/Resource"
+                  }
                 }
               }
             }
@@ -34,7 +36,9 @@
             "name": "id",
             "in": "path",
             "required": true,
-            "schema": { "type": "string" }
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -42,7 +46,9 @@
             "description": "The requested resource.",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/Resource" }
+                "schema": {
+                  "$ref": "#/components/schemas/Resource"
+                }
               }
             }
           },
@@ -63,7 +69,9 @@
               "application/json": {
                 "schema": {
                   "type": "array",
-                  "items": { "$ref": "#/components/schemas/AccessPolicy" }
+                  "items": {
+                    "$ref": "#/components/schemas/AccessPolicy"
+                  }
                 }
               }
             }
@@ -80,7 +88,9 @@
             "name": "resourceId",
             "in": "path",
             "required": true,
-            "schema": { "type": "string" }
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -88,7 +98,9 @@
             "description": "The access policy for the resource.",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/AccessPolicy" }
+                "schema": {
+                  "$ref": "#/components/schemas/AccessPolicy"
+                }
               }
             }
           },
@@ -101,15 +113,21 @@
     "/v1/admin/analytics": {
       "get": {
         "summary": "Get analytics summary",
-        "description": "Returns a summary of community analytics including member growth over time and resource access counts. PROVISIONAL — endpoint path not yet confirmed by guildpass-core. Tracked in issue #157.",
+        "description": "Returns a summary of community analytics including member growth over time and resource access counts. PROVISIONAL \u2014 endpoint path not yet confirmed by guildpass-core. Tracked in issue #157.",
         "operationId": "getAnalyticsSummary",
-        "security": [{ "bearerAuth": [] }],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "responses": {
           "200": {
             "description": "Analytics summary.",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/AnalyticsSummary" }
+                "schema": {
+                  "$ref": "#/components/schemas/AnalyticsSummary"
+                }
               }
             }
           },
@@ -127,7 +145,11 @@
         "summary": "List webhook event logs",
         "description": "Returns admin-only webhook event log entries with safe payload summary fields for operational monitoring.",
         "operationId": "listWebhookEvents",
-        "security": [{ "bearerAuth": [] }],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "responses": {
           "200": {
             "description": "Webhook event log feed.",
@@ -135,7 +157,9 @@
               "application/json": {
                 "schema": {
                   "type": "array",
-                  "items": { "$ref": "#/components/schemas/WebhookEventLog" }
+                  "items": {
+                    "$ref": "#/components/schemas/WebhookEventLog"
+                  }
                 }
               }
             }
@@ -160,15 +184,36 @@
     "schemas": {
       "Role": {
         "type": "string",
-        "enum": ["member", "moderator", "admin"]
+        "enum": [
+          "member",
+          "moderator",
+          "admin"
+        ]
+      },
+      "RoleCapability": {
+        "type": "string",
+        "enum": [
+          "assign_roles",
+          "edit_policies",
+          "edit_settings",
+          "view_events"
+        ]
       },
       "MembershipTier": {
         "type": "string",
-        "enum": ["free", "standard", "pro"]
+        "enum": [
+          "free",
+          "standard",
+          "pro"
+        ]
       },
       "WebhookEventStatus": {
         "type": "string",
-        "enum": ["success", "failed", "pending"]
+        "enum": [
+          "success",
+          "failed",
+          "pending"
+        ]
       },
       "WebhookEventType": {
         "type": "string",
@@ -184,24 +229,43 @@
         "type": "object",
         "description": "Safe, redacted webhook payload fields suitable for admin UI display.",
         "properties": {
-          "network": { "type": "string" },
-          "txHash": { "type": "string" },
-          "tier": { "type": "string" },
-          "reason": { "type": "string" }
+          "network": {
+            "type": "string"
+          },
+          "txHash": {
+            "type": "string"
+          },
+          "tier": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
         }
       },
       "WebhookEventLog": {
         "type": "object",
         "properties": {
-          "id": { "type": "string" },
-          "eventType": { "$ref": "#/components/schemas/WebhookEventType" },
-          "status": { "$ref": "#/components/schemas/WebhookEventStatus" },
-          "timestamp": { "type": "string", "format": "date-time" },
+          "id": {
+            "type": "string"
+          },
+          "eventType": {
+            "$ref": "#/components/schemas/WebhookEventType"
+          },
+          "status": {
+            "$ref": "#/components/schemas/WebhookEventStatus"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
           "affectedIdentifier": {
             "type": "string",
             "description": "Wallet address, resource id, or other safe identifier affected by the event."
           },
-          "payloadSummary": { "$ref": "#/components/schemas/WebhookPayloadSummary" }
+          "payloadSummary": {
+            "$ref": "#/components/schemas/WebhookPayloadSummary"
+          }
         },
         "required": [
           "id",
@@ -215,84 +279,165 @@
       "Community": {
         "type": "object",
         "properties": {
-          "id": { "type": "string" },
-          "name": { "type": "string" },
-          "description": { "type": "string" },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
           "tiers": {
             "type": "array",
-            "items": { "$ref": "#/components/schemas/MembershipTier" }
+            "items": {
+              "$ref": "#/components/schemas/MembershipTier"
+            }
           }
         },
-        "required": ["id", "name", "tiers"]
+        "required": [
+          "id",
+          "name",
+          "tiers"
+        ]
       },
       "Membership": {
         "type": "object",
         "properties": {
-          "address": { "type": "string" },
-          "tier": { "$ref": "#/components/schemas/MembershipTier" },
-          "active": { "type": "boolean" },
-          "expiresAt": { "type": "string", "format": "date-time" }
+          "address": {
+            "type": "string"
+          },
+          "tier": {
+            "$ref": "#/components/schemas/MembershipTier"
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          }
         },
-        "required": ["address", "tier", "active"]
+        "required": [
+          "address",
+          "tier",
+          "active"
+        ]
       },
       "MemberProfile": {
         "type": "object",
         "properties": {
-          "address": { "type": "string" },
-          "displayName": { "type": "string" },
-          "bio": { "type": "string" },
+          "address": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "bio": {
+            "type": "string"
+          },
           "badges": {
             "type": "array",
-            "items": { "type": "string" }
+            "items": {
+              "type": "string"
+            }
           }
         },
-        "required": ["address", "badges"]
+        "required": [
+          "address",
+          "badges"
+        ]
       },
       "Session": {
         "type": "object",
         "properties": {
-          "address": { "type": "string" },
+          "address": {
+            "type": "string"
+          },
           "roles": {
             "type": "array",
-            "items": { "$ref": "#/components/schemas/Role" }
+            "items": {
+              "$ref": "#/components/schemas/Role"
+            }
           },
-          "membership": { "$ref": "#/components/schemas/Membership" },
-          "community": { "$ref": "#/components/schemas/Community" },
+          "membership": {
+            "$ref": "#/components/schemas/Membership"
+          },
+          "community": {
+            "$ref": "#/components/schemas/Community"
+          },
           "badges": {
             "type": "array",
-            "items": { "type": "string" }
+            "items": {
+              "type": "string"
+            }
+          },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RoleCapability"
+            }
           }
         },
-        "required": ["roles"]
+        "required": [
+          "roles"
+        ]
       },
       "ResourceContentBlock": {
         "type": "object",
         "properties": {
-          "type": { "type": "string" },
-          "body": { "type": "string" },
-          "url": { "type": "string" },
-          "title": { "type": "string" },
-          "level": { "type": "string" }
+          "type": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "level": {
+            "type": "string"
+          }
         },
-        "required": ["type"]
+        "required": [
+          "type"
+        ]
       },
       "Resource": {
         "type": "object",
         "properties": {
-          "id": { "type": "string" },
-          "title": { "type": "string" },
-          "description": { "type": "string" },
-          "minTier": { "$ref": "#/components/schemas/MembershipTier" },
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "minTier": {
+            "$ref": "#/components/schemas/MembershipTier"
+          },
           "roles": {
             "type": "array",
-            "items": { "$ref": "#/components/schemas/Role" }
+            "items": {
+              "$ref": "#/components/schemas/Role"
+            }
           },
           "content": {
             "type": "array",
-            "items": { "$ref": "#/components/schemas/ResourceContentBlock" }
+            "items": {
+              "$ref": "#/components/schemas/ResourceContentBlock"
+            }
           }
         },
-        "required": ["id", "title"]
+        "required": [
+          "id",
+          "title"
+        ]
       },
       "AccessRule": {
         "description": "Composable access rule tree. Leaves are primitive conditions (tier >= X, has role Y, has badge Z); 'and'/'or' nodes combine nested rules. An 'and' with no rules evaluates to true; an 'or' with no rules evaluates to false.",
@@ -300,76 +445,150 @@
           {
             "type": "object",
             "properties": {
-              "type": { "enum": ["tier"] },
-              "minTier": { "$ref": "#/components/schemas/MembershipTier" }
-            },
-            "required": ["type", "minTier"]
-          },
-          {
-            "type": "object",
-            "properties": {
-              "type": { "enum": ["role"] },
-              "role": { "$ref": "#/components/schemas/Role" }
-            },
-            "required": ["type", "role"]
-          },
-          {
-            "type": "object",
-            "properties": {
-              "type": { "enum": ["badge"] },
-              "badge": { "type": "string" }
-            },
-            "required": ["type", "badge"]
-          },
-          {
-            "type": "object",
-            "properties": {
-              "type": { "enum": ["and"] },
-              "rules": {
-                "type": "array",
-                "items": { "$ref": "#/components/schemas/AccessRule" }
+              "type": {
+                "enum": [
+                  "tier"
+                ]
+              },
+              "minTier": {
+                "$ref": "#/components/schemas/MembershipTier"
               }
             },
-            "required": ["type", "rules"]
+            "required": [
+              "type",
+              "minTier"
+            ]
           },
           {
             "type": "object",
             "properties": {
-              "type": { "enum": ["or"] },
-              "rules": {
-                "type": "array",
-                "items": { "$ref": "#/components/schemas/AccessRule" }
+              "type": {
+                "enum": [
+                  "role"
+                ]
+              },
+              "role": {
+                "$ref": "#/components/schemas/Role"
               }
             },
-            "required": ["type", "rules"]
+            "required": [
+              "type",
+              "role"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "enum": [
+                  "badge"
+                ]
+              },
+              "badge": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "badge"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "enum": [
+                  "and"
+                ]
+              },
+              "rules": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/AccessRule"
+                }
+              }
+            },
+            "required": [
+              "type",
+              "rules"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "enum": [
+                  "or"
+                ]
+              },
+              "rules": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/AccessRule"
+                }
+              }
+            },
+            "required": [
+              "type",
+              "rules"
+            ]
           }
         ]
       },
       "AccessPolicy": {
         "type": "object",
         "properties": {
-          "resourceId": { "type": "string" },
-          "minTier": { "$ref": "#/components/schemas/MembershipTier" },
+          "resourceId": {
+            "type": "string"
+          },
+          "minTier": {
+            "$ref": "#/components/schemas/MembershipTier"
+          },
           "roles": {
             "type": "array",
-            "items": { "$ref": "#/components/schemas/Role" }
+            "items": {
+              "$ref": "#/components/schemas/Role"
+            }
           },
-          "rule": { "$ref": "#/components/schemas/AccessRule" }
+          "rule": {
+            "$ref": "#/components/schemas/AccessRule"
+          }
         },
-        "required": ["resourceId"]
+        "required": [
+          "resourceId"
+        ]
       },
       "MemberRow": {
         "type": "object",
         "properties": {
-          "address": { "type": "string" },
+          "address": {
+            "type": "string"
+          },
           "roles": {
             "type": "array",
-            "items": { "$ref": "#/components/schemas/Role" }
+            "items": {
+              "$ref": "#/components/schemas/Role"
+            }
           },
-          "tier": { "$ref": "#/components/schemas/MembershipTier" },
-          "active": { "type": "boolean" }
+          "tier": {
+            "$ref": "#/components/schemas/MembershipTier"
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RoleCapability"
+            }
+          }
         },
-        "required": ["address", "roles", "tier", "active"]
+        "required": [
+          "address",
+          "roles",
+          "tier",
+          "active"
+        ]
       },
       "MemberGrowthDataPoint": {
         "type": "object",
@@ -389,14 +608,22 @@
             "description": "Cumulative total member count at end of interval."
           }
         },
-        "required": ["date", "newMembers", "totalMembers"]
+        "required": [
+          "date",
+          "newMembers",
+          "totalMembers"
+        ]
       },
       "ResourceAccessCount": {
         "type": "object",
         "description": "Access attempt counts for a single gated resource.",
         "properties": {
-          "resourceId": { "type": "string" },
-          "resourceTitle": { "type": "string" },
+          "resourceId": {
+            "type": "string"
+          },
+          "resourceTitle": {
+            "type": "string"
+          },
           "accessCount": {
             "type": "integer",
             "description": "Total number of access attempts for this resource."
@@ -406,7 +633,12 @@
             "description": "Number of denied access attempts (insufficient tier/role)."
           }
         },
-        "required": ["resourceId", "resourceTitle", "accessCount", "deniedCount"]
+        "required": [
+          "resourceId",
+          "resourceTitle",
+          "accessCount",
+          "deniedCount"
+        ]
       },
       "AnalyticsSummary": {
         "type": "object",
@@ -423,12 +655,16 @@
           "memberGrowth": {
             "type": "array",
             "description": "Member growth time series (most recent 30 days, daily intervals).",
-            "items": { "$ref": "#/components/schemas/MemberGrowthDataPoint" }
+            "items": {
+              "$ref": "#/components/schemas/MemberGrowthDataPoint"
+            }
           },
           "resourceAccess": {
             "type": "array",
             "description": "Per-resource access and denial counts.",
-            "items": { "$ref": "#/components/schemas/ResourceAccessCount" }
+            "items": {
+              "$ref": "#/components/schemas/ResourceAccessCount"
+            }
           },
           "generatedAt": {
             "type": "string",
@@ -436,14 +672,26 @@
             "description": "ISO timestamp when this summary was generated."
           }
         },
-        "required": ["totalMembers", "activeMembers", "memberGrowth", "resourceAccess", "generatedAt"]
+        "required": [
+          "totalMembers",
+          "activeMembers",
+          "memberGrowth",
+          "resourceAccess",
+          "generatedAt"
+        ]
       },
       "ApiErrorBody": {
         "type": "object",
         "properties": {
-          "code": { "type": "string" },
-          "error": { "type": "string" },
-          "message": { "type": "string" },
+          "code": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
           "details": {
             "type": "object",
             "additionalProperties": true
@@ -453,21 +701,48 @@
       "SiweAuthSession": {
         "type": "object",
         "properties": {
-          "isAuthenticated": { "type": "boolean", "enum": [true] },
-          "token": { "type": "string" },
-          "address": { "type": "string" },
-          "expiresAt": { "type": "string", "format": "date-time" }
+          "isAuthenticated": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "token": {
+            "type": "string"
+          },
+          "address": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          }
         },
-        "required": ["isAuthenticated", "token", "address", "expiresAt"]
+        "required": [
+          "isAuthenticated",
+          "token",
+          "address",
+          "expiresAt"
+        ]
       },
       "WalletVerification": {
         "type": "object",
         "properties": {
-          "verified": { "type": "boolean" },
-          "method": { "type": "string" },
-          "checkedAt": { "type": "string", "format": "date-time" }
+          "verified": {
+            "type": "boolean"
+          },
+          "method": {
+            "type": "string"
+          },
+          "checkedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
         },
-        "required": ["verified", "checkedAt"]
+        "required": [
+          "verified",
+          "checkedAt"
+        ]
       }
     }
   }

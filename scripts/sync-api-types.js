@@ -98,6 +98,7 @@ export interface BackendMember {
   expiresAt?: string
   expires_at?: string
   roles?: Role[]
+  capabilities?: RoleCapability[]
   // Profile fields (returned by /v1/members/:address/profile)
   displayName?: string
   display_name?: string
@@ -130,6 +131,7 @@ export interface BackendSession {
   address?: string
   wallet_address?: string
   roles?: Role[]
+  capabilities?: RoleCapability[]
   membership?: Partial<BackendMember>
   community?: {
     id: string
