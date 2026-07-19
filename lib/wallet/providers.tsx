@@ -17,6 +17,7 @@ import { SiweAuthSession, AdminSessionStatus } from '@/lib/api/types'
 import { clearAuthSession, loadAuthSession, storeAuthSession } from '@/lib/session'
 import { isApiError } from '@/lib/api/errors'
 import { accessKeys, queryKeys } from '@/lib/query'
+import { recordSiweDebug } from '@/lib/api/siwe-debug'
 
 // ── Wagmi config ─────────────────────────────────────────────────────────────
 
@@ -134,6 +135,12 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
       const data = await verifyRes.json();
       if (data.token) {
         setSession(data);
+        recordSiweDebug({
+          message,
+          nonce,
+          token: data.token,
+          expiresAt: data.expiresAt,
+        });
         if (typeof window !== 'undefined') {
           sessionStorage.setItem('siwe_session', JSON.stringify(data));
         }
