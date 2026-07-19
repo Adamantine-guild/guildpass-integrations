@@ -17,6 +17,7 @@ type Scenario =
   | 'denied-resource' 
   | 'admin-session-expired' 
   | 'no-roles'
+  | 'partial-capability-admin'
   | 'multiple-communities'
 
 const SCENARIOS: { id: Scenario; label: string; description: string }[] = [
@@ -25,6 +26,7 @@ const SCENARIOS: { id: Scenario; label: string; description: string }[] = [
   { id: 'denied-resource', label: 'Denied Resource', description: 'Free tier member denied access to Alpha Docs' },
   { id: 'admin-session-expired', label: 'Admin Session Expired', description: 'Admin user to test expired SIWE session' },
   { id: 'no-roles', label: 'No Roles', description: 'Member with no roles assigned' },
+  { id: 'partial-capability-admin', label: 'Partial Capability Admin', description: 'Can assign roles and view events, but cannot edit settings or policies' },
   { id: 'multiple-communities', label: 'Multiple Communities', description: 'Member active across several communities' },
 ]
 

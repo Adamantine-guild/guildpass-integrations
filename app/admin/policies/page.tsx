@@ -378,7 +378,7 @@ export default function PoliciesPage() {
 
   return (
     <FeatureGate enabled={features.adminPolicies} name="Access Policies">
-      <AdminGuard>
+      <AdminGuard requiredCapability="edit_policies">
         <div className="space-y-4">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <h1 className="text-2xl font-semibold">Access Policies</h1>

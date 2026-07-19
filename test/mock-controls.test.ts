@@ -32,6 +32,7 @@ describe('Mock Controls', () => {
     assert.strictEqual(session.membership?.tier, 'standard')
     assert.strictEqual(session.membership?.active, true)
     assert.deepStrictEqual(session.roles, ['member'])
+    assert.deepStrictEqual(session.capabilities, [])
   })
 
   it('should apply expired-member scenario', async () => {
@@ -40,6 +41,24 @@ describe('Mock Controls', () => {
     const session = await api.getSession()
     assert.strictEqual(session.membership?.active, false)
     assert.ok(session.membership?.expiresAt)
+  })
+
+  it('should keep No Roles denied for every admin capability', async () => {
+    applyMockScenario('no-roles', TEST_ADDRESS)
+    const api = getApi(TEST_ADDRESS)
+    const session = await api.getSession()
+    assert.deepStrictEqual(session.roles, [])
+    assert.deepStrictEqual(session.capabilities, [])
+  })
+
+  it('should apply partial-capability-admin scenario', async () => {
+    applyMockScenario('partial-capability-admin', TEST_ADDRESS)
+    const api = getApi(TEST_ADDRESS)
+    const session = await api.getSession()
+    assert.deepStrictEqual(session.capabilities, ['assign_roles', 'view_events'])
+    assert.equal(session.capabilities?.includes('assign_roles'), true)
+    assert.equal(session.capabilities?.includes('edit_settings'), false)
+    assert.equal(session.capabilities?.includes('edit_policies'), false)
   })
 
   it('should apply denied-resource scenario', async () => {

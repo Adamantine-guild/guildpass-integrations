@@ -8,7 +8,7 @@ import { AdminGuard } from "@/components/admin-guard";
 export default function SettingsPage() {
   const [name, setName] = useState("GuildPass Demo Community");
   return (
-    <AdminGuard>
+    <AdminGuard requiredCapability="edit_settings">
       <div className="space-y-4">
         <h1 className="text-2xl font-semibold">Community Settings</h1>
         <Card>

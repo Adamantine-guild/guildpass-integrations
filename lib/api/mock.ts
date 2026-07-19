@@ -37,12 +37,14 @@ import {
   PaginatedMembers,
   Resource,
   Role,
+  RoleCapability,
   Session,
   SiweAuthSession,
   WalletVerification,
   WebhookEventLog,
 } from './types'
 import { ApiError } from './errors'
+import { deriveRoleCapabilities } from './capabilities'
 import {
   loadPersistedState,
   persistState,
@@ -228,7 +230,7 @@ const MOCK_ANALYTICS_SUMMARY: AnalyticsSummary = {
   generatedAt: new Date().toISOString(),
 }
 
-const DEFAULT_MEMBER_STORE: Record<string, { membership: Membership; roles: Role[]; profile: MemberProfile }> = {}
+const DEFAULT_MEMBER_STORE: Record<string, { membership: Membership; roles: Role[]; capabilities?: RoleCapability[]; profile: MemberProfile }> = {}
 
 // Populate 50,000 synthetic members to exercise the scale scenario
 for (let i = 0; i < 50000; i++) {
@@ -257,7 +259,7 @@ let community: Community = { ...DEFAULT_COMMUNITY }
 let resources: Resource[] = [...DEFAULT_RESOURCES]
 let policies: AccessPolicy[] = [...DEFAULT_POLICIES]
 let mockWebhookEvents: WebhookEventLog[] = [...DEFAULT_WEBHOOK_EVENTS]
-let memberStore: Record<string, { membership: Membership; roles: Role[]; profile: MemberProfile }> = { ...DEFAULT_MEMBER_STORE }
+let memberStore: Record<string, { membership: Membership; roles: Role[]; capabilities?: RoleCapability[]; profile: MemberProfile }> = { ...DEFAULT_MEMBER_STORE }
 
 let saveTimeout: ReturnType<typeof setTimeout> | null = null
 
@@ -320,6 +322,7 @@ type MockScenario =
   | 'denied-resource' 
   | 'admin-session-expired' 
   | 'no-roles'
+  | 'partial-capability-admin'
   | 'multiple-communities'
 
 /**
@@ -455,6 +458,7 @@ export async function applyMockScenario(scenario: MockScenario, address: string 
           active: true,
         },
         roles: [],
+        capabilities: [],
         profile: {
           address,
           displayName: 'No Roles User',
@@ -463,6 +467,19 @@ export async function applyMockScenario(scenario: MockScenario, address: string 
       }
       break
 
+    case 'partial-capability-admin':
+      memberStore[address] = {
+        membership: {
+          address,
+          tier: 'pro',
+          active: true,
+        },
+        roles: ['moderator', 'member'],
+        capabilities: ['assign_roles', 'view_events'],
+        profile: {
+          address,
+          displayName: 'Role Manager',
+          badges: ['Moderator', 'Pro Tier'],
     case 'multiple-communities':
       // Seed a member whose data reflects participation in more than one
       // community. The mock session model exposes a single active community,
@@ -527,6 +544,7 @@ export class MockAccessApi implements AccessApi {
       return {
         // No authenticated session
         roles: [],
+        capabilities: [],
         community,
       }
     }
@@ -535,6 +553,7 @@ export class MockAccessApi implements AccessApi {
     return {
       address: this.address,
       roles: data ? data.roles : [],
+      capabilities: data ? data.capabilities ?? deriveRoleCapabilities(data.roles) : [],
       membership: data ? data.membership : undefined,
       community,
       ...(data ? { badges: data.profile.badges } : {}),
@@ -563,6 +582,7 @@ export class MockAccessApi implements AccessApi {
     let list = Object.values(memberStore).map((m) => ({
       address: m.membership.address,
       roles: m.roles,
+      capabilities: m.capabilities ?? deriveRoleCapabilities(m.roles),
       tier: m.membership.tier,
       active: m.membership.active,
     }))
