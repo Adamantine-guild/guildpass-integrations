@@ -84,6 +84,7 @@ export default function DynamicResourceDocs() {
       <Gated
         minTier={effectiveMinTier}
         roles={policy?.roles ?? resource?.roles}
+        rule={policy?.rule}
         resourceId={resourceId}
       >
         <div className="space-y-2">

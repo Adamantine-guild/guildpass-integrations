@@ -255,10 +255,9 @@ function SessionExpiredBanner() {
 
 export default function PoliciesPage() {
   const { address } = useAccount();
-  const { authSession, markExpired } = useSiweAuth();
+  const { authSession, markExpired, sessionStatus } = useSiweAuth();
   const qc = useQueryClient();
 
-  const [sessionExpired, setSessionExpired] = useState(false);
   const [pendingPolicyId, setPendingPolicyId] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState("");
   const [rollbackMessage, setRollbackMessage] = useState("");
@@ -306,7 +305,6 @@ export default function PoliciesPage() {
       setPendingPolicyId(policy.resourceId);
       setSuccessMessage("");
       setRollbackMessage("");
-      setSessionExpired(false);
 
       qc.setQueryData<AccessPolicy[]>(
         queryKeys.policies.all,
@@ -332,7 +330,6 @@ export default function PoliciesPage() {
       setRollbackMessage(`Change reverted: ${safeErrorMessage(err)}`);
 
       if (err instanceof AuthError) {
-        setSessionExpired(true);
         markExpired();
       }
 
@@ -398,7 +395,7 @@ export default function PoliciesPage() {
             </Button>
           </div>
 
-          {sessionExpired && <SessionExpiredBanner />}
+          {sessionStatus === "expired" && <SessionExpiredBanner />}
 
           {showCreateForm && (
             <Card>

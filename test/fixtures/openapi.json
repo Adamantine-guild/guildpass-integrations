@@ -257,7 +257,11 @@
             "items": { "$ref": "#/components/schemas/Role" }
           },
           "membership": { "$ref": "#/components/schemas/Membership" },
-          "community": { "$ref": "#/components/schemas/Community" }
+          "community": { "$ref": "#/components/schemas/Community" },
+          "badges": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
         },
         "required": ["roles"]
       },
@@ -290,6 +294,57 @@
         },
         "required": ["id", "title"]
       },
+      "AccessRule": {
+        "description": "Composable access rule tree. Leaves are primitive conditions (tier >= X, has role Y, has badge Z); 'and'/'or' nodes combine nested rules. An 'and' with no rules evaluates to true; an 'or' with no rules evaluates to false.",
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "type": { "enum": ["tier"] },
+              "minTier": { "$ref": "#/components/schemas/MembershipTier" }
+            },
+            "required": ["type", "minTier"]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": { "enum": ["role"] },
+              "role": { "$ref": "#/components/schemas/Role" }
+            },
+            "required": ["type", "role"]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": { "enum": ["badge"] },
+              "badge": { "type": "string" }
+            },
+            "required": ["type", "badge"]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": { "enum": ["and"] },
+              "rules": {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/AccessRule" }
+              }
+            },
+            "required": ["type", "rules"]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": { "enum": ["or"] },
+              "rules": {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/AccessRule" }
+              }
+            },
+            "required": ["type", "rules"]
+          }
+        ]
+      },
       "AccessPolicy": {
         "type": "object",
         "properties": {
@@ -298,7 +353,8 @@
           "roles": {
             "type": "array",
             "items": { "$ref": "#/components/schemas/Role" }
-          }
+          },
+          "rule": { "$ref": "#/components/schemas/AccessRule" }
         },
         "required": ["resourceId"]
       },

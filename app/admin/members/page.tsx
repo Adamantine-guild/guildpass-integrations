@@ -38,7 +38,7 @@ type AssignRoleRollback = {
 };
 
 function SessionExpiredBanner() {
-  const { signIn, isSigningIn } = useSiweAuth() as any;
+  const { signIn, isSigningIn } = useSiweAuth();
   return (
     <div id="session-expired-banner">
       <DeniedState
@@ -150,9 +150,8 @@ function VirtualList<T>({
 
 export default function MembersPage() {
   const { address } = useAccount();
-  const { authSession, markExpired } = useSiweAuth() as any;
+  const { authSession, markExpired, sessionStatus } = useSiweAuth();
   const qc = useQueryClient();
-  const [sessionExpired, setSessionExpired] = useState(false);
 
   // Filter state
   const [searchQuery, setSearchQuery] = useState('')
@@ -259,7 +258,6 @@ export default function MembersPage() {
       setPendingAssignment(input);
       setSuccessAssignment(null);
       setRollbackMessage("");
-      setSessionExpired(false);
 
       qc.setQueriesData({ queryKey: queryKeys.members.all }, (old: any) => {
         if (!old) return old;
@@ -299,7 +297,6 @@ export default function MembersPage() {
       void qc.invalidateQueries({ queryKey: queryKeys.members.all });
       setRollbackMessage(`Change reverted: ${safeErrorMessage(err)}`);
       if (err instanceof AuthError) {
-        setSessionExpired(true);
         markExpired();
       }
     },
@@ -322,7 +319,6 @@ export default function MembersPage() {
       setPendingAssignment(input);
       setSuccessMessage("");
       setRollbackMessage("");
-      setSessionExpired(false);
       qc.setQueriesData({ queryKey: queryKeys.members.all }, (old: any) => {
         if (!old) return old;
         if (Array.isArray(old)) {
@@ -359,7 +355,6 @@ export default function MembersPage() {
       void qc.invalidateQueries({ queryKey: queryKeys.members.all });
       setRollbackMessage(`Change reverted: ${safeErrorMessage(err)}`);
       if (err instanceof AuthError) {
-        setSessionExpired(true);
         markExpired();
       }
     },
@@ -394,7 +389,7 @@ export default function MembersPage() {
       <div className="space-y-4">
         <h1 className="text-2xl font-semibold">Members</h1>
 
-        {sessionExpired && <SessionExpiredBanner />}
+        {sessionStatus === "expired" && <SessionExpiredBanner />}
 
         <Card>
           <CardHeader>

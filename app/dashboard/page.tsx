@@ -1,6 +1,6 @@
 'use client'
 import { useAccount } from 'wagmi'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient, useIsFetching } from '@tanstack/react-query'
 import {
   getApi,
   type MemberProfile,
@@ -43,6 +43,34 @@ function Section({
 
 export default function DashboardPage() {
   const { address, isConnected } = useAccount();
+  const queryClient = useQueryClient();
+
+  // Tracks whether *any* dashboard query is currently refetching in the
+  // background.  Used to show a spinner on the manual refresh button and
+  // to prevent duplicate concurrent fetches.
+  const isRefreshing =
+    useIsFetching({
+      predicate(query) {
+        const key = query.queryKey;
+        return (
+          key[0] === 'session' ||
+          key[0] === 'walletVerification' ||
+          key[0] === 'profile' ||
+          key[0] === 'resources'
+        );
+      },
+    }) > 0;
+
+  async function handleRefresh() {
+    if (!address || isRefreshing) return;
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: queryKeys.session.byAddress(address) }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.walletVerification.byAddress(address) }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.profile.byAddress(address) }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.resources.all }),
+    ]);
+  }
+
   const {
     data: session,
     isLoading,
@@ -121,12 +149,36 @@ export default function DashboardPage() {
           </p>
         </div>
         <div className="text-left sm:text-right">
-          <div className="text-sm">
+          <div className="text-sm flex items-center gap-3 justify-end">
             {isConnected ? (
-              <AddressText
-                address={address}
-                className="text-muted-foreground"
-              />
+              <>
+                <AddressText
+                  address={address}
+                  className="text-muted-foreground"
+                />
+                <button
+                  onClick={handleRefresh}
+                  disabled={isRefreshing || !isConnected}
+                  aria-label="Refresh membership data"
+                  className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+                >
+                  <svg
+                    className={isRefreshing ? 'animate-spin' : ''}
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" />
+                  </svg>
+                  {isRefreshing ? 'Refreshing…' : 'Refresh'}
+                </button>
+              </>
             ) : (
               <span className="text-muted-foreground">
                 Wallet not connected

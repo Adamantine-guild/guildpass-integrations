@@ -88,6 +88,33 @@ const DEFAULT_POLICIES: AccessPolicy[] = [
   { resourceId: 'alpha', minTier: 'standard' },
   { resourceId: 'pro-reports', minTier: 'pro' },
   { resourceId: 'mem-updates', minTier: 'free' },
+  // Composable-rule demos. Legacy minTier/roles fields are kept as the closest
+  // single-condition approximation for older clients; `rule` is authoritative.
+  {
+    // Moderator Lounge: standard tier AND the moderator role.
+    resourceId: 'mod-lounge',
+    minTier: 'standard',
+    roles: ['moderator'],
+    rule: {
+      type: 'and',
+      rules: [
+        { type: 'tier', minTier: 'standard' },
+        { type: 'role', role: 'moderator' },
+      ],
+    },
+  },
+  {
+    // Insider Hub: pro tier OR the "Early Member" badge.
+    resourceId: 'insider-hub',
+    minTier: 'pro',
+    rule: {
+      type: 'or',
+      rules: [
+        { type: 'tier', minTier: 'pro' },
+        { type: 'badge', badge: 'Early Member' },
+      ],
+    },
+  },
 ]
 
 const DEFAULT_WEBHOOK_EVENTS: WebhookEventLog[] = [
@@ -97,7 +124,20 @@ const DEFAULT_WEBHOOK_EVENTS: WebhookEventLog[] = [
     status: "success",
     timestamp: new Date(Date.now() - 1000 * 60 * 15).toISOString(),
     affectedIdentifier: "0x71C...3A90",
-    payloadSummary: { network: "ethereum", txHash: "0xabc...123", tier: "pro" }
+    payloadSummary: { network: "ethereum", txHash: "0xabc...123", tier: "pro" },
+    fullPayload: {
+      event: "membership.created",
+      data: {
+        address: "0x71C7656EC7ab88b098defB751B7401B5f6d8976A",
+        tier: "pro",
+        timestamp: new Date(Date.now() - 1000 * 60 * 15).toISOString(),
+      },
+      metadata: {
+        network: "ethereum",
+        txHash: "0xabc123def456abc123def456abc123def456abc123def456abc123def456abc123",
+        blockNumber: 19548291,
+      },
+    },
   },
   {
     id: "wh_01J2",
@@ -105,7 +145,19 @@ const DEFAULT_WEBHOOK_EVENTS: WebhookEventLog[] = [
     status: "success",
     timestamp: new Date(Date.now() - 1000 * 60 * 120).toISOString(),
     affectedIdentifier: "0x94F...8B21",
-    payloadSummary: { reason: "Subscription term elapsed" }
+    payloadSummary: { reason: "Subscription term elapsed" },
+    fullPayload: {
+      event: "membership.expired",
+      data: {
+        address: "0x94F68E164F64B8A2E2B9E7B1A3Ec5E7E3d8eB2A1",
+        tier: "standard",
+        expiresAt: new Date(Date.now() - 1000 * 60 * 120).toISOString(),
+      },
+      metadata: {
+        reason: "Subscription term elapsed",
+        gracePeriodDays: 7,
+      },
+    },
   },
   {
     id: "wh_01J3",
@@ -113,8 +165,23 @@ const DEFAULT_WEBHOOK_EVENTS: WebhookEventLog[] = [
     status: "failed",
     timestamp: new Date(Date.now() - 1000 * 60 * 360).toISOString(),
     affectedIdentifier: "0xF39...2441",
-    payloadSummary: { network: "ethereum", reason: "Gas limit hit execution revert" }
-  }
+    payloadSummary: { network: "ethereum", reason: "Gas limit hit execution revert" },
+    fullPayload: {
+      event: "tier.upgraded",
+      data: {
+        address: "0xF39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+        fromTier: "free",
+        toTier: "standard",
+      },
+      metadata: {
+        network: "ethereum",
+        txHash: "0xdef789abc456def789abc456def789abc456def789abc456def789abc456def789",
+        error: "Gas limit hit execution revert",
+        gasUsed: "850000",
+        gasLimit: "800000",
+      },
+    },
+  },
 ]
 
 /**
@@ -212,6 +279,38 @@ type MockScenario =
   | 'denied-resource' 
   | 'admin-session-expired' 
   | 'no-roles'
+
+/**
+ * Replay a webhook event by cloning it into the mock event store.
+ * The clone is marked with `isReplay: true` and inserted at the top
+ * of the feed with a `pending` status so it is visually distinct.
+ *
+ * This function operates directly on the module-level mock store and
+ * is intended for use by the admin event replay tool. It must only be
+ * called when `config.apiMode === 'mock'`.
+ */
+export function replayMockEvent(eventId: string): WebhookEventLog {
+  const original = mockWebhookEvents.find((e) => e.id === eventId)
+  if (!original) {
+    throw new ApiError({
+      status: 404,
+      code: 'not_found',
+      safeMessage: `Event "${eventId}" not found in mock store.`,
+    })
+  }
+
+  const replay: WebhookEventLog = {
+    ...original,
+    id: `replay_${eventId}_${Date.now()}`,
+    timestamp: new Date().toISOString(),
+    isReplay: true,
+    status: 'pending',
+    fullPayload: original.fullPayload ?? { ...original.payloadSummary },
+  }
+
+  mockWebhookEvents.unshift(replay)
+  return replay
+}
 
 /**
  * Reset all mock data to its initial state.
@@ -359,6 +458,7 @@ export class MockAccessApi implements AccessApi {
       roles: data ? data.roles : [],
       membership: data ? data.membership : undefined,
       community,
+      ...(data ? { badges: data.profile.badges } : {}),
     }
   }
 
@@ -429,6 +529,38 @@ export class MockAccessApi implements AccessApi {
     return new Promise((resolve) => setTimeout(() => resolve(mockWebhookEvents), 300))
   }
 
+  /**
+   * Replay a webhook event by cloning it and adding the clone to the mock
+   * event store. The clone is clearly marked as a replayed entry so the UI
+   * can distinguish it from original events.
+   *
+   * This method is intentionally only available on MockAccessApi — it is
+   * NOT part of the AccessApi interface and must never be called in live mode.
+   */
+  async replayEvent(eventId: string): Promise<WebhookEventLog> {
+    const original = mockWebhookEvents.find((e) => e.id === eventId)
+    if (!original) {
+      throw new ApiError({
+        status: 404,
+        code: 'not_found',
+        safeMessage: `Event "${eventId}" not found in mock store.`,
+      })
+    }
+
+    const replay: WebhookEventLog = {
+      ...original,
+      id: `replay_${eventId}_${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      isReplay: true,
+      status: 'pending',
+      fullPayload: original.fullPayload ?? { ...original.payloadSummary },
+    }
+
+    // Insert at the beginning so it appears at the top of the feed
+    mockWebhookEvents.unshift(replay)
+    return replay
+  }
+
   async getAnalyticsSummary(): Promise<AnalyticsSummary> {
     // Simulate a short network delay so the loading state is exercisable
     return new Promise((resolve) =>
@@ -476,9 +608,11 @@ export class MockAccessApi implements AccessApi {
   /**
    * Mock SIWE verification — skips actual signature checking.
    *
-   * - Default:          Returns a session token expiring in 1 hour.
-   * - expired mode:     Returns an already-expired token (1 ms in the past) so
-   *                     the provider immediately marks the session as expired.
+   * - Default:          Returns a session token expiring in 1 hour, plus a
+   *                     refresh token expiring in 7 days.
+   * - expired mode:     Returns an already-expired access token (1 ms in the
+   *                     past) with a valid refresh token so that the silent
+   *                     renewal path can be exercised in tests.
    * - unauthenticated:  Throws a 401 ApiError to simulate backend rejection.
    */
   async siweVerify(_message: string, _signature: string): Promise<SiweAuthSession> {
@@ -491,11 +625,61 @@ export class MockAccessApi implements AccessApi {
         ? new Date(Date.now() - 1).toISOString()   // already expired
         : new Date(Date.now() + 60 * 60 * 1000).toISOString()
 
+    // Refresh token is always valid for 7 days in mock mode so the renewal
+    // path can be tested even when the access token is intentionally expired.
+    const refreshExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
+
     return {
       isAuthenticated: true,
       token: `mock-jwt-${randomHex()}`,
       address: this.address ?? '0x0000000000000000000000000000000000000000',
       expiresAt,
+      refreshToken: `mock-refresh-${randomHex()}`,
+      refreshExpiresAt,
+    }
+  }
+
+  /**
+   * Mock silent token renewal via refresh token.
+   *
+   * Validates that the provided refresh token looks like a mock refresh token
+   * (prefix check only — no cryptography in mock mode).  Returns a fresh
+   * access token expiring 1 hour from now and a rotated refresh token.
+   *
+   * Throws a 401 if the token is missing or malformed to demonstrate the
+   * "refresh failed → sign-out" flow in tests.
+   *
+   * Set NEXT_PUBLIC_MOCK_SESSION_STATE=expired to force siweRefresh to also
+   * fail (simulates a fully-expired or revoked refresh token).
+   */
+  async siweRefresh(refreshToken: string): Promise<SiweAuthSession> {
+    if (MOCK_SESSION_STATE === 'expired' || MOCK_SESSION_STATE === 'unauthenticated') {
+      throw new ApiError({
+        status: 401,
+        code: 'unauthorized',
+        safeMessage: 'Refresh token expired. Please sign in again.',
+      })
+    }
+
+    if (!refreshToken || !refreshToken.startsWith('mock-refresh-')) {
+      throw new ApiError({
+        status: 401,
+        code: 'unauthorized',
+        safeMessage: 'Invalid refresh token.',
+      })
+    }
+
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString()
+    const refreshExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
+
+    return {
+      isAuthenticated: true,
+      // Issue a fresh access token and rotate the refresh token
+      token: `mock-jwt-${randomHex()}`,
+      address: this.address ?? '0x0000000000000000000000000000000000000000',
+      expiresAt,
+      refreshToken: `mock-refresh-${randomHex()}`,
+      refreshExpiresAt,
     }
   }
 

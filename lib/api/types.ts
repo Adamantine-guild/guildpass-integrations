@@ -33,6 +33,10 @@ export const WebhookEventLogSchema = z.object({
   timestamp: z.string(),
   affectedIdentifier: z.string(),
   payloadSummary: WebhookPayloadSummarySchema,
+  /** Raw event payload for detail inspection (optional — added by the replay/debug tool). */
+  fullPayload: z.record(z.unknown()).optional(),
+  /** True when this entry was injected via the replay/debug tool rather than ingested from a real webhook. */
+  isReplay: z.boolean().optional(),
 })
 
 export interface Community {
@@ -82,6 +86,7 @@ export interface Session {
   roles: Role[]
   membership?: Membership
   community?: Community
+  badges?: string[]
 }
 
 export const SessionSchema = z.object({
@@ -89,6 +94,7 @@ export const SessionSchema = z.object({
   roles: z.array(RoleSchema),
   membership: MembershipSchema.optional(),
   community: CommunitySchema.optional(),
+  badges: z.array(z.string()).optional(),
 })
 
 export interface ResourceContentBlock {
@@ -125,16 +131,35 @@ export const ResourceSchema = z.object({
   content: z.array(ResourceContentBlockSchema).optional(),
 })
 
+export type AccessRule =
+  | { type: 'tier'; minTier: MembershipTier }
+  | { type: 'role'; role: Role }
+  | { type: 'badge'; badge: string }
+  | { type: 'and'; rules: AccessRule[] }
+  | { type: 'or'; rules: AccessRule[] }
+
+export const AccessRuleSchema: z.ZodType<AccessRule> = z.lazy(() =>
+  z.union([
+    z.object({ type: z.enum(['tier']), minTier: MembershipTierSchema }),
+    z.object({ type: z.enum(['role']), role: RoleSchema }),
+    z.object({ type: z.enum(['badge']), badge: z.string() }),
+    z.object({ type: z.enum(['and']), rules: z.array(AccessRuleSchema) }),
+    z.object({ type: z.enum(['or']), rules: z.array(AccessRuleSchema) }),
+  ]),
+)
+
 export interface AccessPolicy {
   resourceId: string
   minTier?: MembershipTier
   roles?: Role[]
+  rule?: AccessRule
 }
 
 export const AccessPolicySchema = z.object({
   resourceId: z.string(),
   minTier: MembershipTierSchema.optional(),
   roles: z.array(RoleSchema).optional(),
+  rule: AccessRuleSchema.optional(),
 })
 
 export interface MemberRow {
@@ -160,9 +185,20 @@ export const ApiErrorBodySchema = z.object({
 
 export interface SiweAuthSession {
   isAuthenticated: true
+  /** Short-lived access token (typically 1 h). Attach as `Authorization: Bearer` on admin mutations. */
   token: string
   address: string
+  /** ISO 8601 expiry of the access token. */
   expiresAt: string
+  /**
+   * Opaque longer-lived refresh credential (typically 7 d).
+   * Must be treated as a secret — never log or expose it.
+   * Optional so that existing persisted sessions without a refresh token
+   * are still valid (they will just not support silent renewal).
+   */
+  refreshToken?: string
+  /** ISO 8601 expiry of the refresh token. Absence means no refresh is available. */
+  refreshExpiresAt?: string
 }
 
 export const SiweAuthSessionSchema = z.object({
@@ -170,6 +206,8 @@ export const SiweAuthSessionSchema = z.object({
   token: z.string(),
   address: z.string(),
   expiresAt: z.string(),
+  refreshToken: z.string().optional(),
+  refreshExpiresAt: z.string().optional(),
 })
 
 export const WalletVerificationSchema = z.object({
@@ -199,6 +237,10 @@ export interface WebhookEventLog {
     tier?: string;
     reason?: string;
   };
+  /** Raw event payload for detail inspection (optional — added by the replay/debug tool). */
+  fullPayload?: Record<string, unknown>;
+  /** True when this entry was injected via the replay/debug tool rather than ingested from a real webhook. */
+  isReplay?: boolean;
 }
 
 export interface WalletVerification {
@@ -367,6 +409,7 @@ export interface BackendPolicy {
   minTier?: MembershipTier
   min_tier?: MembershipTier
   roles?: Role[]
+  rule?: AccessRule
 }
 
 export interface BackendSession {
@@ -435,9 +478,19 @@ export interface SiweAuthApi {
   getNonce(address: string): Promise<string>
   /**
    * Submit a signed EIP-4361 message and receive an authenticated session
-   * token. The backend verifies the signature and returns a short-lived token.
+   * token. The backend verifies the signature and returns a short-lived access
+   * token plus a longer-lived refresh token.
    */
   siweVerify(message: string, signature: string): Promise<SiweAuthSession>
+  /**
+   * Exchange a valid refresh token for a fresh access token (and a new
+   * refresh token — token rotation). The caller must immediately persist the
+   * returned session and discard the old refresh token.
+   *
+   * Throws a 401 ApiError when the refresh token is expired or invalid,
+   * signalling that the user must re-sign with their wallet.
+   */
+  siweRefresh(refreshToken: string): Promise<SiweAuthSession>
   /** Invalidate the current server-side session (no-op for stateless JWTs). */
   siweLogout(token: string): Promise<void>
   verifyWallet(address: string): Promise<WalletVerification>
