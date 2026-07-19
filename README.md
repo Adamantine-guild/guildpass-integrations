@@ -157,13 +157,16 @@ Modules that are experimental or not yet production-ready are controlled by envi
 | `NEXT_PUBLIC_FEATURE_RESOURCES` | `true` | `true` | Gated resources at `/resources/*` |
 | `NEXT_PUBLIC_FEATURE_ANALYTICS` | `false` | `false` | Analytics module (not yet built) |
 | `NEXT_PUBLIC_FEATURE_GOVERNANCE` | `false` | `false` | Governance module (not yet built) |
+| `NEXT_PUBLIC_FEATURE_<NAME>_ROLLOUT_PCT` | unset | unset | Optional 0–100 percentage rollout for the matching flag |
 
 **How flags work:**
 
 - All flags are read at build time from `NEXT_PUBLIC_*` environment variables. No remote flag service is involved.
 - An omitted variable falls back to the default shown above.
+- Add `NEXT_PUBLIC_FEATURE_<NAME>_ROLLOUT_PCT` to canary a module to a percentage of users or sessions. For example, `NEXT_PUBLIC_FEATURE_ANALYTICS_ROLLOUT_PCT=25` enables analytics for identifiers whose deterministic bucket is 0–24.
+- Rollout checks hash the feature key plus a wallet address or persisted anonymous session ID into a stable 0–99 bucket, so the same identifier receives the same experience across visits. If no rollout percentage is set, the original boolean flag behavior is used exactly.
 - In **mock/demo mode** (`NEXT_PUBLIC_MOCK_MODE=true`), flags for `adminPolicies`, `events`, and `resources` default to `true` so the full demo works locally without any extra configuration.
-- Flags for deferred modules (`analytics`, `governance`) default to `false` in every environment and must be explicitly set to `"true"` to enable them.
+- Flags for deferred modules (`analytics`, `governance`) default to `false` in every environment and must be explicitly set to `"true"` for full access or given a rollout percentage for canary access.
 - Navigation links for disabled modules are automatically hidden.
 - Visiting a disabled route directly renders a clear "Feature unavailable" message instead of broken content.
 
@@ -171,8 +174,9 @@ Modules that are experimental or not yet production-ready are controlled by envi
 
 1. Add the typed field to `FeatureFlags` in `lib/features.ts` and wire up the `flag()` call.
 2. Document the variable in `.env.example` with its recommended production default.
-3. Wrap the relevant page with `<FeatureGate enabled={features.yourFlag} name="Module Name">`.
-4. Filter the corresponding nav item using `features.yourFlag`.
+3. Wrap the relevant page with `<FeatureGate enabled={features.yourFlag} name="Module Name">` for a binary flag, or pass `featureRollouts.yourFlag` plus `rolloutIdentifier` when the page supports percentage rollout.
+4. Filter the corresponding nav item using `features.yourFlag` for binary launches, or `isFeatureEnabledForIdentifier('yourFlag', identifier)` when the current wallet/session identifier is available.
+5. Optionally document `NEXT_PUBLIC_FEATURE_YOUR_FLAG_ROLLOUT_PCT` when the module supports a canary rollout.
 
 ---
 
