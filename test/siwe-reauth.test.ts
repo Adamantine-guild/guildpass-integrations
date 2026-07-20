@@ -31,13 +31,19 @@ function unauthorizedError(): ApiError {
   })
 }
 
+/** Build a minimal EIP-4361 message containing a fresh nonce fetched from the API. */
+async function makeSignedMessage(api: MockAccessApi): Promise<string> {
+  const nonce = await api.getNonce(ADDRESS)
+  return `localhost:3000 wants you to sign in with your Ethereum account:\n${ADDRESS}\n\nSign in to GuildPass Admin.\n\nURI: https://localhost:3000\nVersion: 1\nChain ID: 1\nNonce: ${nonce}\nIssued At: 2025-01-01T00:00:00.000Z`
+}
+
 describe('inline re-auth banner (401 → re-auth → success)', () => {
   test('banner appears after a 401 and clears after successful re-auth', async () => {
     const api = new MockAccessApi(ADDRESS)
 
     // Initial sign-in
     let state = siweSessionReducer(initialSiweSessionState, { type: 'sign-in-start' })
-    const firstSession = await api.siweVerify('message', '0xsignature')
+    const firstSession = await api.siweVerify(await makeSignedMessage(api), '0xsignature')
     state = siweSessionReducer(state, { type: 'sign-in-success', session: firstSession })
     assert.equal(deriveSessionStatus(state, true), 'authenticated')
     assert.equal(bannerVisible(state), false)
@@ -55,7 +61,7 @@ describe('inline re-auth banner (401 → re-auth → success)', () => {
     assert.equal(bannerVisible(state), true)
 
     // … and disappears immediately once verify succeeds, no reload needed.
-    const secondSession = await api.siweVerify('message', '0xsignature')
+    const secondSession = await api.siweVerify(await makeSignedMessage(api), '0xsignature')
     state = siweSessionReducer(state, { type: 'sign-in-success', session: secondSession })
     assert.equal(deriveSessionStatus(state, true), 'authenticated')
     assert.equal(bannerVisible(state), false)
@@ -98,7 +104,7 @@ describe('inline re-auth banner (401 → re-auth → success)', () => {
   test('sign-in success replaces a stale session and resets the expired flag', async () => {
     const api = new MockAccessApi(ADDRESS)
     const expired = siweSessionReducer(initialSiweSessionState, { type: 'mark-expired' })
-    const session = await api.siweVerify('message', '0xsignature')
+    const session = await api.siweVerify(await makeSignedMessage(api), '0xsignature')
     const next = siweSessionReducer(expired, { type: 'sign-in-success', session })
     assert.equal(next.expired, false)
     assert.equal(next.authSession?.token, session.token)
@@ -132,7 +138,7 @@ describe('buildSiweMessage', () => {
 describe('SIWE silent refresh sessions', () => {
   test('mock refresh rotates tokens and extends access expiry', async () => {
     const api = new MockAccessApi(ADDRESS)
-    const initial = await api.siweVerify('message', '0xsignature')
+    const initial = await api.siweVerify(await makeSignedMessage(api), '0xsignature')
 
     assert.ok(initial.refreshToken)
     const refreshed = await api.siweRefresh(initial.refreshToken!)
@@ -146,7 +152,7 @@ describe('SIWE silent refresh sessions', () => {
 
   test('reducer accepts silently refreshed session without requiring re-auth banner', async () => {
     const api = new MockAccessApi(ADDRESS)
-    const initial = await api.siweVerify('message', '0xsignature')
+    const initial = await api.siweVerify(await makeSignedMessage(api), '0xsignature')
     const refreshed = await api.siweRefresh(initial.refreshToken!)
 
     let state = siweSessionReducer(initialSiweSessionState, {

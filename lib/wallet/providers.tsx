@@ -159,6 +159,8 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
 
   // Guard against concurrent refresh attempts in the same tab
   const isRefreshing = useRef(false)
+  // Guard against concurrent sign-in attempts (prevents racing nonce fetches)
+  const isSigningIn = useRef(false)
   // Renewal timer handle
   const renewalTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   // BroadcastChannel reference — created once, torn down on unmount
@@ -340,6 +342,8 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
 
   const signIn = useCallback(async () => {
     if (!address) return
+    if (isSigningIn.current) return
+    isSigningIn.current = true
     dispatch({ type: 'sign-in-start' })
     try {
       const api = getApi(address)
@@ -369,6 +373,8 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
           ? err.safeMessage
           : 'Sign-in was cancelled or failed. Please try again.',
       })
+    } finally {
+      isSigningIn.current = false
     }
   }, [address, chainId, signMessageAsync, scheduleRenewal, broadcast])
 
