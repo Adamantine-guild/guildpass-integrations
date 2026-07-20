@@ -516,6 +516,15 @@ export async function applyMockScenario(scenario: MockScenario, address: string 
   }
 }
 
+/** Nonce TTL in milliseconds (5 minutes — mirrors siwe-go default). */
+const NONCE_TTL_MS = 5 * 60 * 1000
+
+/** Extract the nonce value from an EIP-4361 message string. */
+function extractNonceFromMessage(message: string): string | null {
+  const match = message.match(/Nonce:\s*(\S+)/)
+  return match ? match[1] : null
+}
+
 /** Generate a short random hex nonce (16 bytes). */
 function randomHex(): string {
   return Array.from({ length: 16 }, () =>
@@ -535,6 +544,9 @@ function throwMockUnauthorized(): never {
 }
 
 export class MockAccessApi implements AccessApi {
+  /** In-memory nonce store keyed by nonce value → creation timestamp. */
+  readonly #nonceStore = new Map<string, number>()
+
   constructor(private readonly address?: string) { }
 
   // ── Read-only ──────────────────────────────────────────────────────────────
@@ -730,7 +742,9 @@ export class MockAccessApi implements AccessApi {
    */
   async getNonce(_address: string): Promise<string> {
     await initPromise
-    return randomHex()
+    const nonce = randomHex()
+    this.#nonceStore.set(nonce, Date.now())
+    return nonce
   }
 
   /**
@@ -743,11 +757,34 @@ export class MockAccessApi implements AccessApi {
    *                     renewal path can be exercised in tests.
    * - unauthenticated:  Throws a 401 ApiError to simulate backend rejection.
    */
-  async siweVerify(_message: string, _signature: string): Promise<SiweAuthSession> {
+  async siweVerify(message: string, _signature: string): Promise<SiweAuthSession> {
     await initPromise
     if (MOCK_SESSION_STATE === 'unauthenticated') {
       throwMockUnauthorized()
     }
+
+    // ── Nonce validation (single-use + TTL) ─────────────────────────────
+    const nonce = extractNonceFromMessage(message)
+    if (!nonce || !this.#nonceStore.has(nonce)) {
+      throw new ApiError({
+        status: 400,
+        code: 'bad_request',
+        safeMessage: 'Nonce not found or already used.',
+      })
+    }
+
+    const createdAt = this.#nonceStore.get(nonce)!
+    if (Date.now() - createdAt > NONCE_TTL_MS) {
+      this.#nonceStore.delete(nonce)
+      throw new ApiError({
+        status: 400,
+        code: 'bad_request',
+        safeMessage: 'Nonce expired. Please request a new one.',
+      })
+    }
+
+    // Consume the nonce (single-use enforced)
+    this.#nonceStore.delete(nonce)
 
     const expiresAt =
       MOCK_SESSION_STATE === 'expired'

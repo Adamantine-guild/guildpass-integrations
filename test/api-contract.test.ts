@@ -3,6 +3,7 @@ import { describe, test, afterEach } from 'node:test'
 import * as assert from 'node:assert/strict'
 import { MockAccessApi } from '../lib/api/mock'
 import { LiveAccessApi } from '../lib/api/live'
+import { ApiError } from '../lib/api/errors'
 import { computeAccessDecision } from '../lib/api/access-decision'
 import type { AccessApi, MembershipTier, Session } from '../lib/api/types'
 import * as FIXTURES from './fixtures/live-api-responses'
@@ -490,7 +491,9 @@ describe('SIWE endpoints', () => {
 
   test('MockAccessApi siweVerify returns a SiweAuthSession', async () => {
     const api = new MockAccessApi('0xabc')
-    const result = await api.siweVerify('msg', 'sig')
+    const nonce = await api.getNonce('0xabc')
+    const message = `example.com wants you to sign in with your Ethereum account:\n0xabc\n\nSign in.\n\nURI: https://example.com\nVersion: 1\nChain ID: 1\nNonce: ${nonce}\nIssued At: 2025-01-01T00:00:00.000Z`
+    const result = await api.siweVerify(message, 'sig')
     assert.equal(result.isAuthenticated, true)
     assert.equal(typeof result.token, 'string')
     assert.equal(typeof result.address, 'string')
@@ -508,7 +511,10 @@ describe('SIWE endpoints', () => {
   })
 
   test('both APIs return matching SiweAuthSession shapes', async () => {
-    const mockResult = await new MockAccessApi('0xabc').siweVerify('msg', 'sig')
+    const mockApi = new MockAccessApi('0xabc')
+    const nonce = await mockApi.getNonce('0xabc')
+    const message = `example.com wants you to sign in with your Ethereum account:\n0xabc\n\nSign in.\n\nURI: https://example.com\nVersion: 1\nChain ID: 1\nNonce: ${nonce}\nIssued At: 2025-01-01T00:00:00.000Z`
+    const mockResult = await mockApi.siweVerify(message, 'sig')
 
     stubFetch({ '/v1/auth/siwe/verify': FIXTURES.siweVerify })
     const liveResult = await new LiveAccessApi('0xabc').siweVerify('msg', 'sig')
@@ -517,6 +523,32 @@ describe('SIWE endpoints', () => {
     assert.equal(typeof mockResult.token, typeof liveResult.token)
     assert.equal(typeof mockResult.address, typeof liveResult.address)
     assert.equal(typeof mockResult.expiresAt, typeof liveResult.expiresAt)
+  })
+
+  test('MockAccessApi consumes nonce on first verify and rejects reuse', async () => {
+    const api = new MockAccessApi('0xabc')
+    const nonce = await api.getNonce('0xabc')
+    const message = `example.com wants you to sign in with your Ethereum account:\n0xabc\n\nSign in.\n\nURI: https://example.com\nVersion: 1\nChain ID: 1\nNonce: ${nonce}\nIssued At: 2025-01-01T00:00:00.000Z`
+
+    // First use succeeds
+    const first = await api.siweVerify(message, '0xsig')
+    assert.equal(first.isAuthenticated, true)
+
+    // Second use with same message (same nonce) is rejected
+    const err = await assert.rejects(() => api.siweVerify(message, '0xsig'))
+    assert.ok(err instanceof ApiError)
+    assert.equal(err.code, 'bad_request')
+    assert.match(err.safeMessage, /already used/i)
+  })
+
+  test('MockAccessApi rejects nonce that was never issued', async () => {
+    const api = new MockAccessApi('0xabc')
+    const message = 'example.com wants you to sign in with your Ethereum account:\n0xabc\n\nSign in.\n\nURI: https://example.com\nVersion: 1\nChain ID: 1\nNonce: neverissued\nIssued At: 2025-01-01T00:00:00.000Z'
+
+    const err = await assert.rejects(() => api.siweVerify(message, '0xsig'))
+    assert.ok(err instanceof ApiError)
+    assert.equal(err.code, 'bad_request')
+    assert.match(err.safeMessage, /already used/i)
   })
 
   test('MockAccessApi siweLogout does not throw', async () => {
