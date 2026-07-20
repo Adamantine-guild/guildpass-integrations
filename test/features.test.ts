@@ -9,6 +9,7 @@ describe('lib/config.ts and feature flags', () => {
     delete process.env.NEXT_PUBLIC_MOCK_MODE
     delete process.env.NEXT_PUBLIC_DEMO_MODE
     delete process.env.NEXT_PUBLIC_FEATURE_ADMIN_POLICIES
+    delete process.env.NEXT_PUBLIC_FEATURE_ADMIN_SETTINGS
     delete process.env.NEXT_PUBLIC_FEATURE_EVENTS
     delete process.env.NEXT_PUBLIC_FEATURE_ANALYTICS
     delete process.env.NEXT_PUBLIC_FEATURE_RESOURCES

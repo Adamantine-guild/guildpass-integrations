@@ -35,6 +35,11 @@ export function Nav() {
       enabled: isAdmin && features.analytics,
     },
     {
+      href: "/admin/settings" as Route,
+      label: "Settings",
+      enabled: isAdmin && features.adminSettings,
+    },
+    {
       href: "/resources/alpha" as Route,
       label: "Gated",
       enabled: features.resources,

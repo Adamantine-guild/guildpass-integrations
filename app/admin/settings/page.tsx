@@ -4,12 +4,15 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { useState } from "react";
 import { AdminGuard } from "@/components/admin-guard";
+import { FeatureGate } from "@/components/feature-gate";
+import { features } from "@/lib/features";
 
 export default function SettingsPage() {
   const [name, setName] = useState("GuildPass Demo Community");
   return (
-    <AdminGuard>
-      <div className="space-y-4">
+    <FeatureGate enabled={features.adminSettings} name="Community Settings">
+      <AdminGuard>
+        <div className="space-y-4">
         <h1 className="text-2xl font-semibold">Community Settings</h1>
         <Card>
           <CardHeader>
@@ -32,7 +35,8 @@ export default function SettingsPage() {
             </div>
           </CardContent>
         </Card>
-      </div>
-    </AdminGuard>
+        </div>
+      </AdminGuard>
+    </FeatureGate>
   );
 }

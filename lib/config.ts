@@ -20,6 +20,7 @@ export interface SiweConfig {
 
 export type FeatureFlagKey =
   | 'adminPolicies'
+  | 'adminSettings'
   | 'events'
   | 'analytics'
   | 'resources'
@@ -166,6 +167,10 @@ const integrationGateway: IntegrationGatewayConfig = {
 
 const features: FeatureFlags = {
   adminPolicies: flag('NEXT_PUBLIC_FEATURE_ADMIN_POLICIES', isMock),
+  // Advanced admin tooling (community settings). Persistence is deferred for the
+  // MVP, so this defaults on only in mock/demo mode and stays off in live until
+  // the settings backend ships.
+  adminSettings: flag('NEXT_PUBLIC_FEATURE_ADMIN_SETTINGS', isMock),
   events: flag('NEXT_PUBLIC_FEATURE_EVENTS', isMock),
   analytics: flag('NEXT_PUBLIC_FEATURE_ANALYTICS', false),
   resources: flag('NEXT_PUBLIC_FEATURE_RESOURCES', isMock),

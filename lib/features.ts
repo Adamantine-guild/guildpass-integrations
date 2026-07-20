@@ -2,6 +2,7 @@ import { config } from './config'
 
 export type FeatureFlags = {
   adminPolicies: boolean
+  adminSettings: boolean
   events: boolean
   analytics: boolean
   resources: boolean
@@ -20,6 +21,7 @@ export type FeatureGateEnabled = boolean | FeatureRollout
 
 const FEATURE_ENV: Record<FeatureFlagKey, string> = {
   adminPolicies: 'NEXT_PUBLIC_FEATURE_ADMIN_POLICIES',
+  adminSettings: 'NEXT_PUBLIC_FEATURE_ADMIN_SETTINGS',
   events: 'NEXT_PUBLIC_FEATURE_EVENTS',
   analytics: 'NEXT_PUBLIC_FEATURE_ANALYTICS',
   resources: 'NEXT_PUBLIC_FEATURE_RESOURCES',
@@ -82,6 +84,7 @@ export const features: FeatureFlags = { ...config.features }
 
 export const featureRollouts: Record<FeatureFlagKey, FeatureRollout> = {
   adminPolicies: getFeatureRollout('adminPolicies'),
+  adminSettings: getFeatureRollout('adminSettings'),
   events: getFeatureRollout('events'),
   analytics: getFeatureRollout('analytics'),
   resources: getFeatureRollout('resources'),
