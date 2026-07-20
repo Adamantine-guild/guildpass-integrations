@@ -14,3 +14,7 @@ test-dist
 CLAUDE.md
 PLAN.md
 tasks/
+AGENTS.md
+update-test.js
+update-test.mjs
+temp/
