@@ -9,6 +9,7 @@ import {
   type Session,
   type WalletVerification,
 } from "@/lib/api";
+import { isApiError } from "@/lib/api/errors";
 import { mapVerificationState } from "@/lib/api/mappers";
 import { queryKeys } from "@/lib/query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -26,6 +27,15 @@ import {
 import { SyncStatusBanner } from "@/components/ui/sync-status-banner";
 import { AddressText } from "@/components/wallet/address-text";
 import { features } from "@/lib/features";
+
+/**
+ * Never retry aborted requests (cancelled by React Query on wallet switch or
+ * component unmount). All other failures follow the default retry count.
+ */
+function retryUnlessAborted(failureCount: number, err: unknown): boolean {
+  if (isApiError(err) && err.code === 'aborted') return false
+  return failureCount < 1
+}
 
 /**
  * staleTime for dashboard queries.
@@ -104,9 +114,9 @@ export default function DashboardPage() {
     refetch,
   } = useQuery<Session>({
     queryKey: queryKeys.session.byAddress(address ?? ""),
-    queryFn: () => getApi(address).getSession(),
+    queryFn: ({ signal }) => getApi(address).getSession(signal),
     enabled: !!address,
-    retry: 1,
+    retry: retryUnlessAborted,
     staleTime: DASHBOARD_STALE_TIME,
     gcTime: DASHBOARD_GC_TIME,
   });
@@ -119,9 +129,9 @@ export default function DashboardPage() {
     refetch: refetchVerification,
   } = useQuery<WalletVerification>({
     queryKey: queryKeys.walletVerification.byAddress(address ?? ""),
-    queryFn: () => getApi(address).verifyWallet(address as string),
+    queryFn: ({ signal }) => getApi(address).verifyWallet(address as string, signal),
     enabled: !!address,
-    retry: 1,
+    retry: retryUnlessAborted,
     staleTime: DASHBOARD_STALE_TIME,
     gcTime: DASHBOARD_GC_TIME,
   });
@@ -134,9 +144,9 @@ export default function DashboardPage() {
     refetch: refetchProfile,
   } = useQuery<MemberProfile | null>({
     queryKey: queryKeys.profile.byAddress(address ?? ""),
-    queryFn: () => getApi(address).getProfile(address as string),
+    queryFn: ({ signal }) => getApi(address).getProfile(address as string, signal),
     enabled: !!address,
-    retry: 1,
+    retry: retryUnlessAborted,
     staleTime: DASHBOARD_STALE_TIME,
     gcTime: DASHBOARD_GC_TIME,
   });
@@ -149,11 +159,11 @@ export default function DashboardPage() {
     refetch: refetchResources,
   } = useQuery<Resource[]>({
     queryKey: queryKeys.resources.all,
-    queryFn: () => getApi(address).listResources(),
+    queryFn: ({ signal }) => getApi(address).listResources(signal),
     enabled: !!address && features.resources,
     staleTime: DASHBOARD_STALE_TIME,
     gcTime: DASHBOARD_GC_TIME,
-    retry: 1,
+    retry: retryUnlessAborted,
   });
 
   const membership: Membership | undefined = session?.membership;
@@ -232,7 +242,7 @@ export default function DashboardPage() {
             />
           ) : isLoading ? (
             <LoadingState />
-          ) : isError ? (
+          ) : isError && !(isApiError(error) && error.code === 'aborted') ? (
             <ErrorState
               title="Failed to load session"
               message={safeErrorMessage(error)}
@@ -329,7 +339,7 @@ export default function DashboardPage() {
             />
           ) : profileLoading ? (
             <LoadingState />
-          ) : profileIsError ? (
+          ) : profileIsError && !(isApiError(profileError) && profileError.code === 'aborted') ? (
             <ErrorState
               title="Failed to load badges"
               message={safeErrorMessage(profileError)}
@@ -362,7 +372,7 @@ export default function DashboardPage() {
             />
           ) : resourcesLoading ? (
             <LoadingState message="Loading resources..." />
-          ) : resourcesIsError ? (
+          ) : resourcesIsError && !(isApiError(resourcesError) && resourcesError.code === 'aborted') ? (
             <ErrorState
               title="Failed to load resources"
               message={safeErrorMessage(resourcesError)}

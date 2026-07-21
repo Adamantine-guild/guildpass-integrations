@@ -11,6 +11,7 @@ import {
   Role,
 } from "@/lib/api";
 import { AuthError } from "@/lib/api/live";
+import { isApiError } from "@/lib/api/errors";
 import { FeatureGate } from "@/components/feature-gate";
 import { features } from "@/lib/features";
 import { applyOptimisticPolicy } from "@/lib/api/optimistic";
@@ -300,14 +301,20 @@ export default function PoliciesPage() {
     refetch,
   } = useQuery<AccessPolicy[]>({
     queryKey: queryKeys.policies.all,
-    queryFn: () => getApi(address).listPolicies(),
-    retry: 1,
+    queryFn: ({ signal }) => getApi(address).listPolicies(signal),
+    retry: (failureCount, err) => {
+      if (isApiError(err) && err.code === 'aborted') return false;
+      return failureCount < 1;
+    },
   });
 
   const { data: resources } = useQuery<Resource[]>({
     queryKey: queryKeys.resources.all,
-    queryFn: () => getApi(address).listResources(),
-    retry: 1,
+    queryFn: ({ signal }) => getApi(address).listResources(signal),
+    retry: (failureCount, err) => {
+      if (isApiError(err) && err.code === 'aborted') return false;
+      return failureCount < 1;
+    },
   });
 
   const {

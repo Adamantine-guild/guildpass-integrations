@@ -551,7 +551,7 @@ export class MockAccessApi implements AccessApi {
 
   // ── Read-only ──────────────────────────────────────────────────────────────
 
-  async getSession(): Promise<Session> {
+  async getSession(_signal?: AbortSignal): Promise<Session> {
     await initPromise
     const MOCK_SESSION_STATE = process.env.NEXT_PUBLIC_MOCK_SESSION_STATE || 'valid'
     if (MOCK_SESSION_STATE === 'cleared') {
@@ -572,24 +572,24 @@ export class MockAccessApi implements AccessApi {
     }
   }
 
-  async getCommunity(): Promise<Community> {
+  async getCommunity(_signal?: AbortSignal): Promise<Community> {
     await initPromise
     return community
   }
 
-  async getMembership(address: string): Promise<Membership | null> {
+  async getMembership(address: string, _signal?: AbortSignal): Promise<Membership | null> {
     await initPromise
     const data = ensureAddress(address)
     return data?.membership ?? null
   }
 
-  async getProfile(address: string): Promise<MemberProfile | null> {
+  async getProfile(address: string, _signal?: AbortSignal): Promise<MemberProfile | null> {
     await initPromise
     const data = ensureAddress(address)
     return data?.profile ?? null
   }
 
-  async listMembers(params?: { cursor?: string; limit?: number; filter?: string }): Promise<MemberRow[] | PaginatedMembers> {
+  async listMembers(params?: { cursor?: string; limit?: number; filter?: string }, _signal?: AbortSignal): Promise<MemberRow[] | PaginatedMembers> {
     await initPromise
     let list = Object.values(memberStore).map((m) => ({
       address: m.membership.address,
@@ -619,17 +619,17 @@ export class MockAccessApi implements AccessApi {
     }
   }
 
-  async listResources(): Promise<Resource[]> {
+  async listResources(_signal?: AbortSignal): Promise<Resource[]> {
     await initPromise
     return resources.map((r) => ({ ...r, roles: r.roles ?? [] }))
   }
 
-  async listPolicies(): Promise<AccessPolicy[]> {
+  async listPolicies(_signal?: AbortSignal): Promise<AccessPolicy[]> {
     await initPromise
     return policies.map((p) => ({ ...p, roles: p.roles ?? [] }))
   }
 
-  async getResource(id: string): Promise<Resource | ResourceLookupResult | null> {
+  async getResource(id: string, _signal?: AbortSignal): Promise<Resource | ResourceLookupResult | null> {
     await initPromise
     const r = resources.find((x) => x.id === id)
     return r
@@ -637,7 +637,7 @@ export class MockAccessApi implements AccessApi {
       : { status: 'not_found' }
   }
 
-  async getPolicy(resourceId: string): Promise<AccessPolicy | null> {
+  async getPolicy(resourceId: string, _signal?: AbortSignal): Promise<AccessPolicy | null> {
     await initPromise
     const p = policies.find((x) => x.resourceId === resourceId)
     return p ? { ...p, roles: p.roles ?? [] } : null
@@ -645,7 +645,7 @@ export class MockAccessApi implements AccessApi {
 
   // ── Admin queries & mutations ──────────────────────────────────────────────
 
-  async listWebhookEvents(): Promise<WebhookEventLog[]> {
+  async listWebhookEvents(_signal?: AbortSignal): Promise<WebhookEventLog[]> {
     await initPromise
     return new Promise((resolve) => setTimeout(() => resolve(mockWebhookEvents), 300))
   }
@@ -693,7 +693,7 @@ export class MockAccessApi implements AccessApi {
     return replay
   }
 
-  async getAnalyticsSummary(): Promise<AnalyticsSummary> {
+  async getAnalyticsSummary(_signal?: AbortSignal): Promise<AnalyticsSummary> {
     await initPromise
     // Simulate a short network delay so the loading state is exercisable
     return new Promise((resolve) =>
@@ -856,7 +856,7 @@ export class MockAccessApi implements AccessApi {
     // No server-side session to invalidate in mock mode
   }
 
-  async verifyWallet(address: string): Promise<WalletVerification> {
+  async verifyWallet(_address: string, _signal?: AbortSignal): Promise<WalletVerification> {
     await initPromise
     return {
       verified: true,

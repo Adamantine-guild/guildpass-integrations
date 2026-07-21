@@ -3,6 +3,7 @@ import { ReactNode, useMemo } from 'react'
 import { useAccount } from 'wagmi'
 import { useQuery } from '@tanstack/react-query'
 import { getApi, type AccessRule, type MembershipTier, type Role } from '@/lib/api'
+import { isApiError } from '@/lib/api/errors'
 import { computeAccessDecision } from '@/lib/api/access-decision'
 import {
   accessKeys,
@@ -34,23 +35,32 @@ export function Gated({
 
   const { data: session, isLoading: sessionLoading, isError, error, refetch } = useQuery({
     queryKey: queryKeys.session.byAddress(address ?? ''),
-    queryFn: () => getApi(address).getSession(),
+    queryFn: ({ signal }) => getApi(address).getSession(signal),
     enabled: !!address,
-    retry: 1,
+    retry: (failureCount, err) => {
+      if (isApiError(err) && err.code === 'aborted') return false
+      return failureCount < 1
+    },
   })
 
   const { data: policies, isLoading: policiesLoading } = useQuery({
     queryKey: queryKeys.policies.all,
-    queryFn: () => getApi(address).listPolicies(),
+    queryFn: ({ signal }) => getApi(address).listPolicies(signal),
     enabled: !!address && !hasExplicitRequirements && !!resourceId,
-    retry: 1,
+    retry: (failureCount, err) => {
+      if (isApiError(err) && err.code === 'aborted') return false
+      return failureCount < 1
+    },
   })
 
   const { data: resources, isLoading: resourcesLoading } = useQuery({
     queryKey: queryKeys.resources.all,
-    queryFn: () => getApi(address).listResources(),
+    queryFn: ({ signal }) => getApi(address).listResources(signal),
     enabled: !!address && !hasExplicitRequirements && !!resourceId,
-    retry: 1,
+    retry: (failureCount, err) => {
+      if (isApiError(err) && err.code === 'aborted') return false
+      return failureCount < 1
+    },
   })
 
   const dynamicPolicy = useMemo(() => {
@@ -110,7 +120,7 @@ export function Gated({
     return <LoadingState message="Checking access…" />
   }
 
-  if (isError) {
+  if (isError && !(isApiError(error) && error.code === 'aborted')) {
     return (
       <ErrorState
         title="Could not verify access"

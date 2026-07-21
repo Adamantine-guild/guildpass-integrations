@@ -447,16 +447,16 @@ export interface PaginatedMembers {
 
 export interface MemberAccessApi {
   // ── Read-only (no auth token required) ──────────────────────────────────
-  getSession(): Promise<Session>
-  getCommunity(): Promise<Community>
-  getMembership(address: string): Promise<Membership | null>
-  verifyWallet(address: string): Promise<WalletVerification>
-  getProfile(address: string): Promise<MemberProfile | null>
-  listMembers(params?: { cursor?: string; limit?: number; filter?: string }): Promise<MemberRow[] | PaginatedMembers>
-  listResources(): Promise<Resource[]>
-  listPolicies(): Promise<AccessPolicy[]>
-  getResource(id: string): Promise<ResourceLookupResult>
-  getPolicy(resourceId: string): Promise<AccessPolicy | null>
+  getSession(signal?: AbortSignal): Promise<Session>
+  getCommunity(signal?: AbortSignal): Promise<Community>
+  getMembership(address: string, signal?: AbortSignal): Promise<Membership | null>
+  verifyWallet(address: string, signal?: AbortSignal): Promise<WalletVerification>
+  getProfile(address: string, signal?: AbortSignal): Promise<MemberProfile | null>
+  listMembers(params?: { cursor?: string; limit?: number; filter?: string }, signal?: AbortSignal): Promise<MemberRow[] | PaginatedMembers>
+  listResources(signal?: AbortSignal): Promise<Resource[]>
+  listPolicies(signal?: AbortSignal): Promise<AccessPolicy[]>
+  getResource(id: string, signal?: AbortSignal): Promise<ResourceLookupResult>
+  getPolicy(resourceId: string, signal?: AbortSignal): Promise<AccessPolicy | null>
 }
 
 /**
@@ -465,7 +465,7 @@ export interface MemberAccessApi {
  */
 export interface AdminAccessApi {
   // ── Admin queries & mutations (require a valid SIWE token context) ────────
-  listWebhookEvents(): Promise<WebhookEventLog[]>
+  listWebhookEvents(signal?: AbortSignal): Promise<WebhookEventLog[]>
   /**
    * Subscribe to the admin webhook event stream.
    *
@@ -483,7 +483,7 @@ export interface AdminAccessApi {
    * @provisional Calls `GET /v1/admin/analytics` — endpoint not yet live in
    * guildpass-core. Contract tracked in issue #157; pending backend confirmation.
    */
-  getAnalyticsSummary(): Promise<AnalyticsSummary>
+  getAnalyticsSummary(signal?: AbortSignal): Promise<AnalyticsSummary>
   assignRole(address: string, role: Role): Promise<void>
   removeRole(address: string, role: Role): Promise<void>
   updatePolicy(policy: AccessPolicy): Promise<void>

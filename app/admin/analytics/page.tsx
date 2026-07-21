@@ -213,10 +213,11 @@ function AnalyticsContent() {
     refetch,
   } = useQuery<AnalyticsSummary>({
     queryKey: [...queryKeys.analytics.summary, address, authSession?.token ?? "anonymous"],
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       try {
-        return await getApi(address, authSession?.token).getAnalyticsSummary();
+        return await getApi(address, authSession?.token).getAnalyticsSummary(signal);
       } catch (err) {
+        if (isApiError(err) && err.code === 'aborted') throw err;
         if (isApiError(err) && err.code === "unauthorized") {
           markExpired();
         }
@@ -225,6 +226,7 @@ function AnalyticsContent() {
     },
     enabled: !!address && sessionStatus === "authenticated",
     retry: (failureCount, err) => {
+      if (isApiError(err) && err.code === 'aborted') return false;
       if (isApiError(err) && err.code === "unauthorized") return false;
       return failureCount < 1;
     },
@@ -256,7 +258,7 @@ function AnalyticsContent() {
         <SessionExpiredState />
       ) : isLoading ? (
         <LoadingState message="Loading analytics…" />
-      ) : isError ? (
+      ) : isError && !(isApiError(error) && error.code === 'aborted') ? (
         <ErrorState
           title="Error loading analytics"
           message={safeErrorMessage(error)}

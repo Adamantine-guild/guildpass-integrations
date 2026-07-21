@@ -9,6 +9,7 @@ export type ApiErrorCode =
   | 'service_unavailable'
   | 'bad_request'
   | 'unknown_error'
+  | 'aborted'
 
 export interface ApiErrorOptions {
   status?: number

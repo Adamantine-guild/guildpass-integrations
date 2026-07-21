@@ -100,7 +100,7 @@ function requestMethod(init?: RequestInit): string {
   return (init?.method ?? 'GET').toUpperCase()
 }
 
-function shouldRetryRequest(init?: RequestInit): boolean {
+function shouldRetryRequest(init?: RequestInit | RequestOptions): boolean {
   return requestMethod(init) === 'GET'
 }
 
@@ -393,7 +393,7 @@ function validateResponse(raw: any, schema: z.ZodType<any>, path?: string): void
 // ── Shared HTTP request helper ────────────────────────────────────────────────
 
 /**
- * Options accepted by {@link request}, extending the standard {@link RequestInit}
+ * Options accepted by {@link getJson}, extending the standard {@link RequestInit}
  * with knobs that let a single code path serve both the core API and the
  * integration gateway without changing observable behavior.
  */
@@ -420,59 +420,67 @@ interface RequestOptions extends RequestInit {
 }
 
 /**
+ * Returns true when the error represents an aborted fetch (DOMException with
+ * name "AbortError", or any error whose name is "AbortError").
+ */
+function isAbortError(err: unknown): boolean {
+  return (
+    err instanceof Error &&
+    (err.name === 'AbortError' ||
+      (typeof DOMException !== 'undefined' && err instanceof DOMException && err.name === 'AbortError'))
+  )
+}
+
+/**
  * The single internal HTTP entry point for this module.
  *
  * Centralizes base-URL joining, default `Content-Type`, JSON parsing, HTTP
- * error mapping, empty-body handling, and optional schema validation so no
- * individual endpoint function has to repeat that logic. Behavior is identical
- * to the previous `getJson` / `getIntegrationJson` pair; those are now thin
- * wrappers over this helper.
+ * error mapping, empty-body handling, schema validation, retry logic, and the
+ * per-path circuit breaker.
+ *
+ * An `AbortSignal` can be passed via `options.signal`. When the signal fires
+ * the in-flight fetch is cancelled, the retry loop exits immediately, and an
+ * `ApiError` with `code: 'aborted'` is thrown. Aborted requests are **never**
+ * counted by the circuit breaker.
  */
-async function request<T>(
-  path: string,
-  options: RequestOptions = {},
-): Promise<T> {
+async function getJson<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const {
     schema,
     prefixBase = true,
     networkErrorMessage = 'Unable to connect. Please check your connection and try again.',
     headers,
+    signal,
     ...init
   } = options
 
   const url = prefixBase ? `${BASE}${path}` : path
-
-  let res: Response
-
-  try {
-    res = await fetch(url, {
-      ...init,
-      headers: {
-        'Content-Type': 'application/json',
-        ...(headers ?? {}),
-      },
-    })
-  } catch (cause) {
-    throw new ApiError({
-      code: 'network_error',
-      safeMessage: networkErrorMessage,
-      retryable: true,
-      cause,
-    })
-  }
-}
-
-async function getJson<T>(path: string, init?: RequestInit, schema?: z.ZodType<any>): Promise<T> {
-  const retriesEnabled = shouldRetryRequest(init)
-  let res!: Response
+  const retriesEnabled = shouldRetryRequest(options)
 
   if (retriesEnabled) {
     assertCircuitAllowsRequest(path)
   }
 
+  let res!: Response
+
   for (let attempt = 1; ; attempt += 1) {
+    // Bail out immediately if the caller already aborted before we even fetch
+    if (signal?.aborted) {
+      throw new ApiError({
+        code: 'aborted',
+        safeMessage: 'Request was cancelled.',
+        retryable: false,
+      })
+    }
+
     try {
-      res = await fetchCore(path, init)
+      res = await fetch(url, {
+        ...init,
+        headers: {
+          'Content-Type': 'application/json',
+          ...(headers ?? {}),
+        },
+        signal,
+      })
 
       if (!res.ok) {
         throw createApiError(res.status, await parseErrorBody(res), path)
@@ -483,6 +491,30 @@ async function getJson<T>(path: string, init?: RequestInit, schema?: z.ZodType<a
       }
       break
     } catch (err) {
+      // Aborts must never be retried or counted as circuit-breaker failures
+      if (isAbortError(err)) {
+        throw new ApiError({
+          code: 'aborted',
+          safeMessage: 'Request was cancelled.',
+          retryable: false,
+          cause: err,
+        })
+      }
+
+      // Wrap raw network errors (fetch throwing, not an HTTP error response)
+      if (!(err instanceof ApiError)) {
+        const networkErr = new ApiError({
+          code: 'network_error',
+          safeMessage: networkErrorMessage,
+          retryable: true,
+          cause: err,
+        })
+        if (retriesEnabled) {
+          recordCircuitFailure(path)
+        }
+        throw networkErr
+      }
+
       const canRetry =
         retriesEnabled &&
         isRetryableError(err) &&
@@ -515,16 +547,17 @@ async function getJson<T>(path: string, init?: RequestInit, schema?: z.ZodType<a
   return raw as T
 }
 
-async function getJson<T>(path: string, init?: RequestInit, schema?: z.ZodType<any>): Promise<T> {
-  return request<T>(path, { ...init, schema })
-}
-
-async function getIntegrationJson<T>(path: string, schema?: z.ZodType<any>): Promise<T> {
-  return request<T>(path, {
+/**
+ * Convenience wrapper for integration-gateway calls. These calls use an
+ * absolute path (no BASE prefix) and present their own network-error copy.
+ */
+async function getIntegrationJson<T>(path: string, schema?: z.ZodType<any>, signal?: AbortSignal): Promise<T> {
+  return getJson<T>(path, {
     schema,
     prefixBase: false,
     networkErrorMessage:
       'Unable to connect to the integration gateway. Please check your configuration and try again.',
+    signal,
   })
 }
 
@@ -555,28 +588,30 @@ export class LiveAccessApi implements AccessApi {
     return this.token ? { Authorization: `Bearer ${this.token}` } : {}
   }
 
-  async getSession(): Promise<Session> {
+  async getSession(signal?: AbortSignal): Promise<Session> {
     const addr = this.address
       ? `?address=${encodeURIComponent(this.address)}`
       : ''
     const path = `/v1/session${addr}`
-    const raw = await getJson<BackendSession>(path, undefined, SessionSchema)
+    const raw = await getJson<BackendSession>(path, { schema: SessionSchema, signal })
     validateSessionResponse(raw, path)
     const session = mapSession(raw)
 
     if (this.address) {
-      const mPath = `/api/integration/membership?address=${encodeURIComponent(this.address)}`
       try {
         const integrationPath = `/api/integration/membership?address=${encodeURIComponent(this.address)}`
         const integrationMembership = await getIntegrationJson<BackendMember | null>(
           integrationPath,
           MembershipSchema.nullable(),
+          signal,
         )
         validateMembershipResponse(integrationMembership, integrationPath)
         if (integrationMembership) {
           session.membership = mapMembership(integrationMembership)
         }
-      } catch {
+      } catch (err) {
+        // Re-throw aborts — don't swallow cancellation
+        if (err instanceof ApiError && err.code === 'aborted') throw err
         // If the integration gateway is unavailable, retain the membership data
         // returned by the core API rather than failing the entire session.
       }
@@ -585,36 +620,38 @@ export class LiveAccessApi implements AccessApi {
     return session
   }
 
-  async getCommunity(): Promise<Community> {
+  async getCommunity(signal?: AbortSignal): Promise<Community> {
     const path = '/v1/community'
-    const raw = await getJson<BackendSession['community']>(path, undefined, CommunitySchema)
+    const raw = await getJson<BackendSession['community']>(path, { schema: CommunitySchema, signal })
     validateCommunityResponse(raw, path)
     return mapCommunity(raw)
   }
 
-  async getMembership(address: string): Promise<Membership | null> {
+  async getMembership(address: string, signal?: AbortSignal): Promise<Membership | null> {
     const raw = await getIntegrationJson<BackendMember | null>(
       `/api/integration/membership?address=${encodeURIComponent(address)}`,
       MembershipSchema.nullable(),
+      signal,
     )
     return raw ? mapMembership(raw) : null
   }
 
-  async verifyWallet(address: string): Promise<WalletVerification> {
+  async verifyWallet(address: string, signal?: AbortSignal): Promise<WalletVerification> {
     return await getIntegrationJson<WalletVerification>(
       `/api/integration/verify?address=${encodeURIComponent(address)}`,
       WalletVerificationSchema,
+      signal,
     )
   }
 
-  async getProfile(address: string): Promise<MemberProfile | null> {
+  async getProfile(address: string, signal?: AbortSignal): Promise<MemberProfile | null> {
     const path = `/v1/members/${encodeURIComponent(address)}/profile`
-    const raw = await getJson<BackendMember | null>(path, undefined, MemberProfileSchema.nullable())
+    const raw = await getJson<BackendMember | null>(path, { schema: MemberProfileSchema.nullable(), signal })
     validateMemberProfileResponse(raw, path)
     return raw ? mapMemberProfile(raw, address) : null
   }
 
-  async listMembers(params?: { cursor?: string; limit?: number; filter?: string }): Promise<MemberRow[] | PaginatedMembers> {
+  async listMembers(params?: { cursor?: string; limit?: number; filter?: string }, signal?: AbortSignal): Promise<MemberRow[] | PaginatedMembers> {
     const query = new URLSearchParams()
     if (params?.cursor) query.append('cursor', params.cursor)
     if (params?.limit !== undefined) query.append('limit', String(params.limit))
@@ -631,7 +668,7 @@ export class LiveAccessApi implements AccessApi {
       }),
     ])
 
-    const raw = await getJson<BackendMember[] | { members: BackendMember[]; nextCursor?: string }>(path, undefined, schema)
+    const raw = await getJson<BackendMember[] | { members: BackendMember[]; nextCursor?: string }>(path, { schema, signal })
 
     if (Array.isArray(raw)) {
       validateMemberRowsResponse(raw, path)
@@ -645,29 +682,31 @@ export class LiveAccessApi implements AccessApi {
     }
   }
 
-  async listResources(): Promise<Resource[]> {
+  async listResources(signal?: AbortSignal): Promise<Resource[]> {
     const path = '/v1/resources'
-    const raw = await getJson<BackendResource[]>(path, undefined, z.array(ResourceSchema))
+    const raw = await getJson<BackendResource[]>(path, { schema: z.array(ResourceSchema), signal })
     validateResourcesResponse(raw, path)
     return raw.map(mapResource)
   }
 
-  async listPolicies(): Promise<AccessPolicy[]> {
+  async listPolicies(signal?: AbortSignal): Promise<AccessPolicy[]> {
     const path = '/v1/policies'
-    const raw = await getJson<BackendPolicy[]>(path, undefined, z.array(AccessPolicySchema))
+    const raw = await getJson<BackendPolicy[]>(path, { schema: z.array(AccessPolicySchema), signal })
     validatePoliciesResponse(raw, path)
     return raw.map(mapPolicy)
   }
 
-  async getResource(id: string): Promise<ResourceLookupResult> {
+  async getResource(id: string, signal?: AbortSignal): Promise<ResourceLookupResult> {
     const path = `/v1/resources/${encodeURIComponent(id)}`
     try {
-      const raw = await getJson<BackendResource>(path, undefined, ResourceSchema)
+      const raw = await getJson<BackendResource>(path, { schema: ResourceSchema, signal })
       if (raw && Object.keys(raw).length > 0) {
         validateResourceResponse(raw, path)
         return { status: 'found', data: mapResource(raw), source: 'direct' }
       }
     } catch (err) {
+      // Re-throw aborts immediately
+      if (err instanceof ApiError && err.code === 'aborted') throw err
       if (!(err instanceof ApiError && err.status === 404)) {
         return {
           status: 'error',
@@ -685,7 +724,7 @@ export class LiveAccessApi implements AccessApi {
 
     // Fallback for older backends or if direct lookup returned empty/404
     try {
-      const list = await this.listResources()
+      const list = await this.listResources(signal)
       const resource = list.find((r) => r.id === id)
       return resource
         ? { status: 'found', data: resource, source: 'fallback' }
@@ -704,33 +743,37 @@ export class LiveAccessApi implements AccessApi {
     }
   }
 
-  async getPolicy(resourceId: string): Promise<AccessPolicy | null> {
+  async getPolicy(resourceId: string, signal?: AbortSignal): Promise<AccessPolicy | null> {
     const path = `/v1/policies/${encodeURIComponent(resourceId)}`
     try {
-      const raw = await getJson<BackendPolicy>(path, undefined, AccessPolicySchema)
+      const raw = await getJson<BackendPolicy>(path, { schema: AccessPolicySchema, signal })
       if (raw && Object.keys(raw).length > 0) {
         validatePolicyResponse(raw, path)
         return mapPolicy(raw)
       }
     } catch (err) {
+      // Re-throw aborts immediately
+      if (err instanceof ApiError && err.code === 'aborted') throw err
       if (!(err instanceof ApiError && err.status === 404)) {
         throw err
       }
     }
 
     // Fallback for older backends or if direct lookup returned empty/404
-    const list = await this.listPolicies()
+    const list = await this.listPolicies(signal)
     return list.find((p) => p.resourceId === resourceId) ?? null
   }
 
   // ── Admin queries & mutations (require a valid SIWE token) ─────────────────
 
-  async listWebhookEvents(): Promise<WebhookEventLog[]> {
+  async listWebhookEvents(signal?: AbortSignal): Promise<WebhookEventLog[]> {
     const path = '/v1/admin/events'
     const raw = await getJson<any[]>(path, {
       method: 'GET',
       headers: this.authHeaders(),
-    }, z.array(WebhookEventLogSchema))
+      schema: z.array(WebhookEventLogSchema),
+      signal,
+    })
     validateWebhookEventsResponse(raw, path)
     return raw.map(mapWebhookEvent)
   }
@@ -800,12 +843,14 @@ export class LiveAccessApi implements AccessApi {
    *
    * Expected response shape: {@link AnalyticsSummary}
    */
-  async getAnalyticsSummary(): Promise<AnalyticsSummary> {
+  async getAnalyticsSummary(signal?: AbortSignal): Promise<AnalyticsSummary> {
     const path = '/v1/admin/analytics'
     return getJson<AnalyticsSummary>(path, {
       method: 'GET',
       headers: this.authHeaders(),
-    }, AnalyticsSummarySchema)
+      schema: AnalyticsSummarySchema,
+      signal,
+    })
   }
 
   async assignRole(address: string, role: Role): Promise<void> {
@@ -848,7 +893,8 @@ export class LiveAccessApi implements AccessApi {
     const data = await getJson<{ nonce: string }>('/v1/auth/siwe/nonce', {
       method: 'POST',
       body: JSON.stringify({ address }),
-    }, z.object({ nonce: z.string() }))
+      schema: z.object({ nonce: z.string() }),
+    })
     return data.nonce
   }
 
@@ -865,24 +911,12 @@ export class LiveAccessApi implements AccessApi {
     }>('/v1/auth/siwe/verify', {
       method: 'POST',
       body: JSON.stringify({ message, signature }),
-    }, SiweAuthSessionSchema)
+      schema: SiweAuthSessionSchema,
+    })
 
     return { isAuthenticated: true, ...data }
   }
 
-  /**
-   * Exchange a refresh token for a new access token (and rotated refresh
-   * token).  Calls the proposed `POST /v1/auth/siwe/refresh` endpoint.
-   *
-   * The backend contract is:
-   *   Request body:  `{ "refreshToken": "<opaque>" }`
-   *   Success (200): same shape as `/v1/auth/siwe/verify` response
-   *   Failure (401): refresh token expired or invalid → must re-sign
-   *
-   * This method is intentionally *not* best-effort: if the network call
-   * fails for any reason, the error propagates so the caller can decide
-   * whether to retry or transition the user to the 'expired' state.
-   */
   async siweRefresh(refreshToken: string): Promise<SiweAuthSession> {
     const data = await getJson<{
       token: string
@@ -893,7 +927,8 @@ export class LiveAccessApi implements AccessApi {
     }>('/v1/auth/siwe/refresh', {
       method: 'POST',
       body: JSON.stringify({ refreshToken }),
-    }, SiweAuthSessionSchema)
+      schema: SiweAuthSessionSchema,
+    })
 
     return { isAuthenticated: true, ...data }
   }

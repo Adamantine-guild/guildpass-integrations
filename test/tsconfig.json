@@ -36,6 +36,12 @@
     "../lib/query/*.ts",
     "../types/**/*.d.ts",
     "../scripts/sync-api-types.js",
-    "./*.test.ts"
+    "./*.test.ts",
+    "../lib/api/live.ts",
+    "../lib/api/errors.ts",
+    "../lib/api/validators.ts",
+    "../lib/api/mock-storage.ts",
+    "../lib/api/role-removal.ts",
+    "../lib/validation/policy.ts"
   ]
 }

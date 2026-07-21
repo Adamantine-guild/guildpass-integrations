@@ -140,10 +140,11 @@ function WebhookLogsContent() {
     refetch,
   } = useQuery({
     queryKey: [...queryKeys.webhookEvents.all, address, authSession?.token ?? 'anonymous'],
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       try {
-        return await getApi(address, authSession?.token).listWebhookEvents();
+        return await getApi(address, authSession?.token).listWebhookEvents(signal);
       } catch (err) {
+        if (isApiError(err) && err.code === 'aborted') throw err;
         if (isApiError(err) && err.code === 'unauthorized') {
           markExpired();
         }
@@ -153,6 +154,7 @@ function WebhookLogsContent() {
     enabled: !!address && sessionStatus === 'authenticated',
     refetchInterval: streamAvailable ? false : 15000,
     retry: (failureCount, err) => {
+      if (isApiError(err) && err.code === 'aborted') return false;
       if (isApiError(err) && err.code === 'unauthorized') return false;
       return failureCount < 1;
     },
@@ -266,7 +268,7 @@ function WebhookLogsContent() {
         <SessionExpiredState />
       ) : isLoading ? (
         <LoadingState message="Ingesting latest system events..." />
-      ) : isError ? (
+      ) : isError && !(isApiError(error) && error.code === 'aborted') ? (
         <ErrorState
           title="Error loading log feed"
           message={safeErrorMessage(error)}
