@@ -108,6 +108,27 @@ export function invalidateAuthSession(): void {
   clearAuthSession()
 }
 
+/**
+ * Returns the raw bearer token from the stored session, or `null` if no
+ * session exists.  This is the narrowest possible read operation — callers
+ * that only need the token string should prefer this over loading the full
+ * session object so the storage implementation can be swapped later
+ * (e.g. to httpOnly cookies) without touching call sites.
+ */
+export function getStoredToken(): string | null {
+  const session = loadAuthSessionIncludingExpired()
+  return session?.token ?? null
+}
+
+/**
+ * Returns the wallet address from the stored session, or `null` if no
+ * session exists.
+ */
+export function getStoredAddress(): string | null {
+  const session = loadAuthSessionIncludingExpired()
+  return session?.address ?? null
+}
+
 // ── Expiry helpers ────────────────────────────────────────────────────────────
 
 /**

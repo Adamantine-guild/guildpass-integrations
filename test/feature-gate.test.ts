@@ -30,6 +30,26 @@ describe('FeatureGate', () => {
     assert.doesNotMatch(html, /Test Feature is not available/)
   })
 
+  test('renders children for a matching rollout bucket', () => {
+    const html = renderFeatureGate({
+      enabled: { enabled: false, key: 'analytics', rolloutPercentage: 100 },
+      rolloutIdentifier: '0xabc123',
+      name: 'Analytics',
+      children: React.createElement('div', null, 'Canary content'),
+    })
+    assert.match(html, /Canary content/)
+  })
+
+  test('renders FeatureUnavailable when rollout has no identifier', () => {
+    const html = renderFeatureGate({
+      enabled: { enabled: false, key: 'analytics', rolloutPercentage: 100 },
+      name: 'Analytics',
+      children: React.createElement('div', null, 'Should not render'),
+    })
+    assert.match(html, /Analytics is not available/)
+    assert.doesNotMatch(html, /Should not render/)
+  })
+
   test('renders FeatureUnavailable when enabled is false', () => {
     const html = renderFeatureGate({
       enabled: false,

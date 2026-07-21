@@ -48,7 +48,6 @@
 import {
   createContext,
   useCallback,
-  useContext,
   useEffect,
   useMemo,
   useReducer,
@@ -69,6 +68,7 @@ import { config } from '@/lib/config'
 import { SiweAuthSession, AdminSessionStatus } from '@/lib/api/types'
 import {
   clearAuthSession,
+  getStoredToken,
   isRefreshTokenExpired,
   loadAuthSession,
   loadAuthSessionIncludingExpired,
@@ -97,6 +97,10 @@ type AuthBroadcastMessage =
 const AUTH_CHANNEL_NAME = 'guildpass:auth'
 
 // ── SIWE Auth Context ─────────────────────────────────────────────────────────
+//
+// The context, its type, and the useSiweAuth hook live in
+// '@/lib/wallet/siwe-context' so they can be imported without pulling in the
+// wagmi/wallet stack. This provider supplies the value.
 
 export interface SiweAuthContextValue {
   /** The authenticated session, or null if the user has not signed in. */
@@ -155,6 +159,8 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
 
   // Guard against concurrent refresh attempts in the same tab
   const isRefreshing = useRef(false)
+  // Guard against concurrent sign-in attempts (prevents racing nonce fetches)
+  const isSigningIn = useRef(false)
   // Renewal timer handle
   const renewalTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   // BroadcastChannel reference — created once, torn down on unmount
@@ -336,6 +342,8 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
 
   const signIn = useCallback(async () => {
     if (!address) return
+    if (isSigningIn.current) return
+    isSigningIn.current = true
     dispatch({ type: 'sign-in-start' })
     try {
       const api = getApi(address)
@@ -365,6 +373,8 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
           ? err.safeMessage
           : 'Sign-in was cancelled or failed. Please try again.',
       })
+    } finally {
+      isSigningIn.current = false
     }
   }, [address, chainId, signMessageAsync, scheduleRenewal, broadcast])
 
@@ -372,7 +382,7 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
 
   const logout = useCallback(async () => {
     cancelRenewal()
-    const token = state.authSession?.token
+    const token = getStoredToken()
     clearAuthSession()
     dispatch({ type: 'clear' })
     broadcast({ type: 'signed-out' })
@@ -382,7 +392,7 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
         // best-effort server-side invalidation
       })
     }
-  }, [address, state.authSession, cancelRenewal, broadcast, disconnect])
+  }, [address, cancelRenewal, broadcast, disconnect])
 
   // ── markExpired ─────────────────────────────────────────────────────────────
 

@@ -230,10 +230,10 @@ describe('computeAccessDecision with rules', () => {
 // ── Mock scenarios evaluate identically under the new model ──────────────────
 
 describe('existing mock scenarios (against the alpha policy)', () => {
-  beforeEach(() => resetMockData())
+  beforeEach(async () => { await resetMockData() })
 
   async function decideAlpha(scenario: Parameters<typeof applyMockScenario>[0]) {
-    applyMockScenario(scenario, ADDRESS)
+    await applyMockScenario(scenario, ADDRESS)
     const api = new MockAccessApi(ADDRESS)
     const [s, policy] = await Promise.all([api.getSession(), api.getPolicy('alpha')])
     assert.ok(policy)
@@ -260,7 +260,7 @@ describe('existing mock scenarios (against the alpha policy)', () => {
 // ── New composable mock policies ─────────────────────────────────────────────
 
 describe('composable mock policies', () => {
-  beforeEach(() => resetMockData())
+  beforeEach(async () => { await resetMockData() })
 
   test('mod-lounge policy is a genuine AND of tier and role', async () => {
     const policy = await new MockAccessApi(ADDRESS).getPolicy('mod-lounge')
@@ -301,7 +301,7 @@ describe('composable mock policies', () => {
   })
 
   test('mock sessions expose the badges used by badge rules', async () => {
-    applyMockScenario('active-member', ADDRESS)
+    await applyMockScenario('active-member', ADDRESS)
     const s = await new MockAccessApi(ADDRESS).getSession()
     assert.ok(Array.isArray(s.badges))
   })

@@ -1,9 +1,9 @@
 'use client';
 
-import { useState, Fragment } from 'react';
+import { useState, useCallback, useEffect, Fragment } from 'react';
 import { useAccount } from 'wagmi';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { getApi, replayMockEvent, type WebhookEventLog } from '@/lib/api';
+import { getApi, replayMockEvent } from '@/lib/api';
 import { config } from '@/lib/config';
 import { isApiError } from '@/lib/api/errors';
 import { queryKeys } from '@/lib/query';
@@ -13,6 +13,7 @@ import { AdminGuard } from '@/components/admin-guard';
 import { useSiweAuth } from '@/lib/wallet/providers';
 import { Button } from '@/components/ui/button';
 import { Select } from "@/components/ui/select";
+import type { WebhookEventLog } from '@/lib/api/types';
 
 function SessionExpiredState() {
   const { signIn, isSigningIn } = useSiweAuth();
@@ -36,6 +37,89 @@ function SessionExpiredState() {
   );
 }
 
+/** Pretty-print a JSON value as a collapsible tree fragment. */
+function JsonView({ data }: { data: unknown }) {
+  if (data === null || data === undefined) return <span className="text-muted-foreground italic">null</span>
+  if (typeof data === 'string') return <span className="text-green-600 dark:text-green-400">"{data}"</span>
+  if (typeof data === 'number' || typeof data === 'boolean') return <span className="text-blue-600 dark:text-blue-400">{String(data)}</span>
+  if (Array.isArray(data)) {
+    return (
+      <span>
+        <span className="text-muted-foreground">[</span>
+        <div className="pl-4 border-l border-border ml-1">
+          {data.map((item, i) => (
+            <div key={i} className="py-0.5">
+              <JsonView data={item} />
+              {i < data.length - 1 && <span className="text-muted-foreground">,</span>}
+            </div>
+          ))}
+        </div>
+        <span className="text-muted-foreground">]</span>
+      </span>
+    )
+  }
+  if (typeof data === 'object') {
+    const entries = Object.entries(data as Record<string, unknown>)
+    return (
+      <span>
+        <span className="text-muted-foreground">{'{'}</span>
+        <div className="pl-4 border-l border-border ml-1">
+          {entries.map(([key, val], i) => (
+            <div key={key} className="py-0.5">
+              <span className="text-purple-600 dark:text-purple-400 font-medium">"{key}"</span>
+              <span className="text-muted-foreground">: </span>
+              <JsonView data={val} />
+              {i < entries.length - 1 && <span className="text-muted-foreground">,</span>}
+            </div>
+          ))}
+        </div>
+        <span className="text-muted-foreground">{'}'}</span>
+      </span>
+    )
+  }
+  return <span>{String(data)}</span>
+}
+
+/** Expandable row showing full event payload details. */
+function EventDetailRow({ event }: { event: WebhookEventLog }) {
+  return (
+    <div className="bg-muted/30 px-6 py-4 border-t border-border">
+      <div className="space-y-3">
+        <div>
+          <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1">
+            Event ID
+          </h4>
+          <code className="text-xs font-mono text-foreground break-all">{event.id}</code>
+        </div>
+
+        {event.fullPayload ? (
+          <div>
+            <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1">
+              Full Payload
+            </h4>
+            <div className="bg-card border border-border rounded-md p-3 overflow-x-auto max-h-80 overflow-y-auto">
+              <pre className="text-xs font-mono leading-relaxed whitespace-pre-wrap">
+                <JsonView data={event.fullPayload} />
+              </pre>
+            </div>
+          </div>
+        ) : (
+          <div>
+            <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1">
+              Payload Summary
+            </h4>
+            <div className="bg-card border border-border rounded-md p-3 overflow-x-auto">
+              <pre className="text-xs font-mono leading-relaxed whitespace-pre-wrap">
+                <JsonView data={event.payloadSummary} />
+              </pre>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function WebhookLogsContent() {
   const { address } = useAccount();
   const { authSession, markExpired, sessionStatus } = useSiweAuth();
@@ -43,6 +127,8 @@ function WebhookLogsContent() {
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [replayingId, setReplayingId] = useState<string | null>(null);
+  const [streamAvailable, setStreamAvailable] = useState(true);
 
   const isMockMode = config.apiMode === 'mock';
 
@@ -65,31 +151,63 @@ function WebhookLogsContent() {
       }
     },
     enabled: !!address && sessionStatus === 'authenticated',
+    refetchInterval: streamAvailable ? false : 15000,
     retry: (failureCount, err) => {
       if (isApiError(err) && err.code === 'unauthorized') return false;
       return failureCount < 1;
     },
   });
 
+
+  useEffect(() => {
+    if (!address || sessionStatus !== 'authenticated') return undefined;
+
+    setStreamAvailable(true);
+    const api = getApi(address, authSession?.token);
+    return api.subscribeWebhookEvents(
+      (event) => {
+        queryClient.setQueryData<WebhookEventLog[]>(
+          [...queryKeys.webhookEvents.all, address, authSession?.token ?? 'anonymous'],
+          (current = []) => [event, ...current.filter((existing) => existing.id !== event.id)],
+        );
+      },
+      (err) => {
+        if (isApiError(err) && err.code === 'unauthorized') {
+          markExpired();
+          return;
+        }
+        setStreamAvailable(false);
+        void queryClient.invalidateQueries({
+          queryKey: [...queryKeys.webhookEvents.all, address, authSession?.token ?? 'anonymous'],
+        });
+      },
+    );
+  }, [address, authSession?.token, markExpired, queryClient, sessionStatus]);
+
+  const handleReplay = useCallback(async (eventId: string) => {
+    setReplayingId(eventId);
+    try {
+      await replayMockEvent(eventId);
+      // Invalidate the query so the feed refreshes and shows the replayed entry
+      await queryClient.invalidateQueries({
+        queryKey: [...queryKeys.webhookEvents.all, address, authSession?.token ?? 'anonymous'],
+      });
+    } catch {
+      // Error already handled by the replay function throwing
+    } finally {
+      setReplayingId(null);
+    }
+  }, [queryClient, address, authSession?.token]);
+
+  const toggleExpand = useCallback((id: string) => {
+    setExpandedId((prev) => (prev === id ? null : id));
+  }, []);
+
   const filteredEvents = events.filter((evt) => {
     const matchStatus = statusFilter === 'all' || evt.status === statusFilter;
     const matchType = typeFilter === 'all' || evt.eventType === typeFilter;
     return matchStatus && matchType;
   });
-
-  function toggleExpand(id: string) {
-    setExpandedId((prev) => (prev === id ? null : id));
-  }
-
-  function handleReplay(evt: WebhookEventLog) {
-    if (!isMockMode) return;
-    replayMockEvent(evt);
-    queryClient.invalidateQueries({ queryKey: queryKeys.webhookEvents.all });
-  }
-
-  function isReplayedEvent(evt: WebhookEventLog): boolean {
-    return evt.id.startsWith('replay_');
-  }
 
   return (
     <div className="space-y-6 p-4 sm:p-6">
@@ -99,7 +217,7 @@ function WebhookLogsContent() {
         </h1>
         <p className="text-sm text-muted-foreground">
           Operational telemetry stream for community subscription events, upgrades, and access
-          switches.
+          switches. {streamAvailable ? 'Live stream connected.' : 'Streaming unavailable; polling every 15 seconds.'}
         </p>
       </div>
 
@@ -165,114 +283,92 @@ function WebhookLogsContent() {
             <table className="min-w-full divide-y divide-border text-left text-sm">
               <thead className="bg-muted text-muted-foreground uppercase text-xs font-semibold tracking-wider">
                 <tr>
+                  <th className="px-6 py-3 w-8"></th>
                   <th className="px-6 py-3">Timestamp</th>
                   <th className="px-6 py-3">Event Type</th>
                   <th className="px-6 py-3">Target Address/Resource</th>
                   <th className="px-6 py-3">Status</th>
                   <th className="px-6 py-3">Payload Summary</th>
-                  {isMockMode && <th className="px-6 py-3 w-0">Actions</th>}
+                  {isMockMode && <th className="px-6 py-3 w-24">Actions</th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-border bg-transparent text-card-foreground">
-                {filteredEvents.map((evt) => {
-                  const expanded = expandedId === evt.id;
-                  const replayed = isReplayedEvent(evt);
-                  return (
-                    <Fragment key={evt.id}>
-                      <tr
-                        onClick={() => toggleExpand(evt.id)}
-                        className="hover:bg-muted/50 transition-colors cursor-pointer"
-                        aria-expanded={expanded}
-                      >
-                        <td className="px-6 py-4 whitespace-nowrap text-muted-foreground font-mono text-xs">
-                          {new Date(evt.timestamp).toLocaleString()}
-                        </td>
-                        <td className="px-6 py-4 font-semibold font-mono text-xs text-foreground">
-                          {evt.eventType}
-                          {replayed && (
-                            <span className="ml-2 inline-flex items-center rounded bg-purple-100 px-1.5 py-0.5 text-[10px] font-bold uppercase text-purple-700 dark:bg-purple-900/30 dark:text-purple-300">
+                {filteredEvents.map((evt) => (
+                  <Fragment key={evt.id}>
+                    <tr
+                      className="hover:bg-muted/50 transition-colors cursor-pointer"
+                      onClick={() => toggleExpand(evt.id)}
+                    >
+                      <td className="px-6 py-4 whitespace-nowrap text-muted-foreground">
+                        <span className="inline-block transition-transform duration-200"
+                          style={{ transform: expandedId === evt.id ? 'rotate(90deg)' : 'rotate(0deg)' }}
+                        >
+                          ▶
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-muted-foreground font-mono text-xs">
+                        {new Date(evt.timestamp).toLocaleString()}
+                      </td>
+                      <td className="px-6 py-4 font-semibold font-mono text-xs text-foreground">
+                        <div className="flex items-center gap-2">
+                          <span>{evt.eventType}</span>
+                          {evt.isReplay && (
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">
                               Replay
                             </span>
                           )}
-                        </td>
-                        <td className="px-6 py-4 text-muted-foreground font-mono text-xs">
-                          <AddressText
-                            address={evt.affectedIdentifier}
-                            label="Target address or resource"
-                            announceInvalid={false}
-                            className="text-muted-foreground"
-                          />
-                        </td>
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 text-muted-foreground font-mono text-xs">
+                        <AddressText
+                          address={evt.affectedIdentifier}
+                          label="Target address or resource"
+                          announceInvalid={false}
+                          className="text-muted-foreground"
+                        />
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <span
+                          className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold tracking-wide uppercase ${
+                            evt.status === 'success'
+                              ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400'
+                              : evt.status === 'failed'
+                                ? 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400'
+                                : 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400'
+                          }`}
+                        >
+                          {evt.status}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 text-muted-foreground text-xs max-w-xs truncate font-mono">
+                        {JSON.stringify(evt.payloadSummary)}
+                      </td>
+                      {isMockMode && (
                         <td className="px-6 py-4 whitespace-nowrap">
-                          <span
-                            className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold tracking-wide uppercase ${
-                              evt.status === 'success'
-                                ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400'
-                                : evt.status === 'failed'
-                                  ? 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400'
-                                  : 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400'
-                            }`}
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={replayingId === evt.id}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleReplay(evt.id);
+                            }}
+                            className="text-xs"
                           >
-                            {evt.status}
-                          </span>
+                            {replayingId === evt.id ? 'Replaying…' : 'Replay'}
+                          </Button>
                         </td>
-                        <td className="px-6 py-4 text-muted-foreground text-xs max-w-xs truncate font-mono">
-                          {JSON.stringify(evt.payloadSummary)}
-                        </td>
-                        {isMockMode && (
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleReplay(evt);
-                              }}
-                              className="inline-flex items-center gap-1 rounded-md border border-border bg-background px-2 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                              aria-label={`Replay ${evt.eventType} event`}
-                            >
-                              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                                <polyline points="1 4 1 10 7 10" />
-                                <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
-                              </svg>
-                              Replay
-                            </button>
-                          </td>
-                        )}
-                      </tr>
-                      {expanded && (
-                        <tr className="bg-muted/20">
-                          <td colSpan={isMockMode ? 6 : 5} className="px-6 py-4">
-                            <div className="space-y-3">
-                              <div className="flex items-center gap-2">
-                                <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                                  Full Event Payload
-                                </h4>
-                                {replayed && (
-                                  <span className="text-[10px] text-purple-600 dark:text-purple-400">
-                                    — debug replay (original id: {evt.id.replace(/^replay_(.+)_\d+$/, '$1')})
-                                  </span>
-                                )}
-                              </div>
-                              <pre className="overflow-x-auto rounded-md border border-border bg-background p-3 text-xs font-mono text-foreground whitespace-pre-wrap break-all">
-                                {JSON.stringify(
-                                  {
-                                    id: evt.id,
-                                    eventType: evt.eventType,
-                                    status: evt.status,
-                                    timestamp: evt.timestamp,
-                                    affectedIdentifier: evt.affectedIdentifier,
-                                    payloadSummary: evt.payloadSummary,
-                                  },
-                                  null,
-                                  2,
-                                )}
-                              </pre>
-                            </div>
-                          </td>
-                        </tr>
                       )}
-                    </Fragment>
-                  );
-                })}
+                    </tr>
+                    {expandedId === evt.id && (
+                      <tr key={`${evt.id}-detail`}>
+                        <td colSpan={isMockMode ? 7 : 6} className="p-0">
+                          <EventDetailRow event={evt} />
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                ))}
               </tbody>
             </table>
           </div>

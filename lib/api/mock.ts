@@ -13,8 +13,8 @@
  *
  * Session simulation:
  *  Set NEXT_PUBLIC_MOCK_SESSION_STATE to control the simulated auth boundary:
- *    "expired"         — siweVerify returns an already-expired token; admin
- *                        mutations (assignRole/updatePolicy) throw a 401 ApiError
+ *    "expired"         — siweVerify returns an already-expired access token
+ *                        with a valid refresh token so renewal can be tested
  *    "unauthenticated" — siweVerify always throws, simulating a backend rejection
  *    (default)         — normal mock behaviour (instant auth, 1-hour token)
  *
@@ -36,13 +36,21 @@ import {
   MembershipTier,
   PaginatedMembers,
   Resource,
+  ResourceLookupResult,
   Role,
   Session,
   SiweAuthSession,
   WalletVerification,
   WebhookEventLog,
+  WebhookEventUnsubscribe,
 } from './types'
 import { ApiError } from './errors'
+import {
+  loadPersistedState,
+  persistState,
+  clearPersistedState,
+  LS_KEY,
+} from './mock-storage'
 
 /** Read once at module load so it is stable across renders. */
 const MOCK_SESSION_STATE =
@@ -124,7 +132,20 @@ const DEFAULT_WEBHOOK_EVENTS: WebhookEventLog[] = [
     status: "success",
     timestamp: new Date(Date.now() - 1000 * 60 * 15).toISOString(),
     affectedIdentifier: "0x71C...3A90",
-    payloadSummary: { network: "ethereum", txHash: "0xabc...123", tier: "pro" }
+    payloadSummary: { network: "ethereum", txHash: "0xabc...123", tier: "pro" },
+    fullPayload: {
+      event: "membership.created",
+      data: {
+        address: "0x71C7656EC7ab88b098defB751B7401B5f6d8976A",
+        tier: "pro",
+        timestamp: new Date(Date.now() - 1000 * 60 * 15).toISOString(),
+      },
+      metadata: {
+        network: "ethereum",
+        txHash: "0xabc123def456abc123def456abc123def456abc123def456abc123def456abc123",
+        blockNumber: 19548291,
+      },
+    },
   },
   {
     id: "wh_01J2",
@@ -132,7 +153,19 @@ const DEFAULT_WEBHOOK_EVENTS: WebhookEventLog[] = [
     status: "success",
     timestamp: new Date(Date.now() - 1000 * 60 * 120).toISOString(),
     affectedIdentifier: "0x94F...8B21",
-    payloadSummary: { reason: "Subscription term elapsed" }
+    payloadSummary: { reason: "Subscription term elapsed" },
+    fullPayload: {
+      event: "membership.expired",
+      data: {
+        address: "0x94F68E164F64B8A2E2B9E7B1A3Ec5E7E3d8eB2A1",
+        tier: "standard",
+        expiresAt: new Date(Date.now() - 1000 * 60 * 120).toISOString(),
+      },
+      metadata: {
+        reason: "Subscription term elapsed",
+        gracePeriodDays: 7,
+      },
+    },
   },
   {
     id: "wh_01J3",
@@ -140,8 +173,23 @@ const DEFAULT_WEBHOOK_EVENTS: WebhookEventLog[] = [
     status: "failed",
     timestamp: new Date(Date.now() - 1000 * 60 * 360).toISOString(),
     affectedIdentifier: "0xF39...2441",
-    payloadSummary: { network: "ethereum", reason: "Gas limit hit execution revert" }
-  }
+    payloadSummary: { network: "ethereum", reason: "Gas limit hit execution revert" },
+    fullPayload: {
+      event: "tier.upgraded",
+      data: {
+        address: "0xF39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+        fromTier: "free",
+        toTier: "standard",
+      },
+      metadata: {
+        network: "ethereum",
+        txHash: "0xdef789abc456def789abc456def789abc456def789abc456def789abc456def789",
+        error: "Gas limit hit execution revert",
+        gasUsed: "850000",
+        gasLimit: "800000",
+      },
+    },
+  },
 ]
 
 /**
@@ -213,6 +261,58 @@ let policies: AccessPolicy[] = [...DEFAULT_POLICIES]
 let mockWebhookEvents: WebhookEventLog[] = [...DEFAULT_WEBHOOK_EVENTS]
 let memberStore: Record<string, { membership: Membership; roles: Role[]; profile: MemberProfile }> = { ...DEFAULT_MEMBER_STORE }
 
+function createMockStreamEvent(): WebhookEventLog {
+  const base = DEFAULT_WEBHOOK_EVENTS[Math.floor(Math.random() * DEFAULT_WEBHOOK_EVENTS.length)]
+  const statuses: WebhookEventLog['status'][] = ['success', 'pending', 'failed']
+  const event: WebhookEventLog = {
+    ...base,
+    id: `stream_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+    timestamp: new Date().toISOString(),
+    status: statuses[Math.floor(Math.random() * statuses.length)],
+    isReplay: false,
+    fullPayload: {
+      ...(base.fullPayload ?? base.payloadSummary),
+      source: 'mock-sse-stream',
+    },
+  }
+  mockWebhookEvents.unshift(event)
+  return event
+}
+let saveTimeout: ReturnType<typeof setTimeout> | null = null
+
+const initPromise = loadPersistedState().then((persisted) => {
+  if (!persisted) return
+  community = persisted.community
+  resources = persisted.resources
+  policies = persisted.policies
+  mockWebhookEvents = persisted.webhookEvents
+  memberStore = persisted.memberStore
+})
+
+function schedulePersist(): void {
+  if (saveTimeout) clearTimeout(saveTimeout)
+  saveTimeout = setTimeout(() => {
+    persistState({
+      community,
+      resources,
+      policies,
+      webhookEvents: mockWebhookEvents,
+      memberStore,
+    }).catch(() => {})
+  }, 200)
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('beforeunload', () => {
+    if (saveTimeout) clearTimeout(saveTimeout)
+    try {
+      localStorage.setItem(LS_KEY, JSON.stringify({
+        community, resources, policies, webhookEvents: mockWebhookEvents, memberStore,
+      }))
+    } catch { /* ignore */ }
+  })
+}
+
 function ensureAddress(addr?: string) {
   if (!addr) return null
   if (!memberStore[addr]) {
@@ -239,23 +339,98 @@ type MockScenario =
   | 'denied-resource' 
   | 'admin-session-expired' 
   | 'no-roles'
+  | 'multiple-communities'
+
+/**
+ * Replay a webhook event by cloning it into the mock event store.
+ * The clone is marked with `isReplay: true` and inserted at the top
+ * of the feed with a `pending` status so it is visually distinct.
+ *
+ * This function operates directly on the module-level mock store and
+ * is intended for use by the admin event replay tool. It must only be
+ * called when `config.apiMode === 'mock'`.
+ */
+export async function replayMockEvent(eventId: string): Promise<WebhookEventLog> {
+  await initPromise
+  const original = mockWebhookEvents.find((e) => e.id === eventId)
+  if (!original) {
+    throw new ApiError({
+      status: 404,
+      code: 'not_found',
+      safeMessage: `Event "${eventId}" not found in mock store.`,
+    })
+  }
+
+  const replay: WebhookEventLog = {
+    ...original,
+    id: `replay_${eventId}_${Date.now()}`,
+    timestamp: new Date().toISOString(),
+    isReplay: true,
+    status: 'pending',
+    fullPayload: original.fullPayload ?? { ...original.payloadSummary },
+  }
+
+  mockWebhookEvents.unshift(replay)
+  schedulePersist()
+
+  // Apply side effects to the member store for recognised event types.
+  const addr = original.affectedIdentifier
+  if (addr && addr.startsWith('0x')) {
+    const existing = memberStore[addr]
+    switch (original.eventType) {
+      case 'membership.created':
+      case 'membership.renewed': {
+        const tier = (original.payloadSummary.tier as MembershipTier) ?? 'free'
+        memberStore[addr] = {
+          membership: { address: addr, tier, active: true },
+          roles: existing?.roles ?? ['member'],
+          profile: existing?.profile ?? { address: addr, displayName: `Replayed ${addr.slice(0, 6)}`, badges: [] },
+        }
+        break
+      }
+      case 'membership.expired':
+        if (existing) {
+          memberStore[addr] = {
+            ...existing,
+            membership: { ...existing.membership, active: false },
+          }
+        }
+        break
+      case 'tier.upgraded': {
+        const newTier = (original.payloadSummary.tier as MembershipTier) ?? 'standard'
+        if (existing) {
+          memberStore[addr] = {
+            ...existing,
+            membership: { ...existing.membership, tier: newTier },
+          }
+        }
+        break
+      }
+      // policy.updated — no member-store side effect
+    }
+  }
+
+  return replay
+}
 
 /**
  * Reset all mock data to its initial state.
  */
-export function resetMockData() {
+export async function resetMockData() {
+  await initPromise
   community = { ...DEFAULT_COMMUNITY }
   resources = [...DEFAULT_RESOURCES]
   policies = [...DEFAULT_POLICIES]
   mockWebhookEvents = [...DEFAULT_WEBHOOK_EVENTS]
   memberStore = { ...DEFAULT_MEMBER_STORE }
+  await clearPersistedState()
 }
 
 /**
  * Apply a predefined scenario preset for testing.
  */
-export function applyMockScenario(scenario: MockScenario, address: string = '0x1234567890123456789012345678901234567890') {
-  resetMockData()
+export async function applyMockScenario(scenario: MockScenario, address: string = '0x1234567890123456789012345678901234567890') {
+  await resetMockData()
   
   switch (scenario) {
     case 'active-member':
@@ -344,71 +519,48 @@ export function applyMockScenario(scenario: MockScenario, address: string = '0x1
         },
       }
       break
+
+    case 'multiple-communities':
+      // Seed a member whose data reflects participation in more than one
+      // community. The mock session model exposes a single active community,
+      // so this preset points the active community at a multi-community hub
+      // and marks the member's badges to reflect their other memberships.
+      // Existing single-community presets are unaffected.
+      community = {
+        id: 'guildpass-hub',
+        name: 'GuildPass Hub (Multi-Community)',
+        description:
+          'Shared hub for a member active across several communities',
+        tiers: ['free', 'standard', 'pro'],
+      }
+      memberStore[address] = {
+        membership: {
+          address,
+          tier: 'standard',
+          active: true,
+        },
+        roles: ['member'],
+        profile: {
+          address,
+          displayName: 'Multi-Community Member',
+          badges: [
+            'GuildPass Demo Community',
+            'Builders Collective',
+            'Design Guild',
+          ],
+        },
+      }
+      break
   }
 }
 
-/**
- * Replay a webhook event into the mock event store for local debugging.
- *
- * Creates a debug copy of `event` with a replay-prefixed id, fresh timestamp,
- * and `pending` status.  The replayed entry is prepended to the event feed
- * so it appears at the top without mutating the original.
- *
- * Side effects are applied when the event type is recognised:
- *  - membership.*      → seeds/updates the affected address in memberStore
- *  - tier.upgraded     → promotes the affected address's tier
- *
- * This function is a no-op unless `config.apiMode === 'mock'` — callers
- * must gate it themselves.
- */
-export function replayMockEvent(event: WebhookEventLog): WebhookEventLog {
-  const replayed: WebhookEventLog = {
-    ...event,
-    id: `replay_${event.id}_${Date.now()}`,
-    status: 'pending',
-    timestamp: new Date().toISOString(),
-  }
+/** Nonce TTL in milliseconds (5 minutes — mirrors siwe-go default). */
+const NONCE_TTL_MS = 5 * 60 * 1000
 
-  mockWebhookEvents = [replayed, ...mockWebhookEvents]
-
-  // Apply side effects to the member store for recognised event types.
-  const addr = event.affectedIdentifier
-  if (addr && addr.startsWith('0x')) {
-    const existing = memberStore[addr]
-    switch (event.eventType) {
-      case 'membership.created':
-      case 'membership.renewed': {
-        const tier = (event.payloadSummary.tier as MembershipTier) ?? 'free'
-        memberStore[addr] = {
-          membership: { address: addr, tier, active: true },
-          roles: existing?.roles ?? ['member'],
-          profile: existing?.profile ?? { address: addr, displayName: `Replayed ${addr.slice(0, 6)}`, badges: [] },
-        }
-        break
-      }
-      case 'membership.expired':
-        if (existing) {
-          memberStore[addr] = {
-            ...existing,
-            membership: { ...existing.membership, active: false },
-          }
-        }
-        break
-      case 'tier.upgraded': {
-        const newTier = (event.payloadSummary.tier as MembershipTier) ?? 'standard'
-        if (existing) {
-          memberStore[addr] = {
-            ...existing,
-            membership: { ...existing.membership, tier: newTier },
-          }
-        }
-        break
-      }
-      // policy.updated — no member-store side effect
-    }
-  }
-
-  return replayed
+/** Extract the nonce value from an EIP-4361 message string. */
+function extractNonceFromMessage(message: string): string | null {
+  const match = message.match(/Nonce:\s*(\S+)/)
+  return match ? match[1] : null
 }
 
 /** Generate a short random hex nonce (16 bytes). */
@@ -430,11 +582,15 @@ function throwMockUnauthorized(): never {
 }
 
 export class MockAccessApi implements AccessApi {
+  /** In-memory nonce store keyed by nonce value → creation timestamp. */
+  readonly #nonceStore = new Map<string, number>()
+
   constructor(private readonly address?: string) { }
 
   // ── Read-only ──────────────────────────────────────────────────────────────
 
   async getSession(): Promise<Session> {
+    await initPromise
     const MOCK_SESSION_STATE = process.env.NEXT_PUBLIC_MOCK_SESSION_STATE || 'valid'
     if (MOCK_SESSION_STATE === 'cleared') {
       return {
@@ -455,20 +611,24 @@ export class MockAccessApi implements AccessApi {
   }
 
   async getCommunity(): Promise<Community> {
+    await initPromise
     return community
   }
 
   async getMembership(address: string): Promise<Membership | null> {
+    await initPromise
     const data = ensureAddress(address)
     return data?.membership ?? null
   }
 
   async getProfile(address: string): Promise<MemberProfile | null> {
+    await initPromise
     const data = ensureAddress(address)
     return data?.profile ?? null
   }
 
   async listMembers(params?: { cursor?: string; limit?: number; filter?: string }): Promise<MemberRow[] | PaginatedMembers> {
+    await initPromise
     let list = Object.values(memberStore).map((m) => ({
       address: m.membership.address,
       roles: m.roles,
@@ -498,19 +658,25 @@ export class MockAccessApi implements AccessApi {
   }
 
   async listResources(): Promise<Resource[]> {
+    await initPromise
     return resources.map((r) => ({ ...r, roles: r.roles ?? [] }))
   }
 
   async listPolicies(): Promise<AccessPolicy[]> {
+    await initPromise
     return policies.map((p) => ({ ...p, roles: p.roles ?? [] }))
   }
 
-  async getResource(id: string): Promise<Resource | null> {
+  async getResource(id: string): Promise<Resource | ResourceLookupResult | null> {
+    await initPromise
     const r = resources.find((x) => x.id === id)
-    return r ? { ...r, roles: r.roles ?? [] } : null
+    return r
+      ? { status: 'found', data: { ...r, roles: r.roles ?? [] }, source: 'direct' }
+      : { status: 'not_found' }
   }
 
   async getPolicy(resourceId: string): Promise<AccessPolicy | null> {
+    await initPromise
     const p = policies.find((x) => x.resourceId === resourceId)
     return p ? { ...p, roles: p.roles ?? [] } : null
   }
@@ -518,10 +684,55 @@ export class MockAccessApi implements AccessApi {
   // ── Admin queries & mutations ──────────────────────────────────────────────
 
   async listWebhookEvents(): Promise<WebhookEventLog[]> {
+    await initPromise
     return new Promise((resolve) => setTimeout(() => resolve(mockWebhookEvents), 300))
   }
 
+  subscribeWebhookEvents(onEvent: (event: WebhookEventLog) => void): WebhookEventUnsubscribe {
+    const intervalId = globalThis.setInterval(() => {
+      onEvent(createMockStreamEvent())
+    }, 5000)
+
+    globalThis.setTimeout(() => onEvent(createMockStreamEvent()), 1000)
+    return () => globalThis.clearInterval(intervalId)
+  }
+
+  /**
+   * Replay a webhook event by cloning it and adding the clone to the mock
+   * event store. The clone is clearly marked as a replayed entry so the UI
+   * can distinguish it from original events.
+   *
+   * This method is intentionally only available on MockAccessApi — it is
+   * NOT part of the AccessApi interface and must never be called in live mode.
+   */
+  async replayEvent(eventId: string): Promise<WebhookEventLog> {
+    await initPromise
+    const original = mockWebhookEvents.find((e) => e.id === eventId)
+    if (!original) {
+      throw new ApiError({
+        status: 404,
+        code: 'not_found',
+        safeMessage: `Event "${eventId}" not found in mock store.`,
+      })
+    }
+
+    const replay: WebhookEventLog = {
+      ...original,
+      id: `replay_${eventId}_${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      isReplay: true,
+      status: 'pending',
+      fullPayload: original.fullPayload ?? { ...original.payloadSummary },
+    }
+
+    // Insert at the beginning so it appears at the top of the feed
+    mockWebhookEvents.unshift(replay)
+    schedulePersist()
+    return replay
+  }
+
   async getAnalyticsSummary(): Promise<AnalyticsSummary> {
+    await initPromise
     // Simulate a short network delay so the loading state is exercisable
     return new Promise((resolve) =>
       setTimeout(() => resolve({ ...MOCK_ANALYTICS_SUMMARY }), 300),
@@ -529,20 +740,25 @@ export class MockAccessApi implements AccessApi {
   }
 
   async assignRole(address: string, role: Role): Promise<void> {
+    await initPromise
     if (MOCK_SESSION_STATE === 'expired') throwMockUnauthorized()
     const data = ensureAddress(address)
     if (!data) return
     if (!data.roles.includes(role)) data.roles.push(role)
+    schedulePersist()
   }
 
   async removeRole(address: string, role: Role): Promise<void> {
+    await initPromise
     if (MOCK_SESSION_STATE === 'expired') throwMockUnauthorized()
     const data = memberStore[address]
     if (!data) return
     data.roles = data.roles.filter((r) => r !== role)
+    schedulePersist()
   }
 
   async updatePolicy(policy: AccessPolicy): Promise<void> {
+    await initPromise
     if (MOCK_SESSION_STATE === 'expired') throwMockUnauthorized()
     const result = validatePolicy(policy)
 
@@ -553,6 +769,7 @@ export class MockAccessApi implements AccessApi {
     const idx = policies.findIndex((p) => p.resourceId === result.value.resourceId)
     if (idx >= 0) policies[idx] = result.value
     else policies.push(result.value)
+    schedulePersist()
   }
 
   // ── SIWE mock endpoints ────────────────────────────────────────────────────
@@ -562,7 +779,10 @@ export class MockAccessApi implements AccessApi {
    * stored server-side to prevent replay attacks.
    */
   async getNonce(_address: string): Promise<string> {
-    return randomHex()
+    await initPromise
+    const nonce = randomHex()
+    this.#nonceStore.set(nonce, Date.now())
+    return nonce
   }
 
   /**
@@ -575,10 +795,34 @@ export class MockAccessApi implements AccessApi {
    *                     renewal path can be exercised in tests.
    * - unauthenticated:  Throws a 401 ApiError to simulate backend rejection.
    */
-  async siweVerify(_message: string, _signature: string): Promise<SiweAuthSession> {
+  async siweVerify(message: string, _signature: string): Promise<SiweAuthSession> {
+    await initPromise
     if (MOCK_SESSION_STATE === 'unauthenticated') {
       throwMockUnauthorized()
     }
+
+    // ── Nonce validation (single-use + TTL) ─────────────────────────────
+    const nonce = extractNonceFromMessage(message)
+    if (!nonce || !this.#nonceStore.has(nonce)) {
+      throw new ApiError({
+        status: 400,
+        code: 'bad_request',
+        safeMessage: 'Nonce not found or already used.',
+      })
+    }
+
+    const createdAt = this.#nonceStore.get(nonce)!
+    if (Date.now() - createdAt > NONCE_TTL_MS) {
+      this.#nonceStore.delete(nonce)
+      throw new ApiError({
+        status: 400,
+        code: 'bad_request',
+        safeMessage: 'Nonce expired. Please request a new one.',
+      })
+    }
+
+    // Consume the nonce (single-use enforced)
+    this.#nonceStore.delete(nonce)
 
     const expiresAt =
       MOCK_SESSION_STATE === 'expired'
@@ -609,10 +853,11 @@ export class MockAccessApi implements AccessApi {
    * Throws a 401 if the token is missing or malformed to demonstrate the
    * "refresh failed → sign-out" flow in tests.
    *
-   * Set NEXT_PUBLIC_MOCK_SESSION_STATE=expired to force siweRefresh to also
+   * Set NEXT_PUBLIC_MOCK_SESSION_STATE=refresh-expired to force siweRefresh to
    * fail (simulates a fully-expired or revoked refresh token).
    */
   async siweRefresh(refreshToken: string): Promise<SiweAuthSession> {
+    await initPromise
     if (MOCK_SESSION_STATE === 'expired' || MOCK_SESSION_STATE === 'unauthenticated') {
       throw new ApiError({
         status: 401,
@@ -645,10 +890,12 @@ export class MockAccessApi implements AccessApi {
 
   /** No-op logout — the sessionStorage entry is cleared by the provider. */
   async siweLogout(_token: string): Promise<void> {
+    await initPromise
     // No server-side session to invalidate in mock mode
   }
 
   async verifyWallet(address: string): Promise<WalletVerification> {
+    await initPromise
     return {
       verified: true,
       method: 'mock',

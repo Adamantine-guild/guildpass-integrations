@@ -20,12 +20,18 @@ export interface SiweConfig {
 
 export type FeatureFlagKey =
   | 'adminPolicies'
+  | 'adminSettings'
   | 'events'
   | 'analytics'
   | 'resources'
   | 'governance'
 
 export type FeatureFlags = Record<FeatureFlagKey, boolean>
+
+export interface IntegrationGatewayConfig {
+  /** Expected same-origin value for CSRF checks on /api/integration/* mutations */
+  allowedOrigin?: string
+}
 
 export interface AppConfig {
   /** 'mock' when NEXT_PUBLIC_MOCK_MODE or NEXT_PUBLIC_DEMO_MODE is 'true', otherwise 'live' */
@@ -40,6 +46,8 @@ export interface AppConfig {
   siwe: SiweConfig
   /** Feature flag booleans */
   features: FeatureFlags
+  /** Server route-handler integration gateway security configuration */
+  integrationGateway: IntegrationGatewayConfig
   /** Whether to validate API responses in log-only mode */
   apiValidationLogOnly: boolean
 }
@@ -153,8 +161,16 @@ function flag(varName: string, defaultVal: boolean): boolean {
   return val === 'true'
 }
 
+const integrationGateway: IntegrationGatewayConfig = {
+  allowedOrigin: env('INTEGRATION_ALLOWED_ORIGIN'),
+}
+
 const features: FeatureFlags = {
   adminPolicies: flag('NEXT_PUBLIC_FEATURE_ADMIN_POLICIES', isMock),
+  // Advanced admin tooling (community settings). Persistence is deferred for the
+  // MVP, so this defaults on only in mock/demo mode and stays off in live until
+  // the settings backend ships.
+  adminSettings: flag('NEXT_PUBLIC_FEATURE_ADMIN_SETTINGS', isMock),
   events: flag('NEXT_PUBLIC_FEATURE_EVENTS', isMock),
   analytics: flag('NEXT_PUBLIC_FEATURE_ANALYTICS', false),
   resources: flag('NEXT_PUBLIC_FEATURE_RESOURCES', isMock),
@@ -166,6 +182,7 @@ export const config: AppConfig = Object.freeze({
   apiUrl,
   siwe: Object.freeze(siwe),
   features: Object.freeze(features),
+  integrationGateway: Object.freeze(integrationGateway),
   get apiValidationLogOnly() {
     return flag('NEXT_PUBLIC_API_VALIDATION_LOG_ONLY', false)
   },

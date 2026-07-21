@@ -7,8 +7,8 @@ import { getApi } from '../lib/api'
 describe('Mock Controls', () => {
   const TEST_ADDRESS = '0x1234567890123456789012345678901234567890'
   
-  beforeEach(() => {
-    resetMockData()
+  beforeEach(async () => {
+    await resetMockData()
   })
 
   it('should reset mock data', async () => {
@@ -20,13 +20,13 @@ describe('Mock Controls', () => {
     assert.notDeepStrictEqual(initialMembers, updatedMembers)
 
     // Reset and verify
-    resetMockData()
+    await resetMockData()
     const resetMembers = await api.listMembers()
     assert.deepStrictEqual(resetMembers, initialMembers)
   })
 
   it('should apply active-member scenario', async () => {
-    applyMockScenario('active-member', TEST_ADDRESS)
+    await applyMockScenario('active-member', TEST_ADDRESS)
     const api = getApi(TEST_ADDRESS)
     const session = await api.getSession()
     assert.strictEqual(session.membership?.tier, 'standard')
@@ -35,7 +35,7 @@ describe('Mock Controls', () => {
   })
 
   it('should apply expired-member scenario', async () => {
-    applyMockScenario('expired-member', TEST_ADDRESS)
+    await applyMockScenario('expired-member', TEST_ADDRESS)
     const api = getApi(TEST_ADDRESS)
     const session = await api.getSession()
     assert.strictEqual(session.membership?.active, false)
@@ -43,7 +43,7 @@ describe('Mock Controls', () => {
   })
 
   it('should apply denied-resource scenario', async () => {
-    applyMockScenario('denied-resource', TEST_ADDRESS)
+    await applyMockScenario('denied-resource', TEST_ADDRESS)
     const api = getApi(TEST_ADDRESS)
     const session = await api.getSession()
     assert.strictEqual(session.membership?.tier, 'free')

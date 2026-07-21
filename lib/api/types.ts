@@ -6,6 +6,7 @@
  */
 
 import { z } from 'zod';
+import { ApiError } from './errors'
 
 export type Role = 'member' | 'moderator' | 'admin'
 
@@ -33,6 +34,10 @@ export const WebhookEventLogSchema = z.object({
   timestamp: z.string(),
   affectedIdentifier: z.string(),
   payloadSummary: WebhookPayloadSummarySchema,
+  /** Raw event payload for detail inspection (optional — added by the replay/debug tool). */
+  fullPayload: z.record(z.unknown()).optional(),
+  /** True when this entry was injected via the replay/debug tool rather than ingested from a real webhook. */
+  isReplay: z.boolean().optional(),
 })
 
 export interface Community {
@@ -117,6 +122,12 @@ export interface Resource {
   roles?: Role[]
   content?: ResourceContentBlock[]
 }
+
+export type ResourceLookupResult =
+  | { status: 'found'; data: Resource; source: 'direct' | 'fallback' }
+  | { status: 'not_found' }
+  | { status: 'error'; error: ApiError }
+
 
 export const ResourceSchema = z.object({
   id: z.string(),
@@ -221,6 +232,8 @@ export type WebhookEventType =
   | 'tier.upgraded' 
   | 'policy.updated';
 
+export type WebhookEventUnsubscribe = () => void
+
 export interface WebhookEventLog {
   id: string;
   eventType: WebhookEventType;
@@ -233,6 +246,10 @@ export interface WebhookEventLog {
     tier?: string;
     reason?: string;
   };
+  /** Raw event payload for detail inspection (optional — added by the replay/debug tool). */
+  fullPayload?: Record<string, unknown>;
+  /** True when this entry was injected via the replay/debug tool rather than ingested from a real webhook. */
+  isReplay?: boolean;
 }
 
 export interface WalletVerification {
@@ -438,7 +455,7 @@ export interface MemberAccessApi {
   listMembers(params?: { cursor?: string; limit?: number; filter?: string }): Promise<MemberRow[] | PaginatedMembers>
   listResources(): Promise<Resource[]>
   listPolicies(): Promise<AccessPolicy[]>
-  getResource(id: string): Promise<Resource | null>
+  getResource(id: string): Promise<ResourceLookupResult>
   getPolicy(resourceId: string): Promise<AccessPolicy | null>
 }
 
@@ -449,6 +466,17 @@ export interface MemberAccessApi {
 export interface AdminAccessApi {
   // ── Admin queries & mutations (require a valid SIWE token context) ────────
   listWebhookEvents(): Promise<WebhookEventLog[]>
+  /**
+   * Subscribe to the admin webhook event stream.
+   *
+   * @provisional Live mode attempts `GET /v1/admin/events/stream` as an
+   * SSE-compatible stream. If setup fails, the caller should fall back to
+   * `listWebhookEvents()` polling.
+   */
+  subscribeWebhookEvents(
+    onEvent: (event: WebhookEventLog) => void,
+    onError?: (error: unknown) => void,
+  ): WebhookEventUnsubscribe
   /**
    * Fetch the analytics summary for the admin dashboard.
    *

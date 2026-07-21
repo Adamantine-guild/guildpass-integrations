@@ -234,6 +234,9 @@ function getTsType(propSchema) {
       }
       return 'Record<string, unknown>';
     default:
+      if (propSchema.type !== undefined) {
+        throw new Error(`Unsupported OpenAPI schema type: ${propSchema.type}`);
+      }
       return 'any';
   }
 }
@@ -294,9 +297,11 @@ const STATIC_SCHEMA_NAMES = new Set([
   'WebhookPayloadSummary',
 ]);
 
-function generateTypes() {
-  const rawSchema = fs.readFileSync(SCHEMA_PATH, 'utf8');
-  const schema = JSON.parse(rawSchema);
+function generateTypes(schema) {
+  if (!schema) {
+    const rawSchema = fs.readFileSync(SCHEMA_PATH, 'utf8');
+    schema = JSON.parse(rawSchema);
+  }
   const schemasObj = schema.components.schemas;
 
   let output = `/**
@@ -401,4 +406,8 @@ function main() {
   }
 }
 
-main();
+module.exports = { getTsType, generateTypes };
+
+if (require.main === module) {
+  main();
+}

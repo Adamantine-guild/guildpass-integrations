@@ -2,6 +2,8 @@ import { ReactNode } from 'react'
 import Link from 'next/link'
 import { buttonVariants } from './ui/button'
 import { DeniedState } from './ui/api-states'
+import { isFeatureEnabled } from '@/lib/features'
+import type { FeatureGateEnabled } from '@/lib/features'
 
 export function FeatureUnavailable({ name }: { name: string }) {
   return (
@@ -20,12 +22,14 @@ export function FeatureUnavailable({ name }: { name: string }) {
 export function FeatureGate({
   enabled,
   name,
+  rolloutIdentifier,
   children,
 }: {
-  enabled: boolean
+  enabled: FeatureGateEnabled
+  rolloutIdentifier?: string | null
   name: string
   children: ReactNode
 }) {
-  if (!enabled) return <FeatureUnavailable name={name} />
+  if (!isFeatureEnabled(enabled, rolloutIdentifier)) return <FeatureUnavailable name={name} />
   return <>{children}</>
 }

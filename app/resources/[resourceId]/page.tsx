@@ -17,10 +17,8 @@ export default function DynamicResourceDocs() {
   const { address } = useAccount();
 
   const {
-    data: resource,
+    data: resourceResult,
     isLoading: resourceLoading,
-    isError,
-    error,
     refetch,
   } = useQuery({
     queryKey: queryKeys.resources.detail(resourceId),
@@ -29,10 +27,12 @@ export default function DynamicResourceDocs() {
     retry: 1,
   });
 
+  const resource = resourceResult?.status === 'found' ? resourceResult.data : undefined;
+
   const { data: policy, isLoading: policyLoading } = useQuery({
     queryKey: queryKeys.policies.byResource(resourceId),
     queryFn: () => getApi(address).getPolicy(resourceId),
-    enabled: !!resourceId && !!address,
+    enabled: !!resourceId && !!address && resourceResult?.status === 'found',
     retry: 1,
   });
 
@@ -56,12 +56,12 @@ export default function DynamicResourceDocs() {
     );
   }
 
-  if (isError) {
+  if (resourceResult?.status === 'error') {
     return (
       <FeatureGate enabled={features.resources} name="Resources">
         <ErrorState
           title="Could not load resource"
-          message={safeErrorMessage(error)}
+          message={safeErrorMessage(resourceResult.error)}
           onRetry={() => refetch()}
         />
       </FeatureGate>

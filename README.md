@@ -59,6 +59,7 @@ In mock mode, visit `/developer` (or click "Dev" in the nav) to access:
   - Denied Resource: Free tier user denied access to Alpha Docs
   - Admin Session Expired: Admin user to test expired SIWE sessions
   - No Roles: Member with no roles assigned
+  - Multiple Communities: Member active across several communities
 
 ### Run against live guildpass-core
 
@@ -153,17 +154,21 @@ Modules that are experimental or not yet production-ready are controlled by envi
 | Variable | Default (mock mode) | Default (prod) | Module |
 | -------- | ------------------- | -------------- | ------ |
 | `NEXT_PUBLIC_FEATURE_ADMIN_POLICIES` | `true` | `true` | Access policy editor in `/admin/policies` |
+| `NEXT_PUBLIC_FEATURE_ADMIN_SETTINGS` | `true` | `false` | Advanced admin community settings at `/admin/settings` (persistence deferred for MVP) |
 | `NEXT_PUBLIC_FEATURE_EVENTS` | `true` | `false` | Event access page at `/events/*` |
 | `NEXT_PUBLIC_FEATURE_RESOURCES` | `true` | `true` | Gated resources at `/resources/*` |
 | `NEXT_PUBLIC_FEATURE_ANALYTICS` | `false` | `false` | Analytics module (not yet built) |
 | `NEXT_PUBLIC_FEATURE_GOVERNANCE` | `false` | `false` | Governance module (not yet built) |
+| `NEXT_PUBLIC_FEATURE_<NAME>_ROLLOUT_PCT` | unset | unset | Optional 0–100 percentage rollout for the matching flag |
 
 **How flags work:**
 
 - All flags are read at build time from `NEXT_PUBLIC_*` environment variables. No remote flag service is involved.
 - An omitted variable falls back to the default shown above.
-- In **mock/demo mode** (`NEXT_PUBLIC_MOCK_MODE=true`), flags for `adminPolicies`, `events`, and `resources` default to `true` so the full demo works locally without any extra configuration.
-- Flags for deferred modules (`analytics`, `governance`) default to `false` in every environment and must be explicitly set to `"true"` to enable them.
+- Add `NEXT_PUBLIC_FEATURE_<NAME>_ROLLOUT_PCT` to canary a module to a percentage of users or sessions. For example, `NEXT_PUBLIC_FEATURE_ANALYTICS_ROLLOUT_PCT=25` enables analytics for identifiers whose deterministic bucket is 0–24.
+- Rollout checks hash the feature key plus a wallet address or persisted anonymous session ID into a stable 0–99 bucket, so the same identifier receives the same experience across visits. If no rollout percentage is set, the original boolean flag behavior is used exactly.
+- In **mock/demo mode** (`NEXT_PUBLIC_MOCK_MODE=true`), flags for `adminPolicies`, `adminSettings`, `events`, and `resources` default to `true` so the full demo works locally without any extra configuration.
+- Flags for deferred modules (`analytics`, `governance`) default to `false` in every environment and must be explicitly set to `"true"` for full access or given a rollout percentage for canary access.
 - Navigation links for disabled modules are automatically hidden.
 - Visiting a disabled route directly renders a clear "Feature unavailable" message instead of broken content.
 
@@ -171,8 +176,9 @@ Modules that are experimental or not yet production-ready are controlled by envi
 
 1. Add the typed field to `FeatureFlags` in `lib/features.ts` and wire up the `flag()` call.
 2. Document the variable in `.env.example` with its recommended production default.
-3. Wrap the relevant page with `<FeatureGate enabled={features.yourFlag} name="Module Name">`.
-4. Filter the corresponding nav item using `features.yourFlag`.
+3. Wrap the relevant page with `<FeatureGate enabled={features.yourFlag} name="Module Name">` for a binary flag, or pass `featureRollouts.yourFlag` plus `rolloutIdentifier` when the page supports percentage rollout.
+4. Filter the corresponding nav item using `features.yourFlag` for binary launches, or `isFeatureEnabledForIdentifier('yourFlag', identifier)` when the current wallet/session identifier is available.
+5. Optionally document `NEXT_PUBLIC_FEATURE_YOUR_FLAG_ROLLOUT_PCT` when the module supports a canary rollout.
 
 ---
 
@@ -257,7 +263,8 @@ All live requests are sent to `NEXT_PUBLIC_CORE_API_URL` (default `http://localh
 | `GET` | `/v1/resources/:id` | — | Single resource lookup (with list fallback) |
 | `GET` | `/v1/policies` | — | All access policies |
 | `GET` | `/v1/policies/:resourceId` | — | Single policy lookup (with list fallback) |
-| `GET` | `/v1/admin/events` | Bearer | Admin webhook event feed |
+| `GET` | `/v1/admin/events` | Bearer | Admin webhook event feed fallback snapshot |
+| `GET` | `/v1/admin/events/stream` | Bearer | **Provisional proposal for guildpass-core**: SSE stream of admin webhook events (`text/event-stream`, one `WebhookEventLog` JSON object per `data:` frame). The frontend attempts this push transport first and silently falls back to `/v1/admin/events` polling if unavailable. |
 | `POST` | `/v1/members/:address/roles` | Bearer | Assign role to member |
 | `PUT` | `/v1/policies/:resourceId` | Bearer | Update access policy |
 | `POST` | `/v1/auth/siwe/nonce` | — | Request SIWE nonce |

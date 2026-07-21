@@ -6,6 +6,7 @@ export type ApiErrorCode =
   | 'rate_limited'
   | 'network_error'
   | 'server_error'
+  | 'service_unavailable'
   | 'bad_request'
   | 'unknown_error'
 

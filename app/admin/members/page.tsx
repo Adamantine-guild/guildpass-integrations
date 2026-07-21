@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
+import { ToastViewport, useToasts } from "@/components/ui/toast";
 import { useState, useMemo, useRef, useEffect } from "react";
 import { AdminGuard } from "@/components/admin-guard";
 import { useSiweAuth } from "@/lib/wallet/providers";
@@ -20,6 +21,7 @@ import {
   DeniedState,
   safeErrorMessage,
 } from "@/components/ui/api-states";
+import { usePagination } from "@/lib/hooks/usePagination";
 import {
   applyOptimisticRole,
   applyOptimisticRemoveRole,
@@ -152,18 +154,21 @@ export default function MembersPage() {
   const { address } = useAccount();
   const { authSession, markExpired, sessionStatus } = useSiweAuth();
   const qc = useQueryClient();
+  const { toasts, addToast, dismissToast } = useToasts();
 
   // Filter state
   const [searchQuery, setSearchQuery] = useState('')
   const [roleFilter, setRoleFilter] = useState<Role | 'all'>('all')
   const [tierFilter, setTierFilter] = useState<MembershipTier | 'all'>('all')
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all')
+  const [pageSize, setPageSize] = useState(25)
 
   const resetFilters = () => {
     setSearchQuery('')
     setRoleFilter('all')
     setTierFilter('all')
     setStatusFilter('all')
+    setPageSize(25)
   }
 
   const {
@@ -240,6 +245,20 @@ export default function MembersPage() {
     });
   }, [allFetchedMembers, isFallbackMode, searchQuery, roleFilter, tierFilter, statusFilter]);
 
+  const {
+    paginatedItems,
+    currentPage,
+    totalPages,
+    nextPage,
+    prevPage,
+    setPage,
+    setCurrentPage,
+  } = usePagination(filteredMembers, pageSize);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, roleFilter, tierFilter, statusFilter, pageSize, setCurrentPage]);
+
   const isFiltered = searchQuery || roleFilter !== 'all' || tierFilter !== 'all' || statusFilter !== 'all'
 
   const {
@@ -285,6 +304,11 @@ export default function MembersPage() {
         action: "assign",
       });
       setSuccessAssignment(input);
+      addToast({
+        tone: "success",
+        title: `Role assigned to ${input.address.slice(0, 6)}…${input.address.slice(-4)}`,
+        description: `The ${input.role} role was assigned successfully.`,
+      });
       setAddr("");
       resetMutation();
     },
@@ -295,8 +319,18 @@ export default function MembersPage() {
         }
       }
       void qc.invalidateQueries({ queryKey: queryKeys.members.all });
-      setRollbackMessage(`Change reverted: ${safeErrorMessage(err)}`);
-      if (err instanceof AuthError) {
+      const isExpiredSession = err instanceof AuthError && err.code === "unauthorized";
+      const message = isExpiredSession
+        ? "Session expired. Use the re-authentication banner to sign in again."
+        : safeErrorMessage(err);
+
+      setRollbackMessage(`Change reverted: ${message}`);
+      addToast({
+        tone: isExpiredSession ? "warning" : "error",
+        title: isExpiredSession ? "Admin session expired" : "Failed to assign role",
+        description: message,
+      });
+      if (isExpiredSession) {
         markExpired();
       }
     },
@@ -304,6 +338,9 @@ export default function MembersPage() {
       setPendingAssignment(null);
     },
   });
+
+  const isAssignSessionExpired =
+    mutateErrorValue instanceof AuthError && mutateErrorValue.code === "unauthorized";
 
   const removeRoleMutation = useMutation<
     void,
@@ -387,6 +424,7 @@ export default function MembersPage() {
   return (
     <AdminGuard>
       <div className="space-y-4">
+        <ToastViewport toasts={toasts} onDismiss={dismissToast} />
         <h1 className="text-2xl font-semibold">Members</h1>
 
         {sessionStatus === "expired" && <SessionExpiredBanner />}
@@ -481,7 +519,7 @@ export default function MembersPage() {
                 {rollbackMessage}
               </div>
             )}
-            {mutateError && (
+            {mutateError && !isAssignSessionExpired && (
               <ErrorState
                 title="Failed to assign role"
                 message={safeErrorMessage(mutateErrorValue)}
@@ -509,50 +547,70 @@ export default function MembersPage() {
                 title="No members yet"
                 message="No members have been added to this community."
               />
-            ) : (
-              <div className="space-y-2">
-                <VirtualList
-                  items={filteredMembers}
-                  rowHeight={88}
-                  height={500}
-                  onScrollToBottom={handleScrollToBottom}
-                  renderRow={(m) => (
-                    <div
-                      key={m.address}
-                      className="flex flex-col gap-3 rounded-md border p-3 sm:flex-row sm:items-center sm:justify-between h-full bg-card"
-                    >
-                      <AddressText address={m.address} className="text-sm" />
-                      <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                        <span>Tier: {m.tier}</span>
-                        <div className="flex flex-wrap gap-1">
-                          {m.roles.map((r) => (
-                            <button
-                              key={r}
-                              type="button"
-                              className="inline-flex items-center rounded-md border border-transparent bg-secondary px-2 py-0.5 text-xs font-semibold text-secondary-foreground transition-colors hover:bg-destructive hover:text-destructive-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-                              onClick={() => requestRoleRemoval(m, r)}
-                              aria-label={`Remove ${r} role from ${m.address}`}
-                              title={`Remove ${r} role`}
-                            >
-                              {r} <span aria-hidden="true">✕</span>
-                            </button>
-                          ))}
-                        </div>
-                        {pendingAssignment?.address.toLowerCase() ===
-                          m.address.toLowerCase() && (
-                          <Badge variant="warning">Saving</Badge>
-                        )}
-                      </div>
+             ) : (
+               <div className="space-y-4">
+                 <div className="space-y-2">
+                   {paginatedItems.map((m) => (
+                     <div
+                       key={m.address}
+                       className="flex flex-col gap-3 rounded-md border p-3 sm:flex-row sm:items-center sm:justify-between h-full bg-card"
+                     >
+                       <AddressText address={m.address} className="text-sm" />
+                       <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                         <span>Tier: {m.tier}</span>
+                         <div className="flex flex-wrap gap-1">
+                           {m.roles.map((r) => (
+                             <button
+                               key={r}
+                               type="button"
+                               className="inline-flex items-center rounded-md border border-transparent bg-secondary px-2 py-0.5 text-xs font-semibold text-secondary-foreground transition-colors hover:bg-destructive hover:text-destructive-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                               onClick={() => requestRoleRemoval(m, r)}
+                               aria-label={`Remove ${r} role from ${m.address}`}
+                               title={`Remove ${r} role`}
+                             >
+                               {r} <span aria-hidden="true">✕</span>
+                             </button>
+                           ))}
+                         </div>
+                         {pendingAssignment?.address.toLowerCase() ===
+                           m.address.toLowerCase() && (
+                           <Badge variant="warning">Saving</Badge>
+                         )}
+                       </div>
+                     </div>
+                   ))}
+                 </div>
+                 
+                 <div className="flex items-center justify-between border-t pt-4">
+                    <div className="text-sm text-muted-foreground">
+                      Page {currentPage} of {totalPages} ({filteredMembers.length} members)
                     </div>
-                  )}
-                />
-                {isFetchingNextPage && (
-                  <div className="text-center py-2 text-xs text-muted-foreground">
-                    Loading more members…
-                  </div>
-                )}
-              </div>
-            )}
+                    <div className="flex items-center gap-2">
+                       <Select
+                          value={String(pageSize)}
+                          onChange={(e) => setPageSize(Number(e.target.value))}
+                       >
+                          <option value="25">25 per page</option>
+                          <option value="50">50 per page</option>
+                          <option value="100">100 per page</option>
+                       </Select>
+                       <Button variant="outline" size="sm" onClick={prevPage} disabled={currentPage === 1}>
+                         Previous
+                       </Button>
+                       <Button variant="outline" size="sm" onClick={nextPage} disabled={currentPage === totalPages}>
+                         Next
+                       </Button>
+                    </div>
+                 </div>
+
+                 {isFetchingNextPage && (
+                   <div className="text-center py-2 text-xs text-muted-foreground">
+                     Loading more members…
+                   </div>
+                 )}
+               </div>
+             )}
+
           </CardContent>
         </Card>
       </div>

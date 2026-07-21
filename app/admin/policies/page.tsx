@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useState, useMemo } from "react";
+import { useEffect, useId, useState, useMemo } from "react";
 import { useAccount } from "wagmi";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -33,6 +33,12 @@ import {
   validatePolicy,
   type PolicyValidationErrors,
 } from "@/lib/validation/policy";
+import {
+  clearPolicyDraft,
+  loadPolicyDraft,
+  policyToDraft,
+  storePolicyDraft,
+} from "@/lib/policy-drafts";
 const ALL_ROLES: Role[] = ["member", "moderator", "admin"];
 const ALL_TIERS: MembershipTier[] = ["free", "standard", "pro"];
 
@@ -84,12 +90,25 @@ function PolicyForm({
   const resourceInputId = `${formId}-resource-id`;
   const tierSelectId = `${formId}-minimum-tier`;
   const rolesGroupId = `${formId}-required-roles`;
-  const [resourceIdValue, setResourceIdValue] = useState(resourceId);
-  const [minTier, setMinTier] = useState<MembershipTier | undefined>(
-    initial?.minTier,
+  const draft = loadPolicyDraft(resourceId);
+  const [resourceIdValue, setResourceIdValue] = useState(
+    draft?.resourceId ?? resourceId,
   );
-  const [roles, setRoles] = useState<Role[]>(initial?.roles ?? []);
+  const [minTier, setMinTier] = useState<MembershipTier | undefined>(
+    draft?.minTier ?? initial?.minTier,
+  );
+  const [roles, setRoles] = useState<Role[]>(
+    draft?.roles ?? initial?.roles ?? [],
+  );
   const [errors, setErrors] = useState<PolicyValidationErrors>({});
+
+  useEffect(() => {
+    storePolicyDraft(resourceId, {
+      resourceId: resourceIdValue,
+      minTier,
+      roles,
+    });
+  }, [resourceId, resourceIdValue, minTier, roles]);
 
   const toggleRole = (role: Role, selected: boolean) => {
     setRoles(selected ? [...roles, role] : roles.filter((r) => r !== role));
@@ -107,6 +126,7 @@ function PolicyForm({
       return;
     }
     setErrors({});
+    storePolicyDraft(resourceId, policyToDraft(result.value));
     onSave(result.value);
   };
 
@@ -217,7 +237,10 @@ function PolicyForm({
           type="button"
           size="sm"
           variant="outline"
-          onClick={onCancel}
+          onClick={() => {
+            clearPolicyDraft(resourceId);
+            onCancel();
+          }}
           disabled={disabled}
         >
           Cancel
@@ -320,6 +343,8 @@ export default function PoliciesPage() {
         ...current,
         [policy.resourceId]: {},
       }));
+      clearPolicyDraft(policy.resourceId);
+      clearPolicyDraft("");
       setEditingResourceId(null);
       setShowCreateForm(false);
       resetMutation();
