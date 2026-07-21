@@ -16,14 +16,6 @@ describe('Webhook Event Replay / Debug Tool', () => {
   // ── replayMockEvent ────────────────────────────────────────────────────────
 
   describe('replayMockEvent()', () => {
-    it('should clone an existing event and mark it as a replay', () => {
-      const original = getApi(TEST_ADDRESS).listWebhookEvents()
-        .then((events) => events.find((e) => e.id === 'wh_01J1'))
-
-      // Actually query since listWebhookEvents is async
-      // We need to get the original first
-    })
-
     it('should return a replayed event with isReplay=true', async () => {
       const api = getApi(TEST_ADDRESS)
       const events = await api.listWebhookEvents()

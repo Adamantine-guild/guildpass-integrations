@@ -372,6 +372,44 @@ export async function replayMockEvent(eventId: string): Promise<WebhookEventLog>
 
   mockWebhookEvents.unshift(replay)
   schedulePersist()
+
+  // Apply side effects to the member store for recognised event types.
+  const addr = original.affectedIdentifier
+  if (addr && addr.startsWith('0x')) {
+    const existing = memberStore[addr]
+    switch (original.eventType) {
+      case 'membership.created':
+      case 'membership.renewed': {
+        const tier = (original.payloadSummary.tier as MembershipTier) ?? 'free'
+        memberStore[addr] = {
+          membership: { address: addr, tier, active: true },
+          roles: existing?.roles ?? ['member'],
+          profile: existing?.profile ?? { address: addr, displayName: `Replayed ${addr.slice(0, 6)}`, badges: [] },
+        }
+        break
+      }
+      case 'membership.expired':
+        if (existing) {
+          memberStore[addr] = {
+            ...existing,
+            membership: { ...existing.membership, active: false },
+          }
+        }
+        break
+      case 'tier.upgraded': {
+        const newTier = (original.payloadSummary.tier as MembershipTier) ?? 'standard'
+        if (existing) {
+          memberStore[addr] = {
+            ...existing,
+            membership: { ...existing.membership, tier: newTier },
+          }
+        }
+        break
+      }
+      // policy.updated — no member-store side effect
+    }
+  }
+
   return replay
 }
 

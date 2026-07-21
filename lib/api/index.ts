@@ -1,6 +1,6 @@
 import { config } from '../config'
 import { LiveAccessApi } from './live'
-import { MockAccessApi, resetMockData, applyMockScenario } from './mock'
+import { MockAccessApi, resetMockData, applyMockScenario, replayMockEvent } from './mock'
 import { AccessApi } from './types'
 
 /**
