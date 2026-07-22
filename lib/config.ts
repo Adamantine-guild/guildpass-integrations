@@ -25,6 +25,7 @@ export type FeatureFlagKey =
   | 'analytics'
   | 'resources'
   | 'governance'
+  | 'rewards'
 
 export type FeatureFlags = Record<FeatureFlagKey, boolean>
 
@@ -175,6 +176,7 @@ const features: FeatureFlags = {
   analytics: flag('NEXT_PUBLIC_FEATURE_ANALYTICS', false),
   resources: flag('NEXT_PUBLIC_FEATURE_RESOURCES', isMock),
   governance: flag('NEXT_PUBLIC_FEATURE_GOVERNANCE', false),
+  rewards: flag('NEXT_PUBLIC_FEATURE_REWARDS', false),
 }
 
 export const config: AppConfig = Object.freeze({
