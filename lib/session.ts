@@ -77,8 +77,18 @@ export function loadAuthSessionIncludingExpired(): SiweAuthSession | null {
     const raw = window.sessionStorage.getItem(SESSION_KEY)
     if (!raw) return null
     const parsed = JSON.parse(raw) as SiweAuthSession
-    // Guard against missing required fields
-    if (!parsed.token || !parsed.address || !parsed.expiresAt) return null
+    // Guard against missing required fields or invalid types
+    if (
+      !parsed ||
+      typeof parsed.token !== 'string' ||
+      !parsed.token.trim() ||
+      typeof parsed.address !== 'string' ||
+      !parsed.address.trim() ||
+      typeof parsed.expiresAt !== 'string' ||
+      !parsed.expiresAt.trim()
+    ) {
+      return null
+    }
     return parsed
   } catch {
     return null

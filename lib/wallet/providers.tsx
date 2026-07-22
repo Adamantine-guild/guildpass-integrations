@@ -279,9 +279,25 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
       if (!msg?.type) return
 
       if (msg.type === 'signed-in' || msg.type === 'refreshed') {
-        storeAuthSession(msg.session)
-        dispatch({ type: 'restore', session: msg.session })
-        scheduleRenewal(msg.session)
+        const s = msg.session
+        if (
+          !s ||
+          typeof s.token !== 'string' ||
+          !s.token.trim() ||
+          typeof s.address !== 'string' ||
+          !s.address.trim() ||
+          typeof s.expiresAt !== 'string' ||
+          !s.expiresAt.trim()
+        ) {
+          return
+        }
+        // If a wallet is currently connected in this tab, discard sessions for other addresses
+        if (address && s.address.toLowerCase() !== address.toLowerCase()) {
+          return
+        }
+        storeAuthSession(s)
+        dispatch({ type: 'restore', session: s })
+        scheduleRenewal(s)
       } else if (msg.type === 'signed-out') {
         cancelRenewal()
         clearAuthSession()
@@ -293,8 +309,7 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
       channel.close()
       channelRef.current = null
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [address, cancelRenewal, scheduleRenewal])
 
   // ── Invalidation event from same tab (lib/session.ts fires this) ───────────
 
