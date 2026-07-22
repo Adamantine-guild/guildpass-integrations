@@ -5,8 +5,17 @@ import { Nav } from '@/components/nav'
 import { SwRegistrar } from '@/components/sw-registrar'
 
 export const metadata: Metadata = {
-  title: 'GuildPass',
-  description: 'Web3 membership and token-gated community platform'
+  title: {
+    default: 'GuildPass',
+    template: '%s | GuildPass',
+  },
+  description: 'Web3 membership and token-gated community platform',
+  openGraph: {
+    title: 'GuildPass',
+    description: 'Web3 membership and token-gated community platform',
+    siteName: 'GuildPass',
+    type: 'website',
+  },
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
