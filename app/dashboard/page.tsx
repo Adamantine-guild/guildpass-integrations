@@ -15,6 +15,7 @@ import { queryKeys } from "@/lib/query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { MembershipExpiryBadge } from "@/components/ui/membership-expiry-badge";
+import { MembershipCardSkeleton } from "@/components/dashboard/membership-card-skeleton";
 import Link from "next/link";
 import { buttonVariants } from "@/components/ui/button";
 import {
@@ -241,7 +242,7 @@ export default function DashboardPage() {
               message="Connect your wallet to load your community membership."
             />
           ) : isLoading ? (
-            <LoadingState />
+            <MembershipCardSkeleton />
           ) : isError && !(isApiError(error) && error.code === 'aborted') ? (
             <ErrorState
               title="Failed to load session"
@@ -249,7 +250,7 @@ export default function DashboardPage() {
               onRetry={() => refetch()}
             />
           ) : (
-            <div className="space-y-2">
+            <div className="min-h-[116px] space-y-2">
               <div className="text-lg font-medium">
                 {session?.community?.name ?? "Unknown"}
               </div>
