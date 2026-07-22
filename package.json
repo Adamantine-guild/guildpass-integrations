@@ -14,6 +14,8 @@
     "start": "next start",
     "lint": "next lint",
     "test": "tsc -p test/tsconfig.json --skipLibCheck && node --test test-dist/test/*.test.js",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
     "typecheck": "tsc --noEmit",
     "sync-types": "node scripts/sync-api-types.js --write",
     "check-types": "node scripts/sync-api-types.js --check"
@@ -40,6 +42,7 @@
     "@guildpass/integration-client": "*"
   },
   "devDependencies": {
+    "@playwright/test": "^1.48.0",
     "@types/node": "^20.11.30",
     "@types/react": "^18.2.79",
     "@types/react-dom": "^18.2.25",

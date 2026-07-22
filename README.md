@@ -192,7 +192,57 @@ npm run lint       # Lint via Next.js ESLint config
 npm run typecheck  # TypeScript type checking
 npm run sync-types # Compile test/fixtures/openapi.json into lib/api/types.ts
 npm run check-types # Validate that types in lib/api/types.ts match the schema
+npm run test       # Run unit tests (Node.js test runner)
+npm run test:e2e   # Run end-to-end tests (Playwright)
+npm run test:e2e:ui # Run E2E tests in UI mode for debugging
 ```
+
+---
+
+## Testing
+
+### Unit Tests
+
+Unit tests use the Node.js built-in test runner and cover individual components, utilities, and business logic:
+
+```bash
+npm run test
+```
+
+Tests include:
+- Session storage and expiry logic
+- SIWE message construction and verification
+- Feature flags and access control
+- API mocking and contract validation
+- Wallet address validation
+- Mock data scenarios
+
+### End-to-End Tests
+
+E2E tests use Playwright to verify the full SIWE sign-in flow in a real browser environment. Tests simulate wallet connections, message signing, and session management without requiring a real wallet or backend:
+
+```bash
+npm run test:e2e              # Run all E2E tests headlessly
+npm run test:e2e:ui          # Run with visual UI (recommended for debugging)
+npx playwright test --debug  # Step through with debugger
+```
+
+**Features tested:**
+- Happy path: connect wallet → sign-in → authenticated
+- Session persistence across page navigations
+- Token storage (sessionStorage with expiry)
+- Refresh token renewal
+- 401 error handling → re-auth banner
+- Session expiry recovery flow
+- Logout and session clearing
+- Cross-tab session sync (BroadcastChannel)
+
+**Requirements:**
+- Dev server must be running: `npm run dev`
+- Tests run against `http://localhost:3000` by default (configurable via `BASE_URL` env var)
+- Mock mode enabled automatically in tests
+
+See [test/e2e/README.md](./test/e2e/README.md) for detailed E2E test documentation including troubleshooting and advanced usage.
 
 ---
 
