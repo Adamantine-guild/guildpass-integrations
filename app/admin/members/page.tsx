@@ -30,6 +30,7 @@ import { roleRemovalConfirmationMessage } from "@/lib/api/role-removal";
 import { AddressText } from "@/components/wallet/address-text";
 import { isWalletAddress, normalizeAddress } from "@/lib/wallet/address";
 import { BulkActionToolbar, type BulkResult } from "@/components/ui/bulk-action-toolbar";
+import { Users } from "lucide-react";
 
 type AssignRoleInput = {
   address: string;
@@ -271,6 +272,8 @@ export default function MembersPage() {
   }, [searchQuery, roleFilter, tierFilter, statusFilter, pageSize, setCurrentPage]);
 
   const isFiltered = searchQuery || roleFilter !== 'all' || tierFilter !== 'all' || statusFilter !== 'all'
+  const hasAnyMembers = allFetchedMembers.length > 0
+  const hasVisibleMembers = filteredMembers.length > 0
 
   const {
     mutate,
@@ -655,10 +658,12 @@ export default function MembersPage() {
         </Card>
 
         <Card>
-          <CardHeader>
-            <CardTitle>Member List</CardTitle>
-          </CardHeader>
           <CardContent>
+            {hasAnyMembers && hasVisibleMembers && (
+              <CardHeader className="px-0 pt-0 pb-4 border-b-0">
+                <CardTitle>Member List</CardTitle>
+              </CardHeader>
+            )}
             {isLoading ? (
               <LoadingState message="Loading members…" />
             ) : isError ? (
@@ -667,12 +672,27 @@ export default function MembersPage() {
                 message={safeErrorMessage(error)}
                 onRetry={() => refetch()}
               />
-            ) : !allFetchedMembers?.length ? (
+            ) : !hasAnyMembers ? (
               <EmptyState
                 title="No members yet"
-                message="No members have been added to this community."
+                message="This community does not have any members yet. Share the connect link or follow the onboarding docs to get the first members in."
+                icon={<Users className="h-10 w-10" aria-hidden="true" />}
+                actions={
+                  <a
+                    href="/docs/admin-session-contract"
+                    className="inline-flex items-center rounded-md border border-input bg-background px-3 py-2 text-sm font-medium text-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                  >
+                    View onboarding docs
+                  </a>
+                }
               />
-             ) : (
+            ) : !hasVisibleMembers ? (
+              <EmptyState
+                title="No matching members"
+                message="Members exist, but none match the current filters. Clear the filters to see the full list."
+                icon={<Users className="h-10 w-10" aria-hidden="true" />}
+              />
+            ) : (
                <div className="space-y-4">
                  {/* ── Bulk action toolbar ─────────────────────────── */}
                  {selectedAddressArray.length > 0 && (
