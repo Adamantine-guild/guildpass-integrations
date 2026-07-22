@@ -18,12 +18,12 @@ import { MembershipExpiryBadge } from "@/components/ui/membership-expiry-badge";
 import Link from "next/link";
 import { buttonVariants } from "@/components/ui/button";
 import {
-  LoadingState,
   ErrorState,
   EmptyState,
   DeniedState,
   safeErrorMessage,
 } from "@/components/ui/api-states";
+import { Skeleton } from "@/components/ui/skeleton";
 import { SyncStatusBanner } from "@/components/ui/sync-status-banner";
 import { AddressText } from "@/components/wallet/address-text";
 import { features } from "@/lib/features";
@@ -73,6 +73,81 @@ function Section({
       </CardHeader>
       <CardContent>{children}</CardContent>
     </Card>
+  );
+}
+
+function SkeletonStatus({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div role="status" aria-label={label} aria-busy="true">
+      {children}
+    </div>
+  );
+}
+
+function CommunitySkeleton() {
+  return (
+    <SkeletonStatus label="Loading community membership">
+      <div className="space-y-3">
+        <Skeleton className="h-6 w-2/3" />
+        <Skeleton className="h-4 w-1/2" />
+        <Skeleton className="h-4 w-1/3" />
+        <div className="flex items-center gap-2">
+          <Skeleton className="h-4 w-36" />
+          <Skeleton className="h-5 w-20" />
+        </div>
+      </div>
+    </SkeletonStatus>
+  );
+}
+
+function ProfileSummarySkeleton() {
+  return (
+    <SkeletonStatus label="Loading profile summary">
+      <div className="space-y-4">
+        <div className="flex items-center gap-2">
+          <Skeleton className="h-4 w-24" />
+          <Skeleton className="h-5 w-24" />
+        </div>
+        <Skeleton className="h-4 w-full" />
+        <div className="space-y-2 border-t pt-2">
+          <Skeleton className="h-4 w-32" />
+          <Skeleton className="h-4 w-48" />
+        </div>
+      </div>
+    </SkeletonStatus>
+  );
+}
+
+function BadgesSkeleton() {
+  return (
+    <SkeletonStatus label="Loading badges">
+      <div className="flex flex-wrap gap-2">
+        <Skeleton className="h-6 w-20" />
+        <Skeleton className="h-6 w-28" />
+        <Skeleton className="h-6 w-24" />
+      </div>
+    </SkeletonStatus>
+  );
+}
+
+function ResourcesSkeleton() {
+  return (
+    <SkeletonStatus label="Loading gated resources">
+      <div className="space-y-3">
+        <Skeleton className="h-4 w-64 max-w-full" />
+        <div className="flex flex-wrap gap-2">
+          <Skeleton className="h-9 w-28" />
+          <Skeleton className="h-9 w-36" />
+          <Skeleton className="h-9 w-24" />
+        </div>
+      </div>
+    </SkeletonStatus>
   );
 }
 
@@ -241,7 +316,7 @@ export default function DashboardPage() {
               message="Connect your wallet to load your community membership."
             />
           ) : isLoading ? (
-            <LoadingState />
+            <CommunitySkeleton />
           ) : isError && !(isApiError(error) && error.code === 'aborted') ? (
             <ErrorState
               title="Failed to load session"
@@ -288,7 +363,7 @@ export default function DashboardPage() {
               message="Connect your wallet to load your profile and verification state."
             />
           ) : isVerifying ? (
-            <LoadingState />
+            <ProfileSummarySkeleton />
           ) : (
             <div className="space-y-4">
               {(() => {
@@ -338,7 +413,7 @@ export default function DashboardPage() {
               message="Connect your wallet to view your badges."
             />
           ) : profileLoading ? (
-            <LoadingState />
+            <BadgesSkeleton />
           ) : profileIsError && !(isApiError(profileError) && profileError.code === 'aborted') ? (
             <ErrorState
               title="Failed to load badges"
@@ -371,7 +446,7 @@ export default function DashboardPage() {
               message="Resources are not available in the current environment."
             />
           ) : resourcesLoading ? (
-            <LoadingState message="Loading resources..." />
+            <ResourcesSkeleton />
           ) : resourcesIsError && !(isApiError(resourcesError) && resourcesError.code === 'aborted') ? (
             <ErrorState
               title="Failed to load resources"
