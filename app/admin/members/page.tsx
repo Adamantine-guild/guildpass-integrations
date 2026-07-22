@@ -29,6 +29,7 @@ import {
 import { roleRemovalConfirmationMessage } from "@/lib/api/role-removal";
 import { AddressText } from "@/components/wallet/address-text";
 import { isWalletAddress, normalizeAddress } from "@/lib/wallet/address";
+import { BulkActionToolbar, type BulkResult } from "@/components/ui/bulk-action-toolbar";
 
 type AssignRoleInput = {
   address: string;
@@ -218,6 +219,16 @@ export default function MembersPage() {
     useState<AssignRoleInput | null>(null);
   const [rollbackMessage, setRollbackMessage] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
+  // ── Bulk selection state ──────────────────────────────────────────
+  const [selectedAddresses, setSelectedAddresses] = useState<Set<string>>(
+    new Set(),
+  );
+  const [bulkRole, setBulkRole] = useState<Role>("member");
+  const [isBulkPending, setIsBulkPending] = useState(false);
+  const [bulkResults, setBulkResults] = useState<BulkResult | null>(null);
+  const [bulkFailedItems, setBulkFailedItems] = useState<
+    { address: string; role: Role }[]
+  >([]);
 
   const normalizedAddr = normalizeAddress(addr);
   const isValidAddress = isWalletAddress(normalizedAddr);
@@ -415,6 +426,120 @@ export default function MembersPage() {
     });
   };
 
+  // ── Bulk selection helpers ────────────────────────────────────────────
+  const toggleSelect = (address: string) => {
+    setSelectedAddresses((prev) => {
+      const next = new Set(prev);
+      if (next.has(address)) {
+        next.delete(address);
+      } else {
+        next.add(address);
+      }
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    const pageAddresses = paginatedItems.map((m) => m.address);
+    const allSelected = pageAddresses.every((a) =>
+      selectedAddresses.has(a),
+    );
+    if (allSelected) {
+      // Deselect all on this page
+      setSelectedAddresses((prev) => {
+        const next = new Set(prev);
+        pageAddresses.forEach((a) => next.delete(a));
+        return next;
+      });
+    } else {
+      // Select all on this page
+      setSelectedAddresses((prev) => {
+        const next = new Set(prev);
+        pageAddresses.forEach((a) => next.add(a));
+        return next;
+      });
+    }
+  };
+
+  const clearSelection = () => {
+    setSelectedAddresses(new Set());
+    setBulkResults(null);
+    setBulkFailedItems([]);
+  };
+
+  const selectedAddressArray = Array.from(selectedAddresses);
+
+  const executeBulkAssign = async (items: { address: string; role: Role }[]) => {
+    setIsBulkPending(true);
+    setBulkResults(null);
+
+    const api = getApi(address, authSession?.token);
+    const results: BulkResult["items"] = [];
+
+    const settled = await Promise.allSettled(
+      items.map(async (item) => {
+        try {
+          await api.assignRole(item.address, item.role);
+          results.push({ address: item.address, status: "ok" });
+        } catch (err) {
+          results.push({
+            address: item.address,
+            status: "error",
+            error: safeErrorMessage(err),
+          });
+        }
+      }),
+    );
+
+    const succeeded = results.filter((r) => r.status === "ok").length;
+    const failed = results.filter((r) => r.status === "error").length;
+
+    setBulkResults({ succeeded, failed, items: results });
+
+    // Store failed items for retry
+    setBulkFailedItems(
+      results
+        .filter((r) => r.status === "error")
+        .map((r) => ({ address: r.address, role: bulkRole })),
+    );
+
+    // Refresh member list to reflect changes
+    void qc.invalidateQueries({ queryKey: queryKeys.members.all });
+
+    addToast({
+      tone: failed === 0 ? "success" : "warning",
+      title:
+        failed === 0
+          ? "Bulk assignment complete"
+          : `${succeeded} succeeded, ${failed} failed`,
+      description:
+        failed > 0
+          ? "Check the details below and retry the failed items."
+          : `Assigned ${bulkRole} to ${succeeded} member(s).`,
+    });
+
+    setIsBulkPending(false);
+  };
+
+  const handleBulkAssign = () => {
+    const items = selectedAddressArray.map((addr) => ({
+      address: addr,
+      role: bulkRole,
+    }));
+    executeBulkAssign(items);
+  };
+
+  const handleRetryFailed = () => {
+    if (bulkFailedItems.length > 0) {
+      executeBulkAssign(bulkFailedItems);
+    }
+  };
+
+  const pageAddresses = paginatedItems.map((m) => m.address);
+  const allPageSelected =
+    pageAddresses.length > 0 &&
+    pageAddresses.every((a) => selectedAddresses.has(a));
+
   const handleScrollToBottom = () => {
     if (hasNextPage && !isFetchingNextPage) {
       fetchNextPage();
@@ -549,13 +674,48 @@ export default function MembersPage() {
               />
              ) : (
                <div className="space-y-4">
+                 {/* ── Bulk action toolbar ─────────────────────────── */}
+                 {selectedAddressArray.length > 0 && (
+                   <div className="space-y-2">
+                     <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_10rem_auto] sm:items-end">
+                       <div />
+                       <Select
+                         value={bulkRole}
+                         onChange={(e) => setBulkRole(e.target.value as Role)}
+                       >
+                         <option value="member">member</option>
+                         <option value="moderator">moderator</option>
+                         <option value="admin">admin</option>
+                       </Select>
+                     </div>
+                     <BulkActionToolbar
+                       selectedCount={selectedAddressArray.length}
+                       totalCount={filteredMembers.length}
+                       onDismiss={clearSelection}
+                       onBulkAction={handleBulkAssign}
+                       actionLabel={`Assign ${bulkRole} to selected`}
+                       isPending={isBulkPending}
+                       results={bulkResults}
+                       onRetryFailed={handleRetryFailed}
+                     />
+                   </div>
+                 )}
                  <div className="space-y-2">
                    {paginatedItems.map((m) => (
                      <div
                        key={m.address}
                        className="flex flex-col gap-3 rounded-md border p-3 sm:flex-row sm:items-center sm:justify-between h-full bg-card"
                      >
-                       <AddressText address={m.address} className="text-sm" />
+                       <div className="flex items-center gap-2">
+                         <input
+                           type="checkbox"
+                           checked={selectedAddresses.has(m.address)}
+                           onChange={() => toggleSelect(m.address)}
+                           className="h-4 w-4 rounded border-gray-300"
+                           aria-label={`Select ${m.address}`}
+                         />
+                         <AddressText address={m.address} className="text-sm" />
+                       </div>
                        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                          <span>Tier: {m.tier}</span>
                          <div className="flex flex-wrap gap-1">
