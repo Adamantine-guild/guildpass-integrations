@@ -12,7 +12,8 @@ import {
   ACCESS_DECISION_GC_TIME,
 } from '@/lib/query'
 import Link from 'next/link'
-import { buttonVariants } from './ui/button'
+import { Button, buttonVariants } from './ui/button'
+import { DisabledTooltip } from './ui/tooltip'
 import { LoadingState, ErrorState, DeniedState, safeErrorMessage } from './ui/api-states'
 
 export function Gated({
@@ -144,8 +145,17 @@ export function AccessDenied({ reason }: { reason: string }) {
       message={reason}
       actions={
         <>
-        <Link href="/dashboard" className={buttonVariants()}>Back to Dashboard</Link>
-        <Link href="/dashboard" className={buttonVariants({ variant: 'outline' })}>Upgrade or Renew</Link>
+          <Link href="/dashboard" className={buttonVariants()}>Back to Dashboard</Link>
+          <DisabledTooltip content="Coming soon">
+            <Button
+              variant="outline"
+              disabled
+              aria-disabled="true"
+              className="cursor-not-allowed opacity-60"
+            >
+              Upgrade or Renew
+            </Button>
+          </DisabledTooltip>
         </>
       }
     />
