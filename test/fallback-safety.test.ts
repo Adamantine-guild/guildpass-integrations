@@ -72,8 +72,8 @@ describe('getResource safe fallback (#133)', () => {
     const api = new LiveAccessApi()
     const r = await api.getResource('alpha')
 
-    assert.ok(r, 'expected the resource to be recovered via the list fallback')
-    assert.equal(r.id, 'alpha')
+    assert.ok(r.status === 'found', 'expected the resource to be recovered via the list fallback')
+    assert.equal(r.data.id, 'alpha')
     assert.ok(
       calls.some((u) => u.includes('/v1/resources/alpha')),
       'expected the direct lookup to be attempted first',
@@ -136,8 +136,8 @@ describe('getPolicy safe fallback (#133)', () => {
     const api = new LiveAccessApi()
     const p = await api.getPolicy('alpha')
 
-    assert.ok(p, 'expected the policy to be recovered via the list fallback')
-    assert.equal(p.resourceId, 'alpha')
+    assert.ok(p.status === 'found', 'expected the policy to be recovered via the list fallback')
+    assert.equal(p.data.resourceId, 'alpha')
     assert.ok(
       calls.some((u) => u.includes('/v1/policies/alpha')),
       'expected the direct lookup to be attempted first',

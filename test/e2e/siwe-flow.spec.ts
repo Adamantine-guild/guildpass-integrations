@@ -332,6 +332,57 @@ test.describe('SIWE Sign-In Flow (E2E)', () => {
     }
   })
 
+  test('disconnecting wallet from extension clears session', async ({ page }) => {
+    // Sign in
+    await navigateToAdmin(page, BASE_URL)
+    const signInVisible = await waitForSignInButton(page, 5000)
+    if (signInVisible) {
+      await page.locator('button:has-text("Sign In")').first().click()
+    }
+    await page.waitForTimeout(2000)
+
+    // Verify authenticated
+    let authenticated = await isUserAuthenticated(page)
+    expect(authenticated).toBe(true)
+
+    // Simulate disconnecting the wallet (via extension, sets isConnected to false)
+    await injectMockWalletConnector(page, { isConnected: false })
+    await page.waitForTimeout(1000)
+
+    // Session should be cleared
+    authenticated = await isUserAuthenticated(page)
+    expect(authenticated).toBe(false)
+    
+    const storedAddress = await getStoredAddress(page)
+    expect(storedAddress).toBeNull()
+  })
+
+  test('switching to a different wallet invalidates the previous token', async ({ page }) => {
+    // Sign in
+    await navigateToAdmin(page, BASE_URL)
+    const signInVisible = await waitForSignInButton(page, 5000)
+    if (signInVisible) {
+      await page.locator('button:has-text("Sign In")').first().click()
+    }
+    await page.waitForTimeout(2000)
+
+    // Verify authenticated
+    let authenticated = await isUserAuthenticated(page)
+    expect(authenticated).toBe(true)
+
+    // Simulate switching to a new address
+    const ANOTHER_ADDRESS = '0x9999999999999999999999999999999999999999'
+    await injectMockWalletConnector(page, { address: ANOTHER_ADDRESS, isConnected: true })
+    await page.waitForTimeout(1000)
+
+    // Session should be cleared
+    authenticated = await isUserAuthenticated(page)
+    expect(authenticated).toBe(false)
+    
+    const storedAddress = await getStoredAddress(page)
+    expect(storedAddress).toBeNull()
+  })
+
   test('cross-tab session sync via BroadcastChannel', async ({ browser }) => {
     if (!browser) return // Skip if browser not available
 

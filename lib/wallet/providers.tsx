@@ -60,6 +60,7 @@ import {
   useSignMessage,
   useAccount,
   useDisconnect,
+  useAccountEffect,
 } from "wagmi";
 import { walletConfig } from "@/lib/wallet/config";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -326,19 +327,27 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
 
   // ── Drop session when wallet disconnects or switches address ───────────────
 
+  useAccountEffect({
+    onDisconnect() {
+      if (state.authSession) {
+        cancelRenewal();
+        clearAuthSession();
+        dispatch({ type: "clear" });
+        broadcast({ type: "signed-out" });
+      }
+    },
+  });
+
   useEffect(() => {
     const session = state.authSession;
     if (!session) return;
-    if (
-      !isConnected ||
-      (address && session.address.toLowerCase() !== address.toLowerCase())
-    ) {
+    if (address && session.address.toLowerCase() !== address.toLowerCase()) {
       cancelRenewal();
       clearAuthSession();
       dispatch({ type: "clear" });
       broadcast({ type: "signed-out" });
     }
-  }, [address, isConnected, state.authSession, cancelRenewal, broadcast]);
+  }, [address, state.authSession, cancelRenewal, broadcast]);
 
   // ── Expiry polling — mark expired once the access token clock runs out ─────
 
