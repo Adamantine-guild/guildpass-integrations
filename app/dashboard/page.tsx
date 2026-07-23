@@ -27,6 +27,7 @@ import {
 } from "@/components/ui/api-states";
 import { SyncStatusBanner } from "@/components/ui/sync-status-banner";
 import { AddressText } from "@/components/wallet/address-text";
+import { DisabledTooltip } from "@/components/ui/tooltip";
 import { features } from "@/lib/features";
 
 /**
@@ -62,18 +63,36 @@ const DASHBOARD_GC_TIME = 30 * 60 * 1000
 
 function Section({
   title,
+  titleAdornment,
   children,
 }: {
   title: string;
+  titleAdornment?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>{title}</CardTitle>
+        <CardTitle className="flex items-center gap-2">
+          {title}
+          {titleAdornment}
+        </CardTitle>
       </CardHeader>
       <CardContent>{children}</CardContent>
     </Card>
+  );
+}
+
+function PreviewBadge({ label = "Preview", tooltip }: { label?: string; tooltip: string }) {
+  return (
+    <DisabledTooltip content={tooltip}>
+      <Badge
+        variant="outline"
+        className="cursor-default border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-700/40 dark:bg-amber-900/20 dark:text-amber-100"
+      >
+        {label}
+      </Badge>
+    </DisabledTooltip>
   );
 }
 
@@ -332,7 +351,12 @@ export default function DashboardPage() {
           )}
         </Section>
 
-        <Section title="Badges">
+        <Section
+          title="Badges"
+          titleAdornment={
+            <PreviewBadge tooltip="Badges are coming soon — full badge lifecycle and rewards are still in development." />
+          }
+        >
           {!address ? (
             <DeniedState
               title="Wallet connection required"
@@ -354,8 +378,8 @@ export default function DashboardPage() {
             </div>
           ) : (
             <EmptyState
-              title="No badges yet"
-              message="Complete community milestones to earn badges."
+              title="Badges are coming soon"
+              message="This is a preview of the badges feature. Complete community milestones to earn badges once the full badge system launches."
             />
           )}
         </Section>
