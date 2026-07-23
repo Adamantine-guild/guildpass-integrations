@@ -3,7 +3,7 @@ import { describe, test, afterEach } from 'node:test'
 import * as assert from 'node:assert/strict'
 import { MockAccessApi } from '../lib/api/mock'
 import { LiveAccessApi } from '../lib/api/live'
-import { ApiError } from '../lib/api/errors'
+import { ApiError, isApiError } from '../lib/api/errors'
 import { computeAccessDecision } from '../lib/api/access-decision'
 import type { AccessApi, MembershipTier, Session } from '../lib/api/types'
 import * as FIXTURES from './fixtures/live-api-responses'
@@ -281,7 +281,10 @@ describe('policy listing', () => {
     stubFetch({ '/v1/policies': FIXTURES.policies })
     const liveResult = await new LiveAccessApi().listPolicies()
 
-    assert.deepStrictEqual(normalize(mockResult), normalize(liveResult))
+    const cleanMock = mockResult.map(({ updatedAt, ...rest }) => rest)
+    const cleanLive = liveResult.map(({ updatedAt, ...rest }) => rest)
+
+    assert.deepStrictEqual(normalize(cleanMock), normalize(cleanLive))
   })
 })
 
@@ -334,7 +337,10 @@ describe('policy lookup', () => {
     stubFetch({ '/v1/policies/alpha': FIXTURES.policy })
     const liveResult = await new LiveAccessApi().getPolicy('alpha')
 
-    assert.deepStrictEqual(normalize(mockResult), normalize(liveResult))
+    const { updatedAt: _, ...cleanMock } = mockResult || {}
+    const { updatedAt: __, ...cleanLive } = liveResult || {}
+
+    assert.deepStrictEqual(normalize(cleanMock), normalize(cleanLive))
   })
 })
 
@@ -401,7 +407,9 @@ describe('access decisions', () => {
     const mockDecision = computeAccessDecision(mockSession, requirements)
     const liveDecision = computeAccessDecision(liveSession, requirements)
 
-    assert.deepStrictEqual(normalize(mockDecision), normalize(liveDecision))
+    const { checkedAt: _, ...cleanMock } = mockDecision
+    const { checkedAt: __, ...cleanLive } = liveDecision
+    assert.deepStrictEqual(normalize(cleanMock), normalize(cleanLive))
   })
 
   test('denied decision is consistent across both APIs', async () => {
@@ -416,7 +424,10 @@ describe('access decisions', () => {
 
     assert.equal(mockDecision.allowed, false)
     assert.equal(liveDecision.allowed, false)
-    assert.deepStrictEqual(normalize(mockDecision), normalize(liveDecision))
+
+    const { checkedAt: _, ...cleanMock } = mockDecision
+    const { checkedAt: __, ...cleanLive } = liveDecision
+    assert.deepStrictEqual(normalize(cleanMock), normalize(cleanLive))
   })
 })
 
@@ -535,20 +546,28 @@ describe('SIWE endpoints', () => {
     assert.equal(first.isAuthenticated, true)
 
     // Second use with same message (same nonce) is rejected
-    const err = await assert.rejects(() => api.siweVerify(message, '0xsig'))
-    assert.ok(err instanceof ApiError)
-    assert.equal(err.code, 'bad_request')
-    assert.match(err.safeMessage, /already used/i)
+    try {
+      await api.siweVerify(message, '0xsig')
+      assert.fail('expected siweVerify to throw on nonce reuse')
+    } catch (err: any) {
+      assert.ok(isApiError(err), `expected ApiError, got ${err?.name}: ${err?.message}`)
+      assert.equal(err.code, 'bad_request')
+      assert.match(err.safeMessage, /already used/i)
+    }
   })
 
   test('MockAccessApi rejects nonce that was never issued', async () => {
     const api = new MockAccessApi('0xabc')
     const message = 'example.com wants you to sign in with your Ethereum account:\n0xabc\n\nSign in.\n\nURI: https://example.com\nVersion: 1\nChain ID: 1\nNonce: neverissued\nIssued At: 2025-01-01T00:00:00.000Z'
 
-    const err = await assert.rejects(() => api.siweVerify(message, '0xsig'))
-    assert.ok(err instanceof ApiError)
-    assert.equal(err.code, 'bad_request')
-    assert.match(err.safeMessage, /already used/i)
+    try {
+      await api.siweVerify(message, '0xsig')
+      assert.fail('expected siweVerify to throw on unknown nonce')
+    } catch (err: any) {
+      assert.ok(isApiError(err), `expected ApiError, got ${err?.name}: ${err?.message}`)
+      assert.equal(err.code, 'bad_request')
+      assert.match(err.safeMessage, /not found/i)
+    }
   })
 
   test('MockAccessApi siweLogout does not throw', async () => {

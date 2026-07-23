@@ -8,6 +8,7 @@ export type FeatureFlags = {
   resources: boolean
   governance: boolean
   rewards: boolean
+  multiCommunity: boolean
 }
 
 export type FeatureFlagKey = keyof FeatureFlags
@@ -28,6 +29,7 @@ const FEATURE_ENV: Record<FeatureFlagKey, string> = {
   resources: 'NEXT_PUBLIC_FEATURE_RESOURCES',
   governance: 'NEXT_PUBLIC_FEATURE_GOVERNANCE',
   rewards: 'NEXT_PUBLIC_FEATURE_REWARDS',
+  multiCommunity: 'NEXT_PUBLIC_FEATURE_MULTI_COMMUNITY',
 }
 
 function rolloutEnvName(key: FeatureFlagKey): string {
@@ -92,4 +94,5 @@ export const featureRollouts: Record<FeatureFlagKey, FeatureRollout> = {
   resources: getFeatureRollout('resources'),
   governance: getFeatureRollout('governance'),
   rewards: getFeatureRollout('rewards'),
+  multiCommunity: getFeatureRollout('multiCommunity'),
 }

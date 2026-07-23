@@ -1,3 +1,4 @@
+import './setup-env'
 import { describe, it } from 'node:test'
 import * as assert from 'node:assert/strict'
 import { QueryClient, QueryObserver } from '@tanstack/react-query'
@@ -48,10 +49,10 @@ async function makeRealClient(rows: MemberRow[]) {
       queries: { retry: false, staleTime: Infinity, gcTime: Infinity },
     },
   })
-  await client.fetchQuery({ queryKey: queryKeys.members.all, queryFn })
-  client.setQueryData<MemberRow[]>(queryKeys.members.all, rows)
+  await client.fetchQuery({ queryKey: queryKeys.members.all(), queryFn })
+  client.setQueryData<MemberRow[]>(queryKeys.members.all(), rows)
   const observer = new QueryObserver<MemberRow[]>(client, {
-    queryKey: queryKeys.members.all,
+    queryKey: queryKeys.members.all(),
     queryFn,
   })
   const unsubscribe = observer.subscribe(() => {})
@@ -104,7 +105,7 @@ describe('reconcileMemberRoleCache', () => {
       })
       assert.equal(result, 'patched')
 
-      const rows = client.getQueryData<MemberRow[]>(queryKeys.members.all)
+      const rows = client.getQueryData<MemberRow[]>(queryKeys.members.all())
       assert.ok(rows)
       assert.deepEqual(rolesOf(rows, ALICE.address), ['member', 'moderator'])
 
@@ -119,7 +120,7 @@ describe('reconcileMemberRoleCache', () => {
     const { client, getFetchCount, cleanup } = await makeRealClient(seedRows())
     try {
       assert.equal(getFetchCount(), 1)
-      void client.invalidateQueries({ queryKey: queryKeys.members.all })
+      void client.invalidateQueries({ queryKey: queryKeys.members.all() })
       await settle()
       assert.equal(getFetchCount(), 2)
     } finally {
@@ -137,7 +138,7 @@ describe('reconcileMemberRoleCache', () => {
       })
       assert.equal(result, 'patched')
 
-      const rows = client.getQueryData<MemberRow[]>(queryKeys.members.all)
+      const rows = client.getQueryData<MemberRow[]>(queryKeys.members.all())
       assert.ok(rows)
       assert.deepEqual(rolesOf(rows, BOB.address), ['member'])
 

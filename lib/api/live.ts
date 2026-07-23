@@ -63,6 +63,8 @@ export { ApiError as AuthError } from './errors'
 
 import { PolicyValidationError, validatePolicy } from '../validation/policy'
 import { config } from '../config'
+import { ensureOnline, backendOnline } from '@/lib/api/backendStatus'
+import { OfflineError } from '@/lib/api/errors'
 
 const BASE = config.apiUrl
 
@@ -236,6 +238,17 @@ function createApiError(status: number, body?: ApiErrorBody, path?: string): Api
       code: 'not_found',
       safeMessage: 'The requested resource could not be found.',
       path,
+    })
+  }
+
+  if (status === 409) {
+    return new ApiError({
+      status,
+      code: 'conflict',
+      safeMessage:
+        body?.message || 'This policy was modified by another user. Please reload and try again.',
+      path,
+      details,
     })
   }
 
@@ -444,6 +457,8 @@ function isAbortError(err: unknown): boolean {
  * counted by the circuit breaker.
  */
 async function getJson<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  // Abort if backend is offline
+  ensureOnline();
   const {
     schema,
     prefixBase = true,
@@ -582,10 +597,21 @@ export class LiveAccessApi implements AccessApi {
   constructor(
     private readonly address?: string,
     private readonly token?: string,
+    private readonly communityId?: string,
   ) { }
 
-  private authHeaders(): HeadersInit {
-    return this.token ? { Authorization: `Bearer ${this.token}` } : {}
+  private authHeaders(extra?: HeadersInit): HeadersInit {
+    const headers: Record<string, string> = {
+      ...(extra as Record<string, string> ?? {})
+    }
+    if (this.token) {
+      headers['Authorization'] = `Bearer ${this.token}`
+    }
+    if (this.communityId) {
+      headers['X-Community-Id'] = this.communityId
+      headers['X-Community-Slug'] = this.communityId
+    }
+    return headers
   }
 
   async getSession(signal?: AbortSignal): Promise<Session> {
@@ -593,13 +619,13 @@ export class LiveAccessApi implements AccessApi {
       ? `?address=${encodeURIComponent(this.address)}`
       : ''
     const path = `/v1/session${addr}`
-    const raw = await getJson<BackendSession>(path, { schema: SessionSchema, signal })
+    const raw = await getJson<BackendSession>(path, { schema: SessionSchema, signal, headers: this.authHeaders() })
     validateSessionResponse(raw, path)
     const session = mapSession(raw)
 
     if (this.address) {
       try {
-        const integrationPath = `/api/integration/membership?address=${encodeURIComponent(this.address)}`
+        const integrationPath = `/api/integration/membership?address=${encodeURIComponent(this.address)}&community=${encodeURIComponent(this.communityId ?? '')}`
         const integrationMembership = await getIntegrationJson<BackendMember | null>(
           integrationPath,
           MembershipSchema.nullable(),
@@ -622,14 +648,14 @@ export class LiveAccessApi implements AccessApi {
 
   async getCommunity(signal?: AbortSignal): Promise<Community> {
     const path = '/v1/community'
-    const raw = await getJson<BackendSession['community']>(path, { schema: CommunitySchema, signal })
+    const raw = await getJson<BackendSession['community']>(path, { schema: CommunitySchema, signal, headers: this.authHeaders() })
     validateCommunityResponse(raw, path)
     return mapCommunity(raw)
   }
 
   async getMembership(address: string, signal?: AbortSignal): Promise<Membership | null> {
     const raw = await getIntegrationJson<BackendMember | null>(
-      `/api/integration/membership?address=${encodeURIComponent(address)}`,
+      `/api/integration/membership?address=${encodeURIComponent(address)}&community=${encodeURIComponent(this.communityId ?? '')}`,
       MembershipSchema.nullable(),
       signal,
     )
@@ -638,7 +664,7 @@ export class LiveAccessApi implements AccessApi {
 
   async verifyWallet(address: string, signal?: AbortSignal): Promise<WalletVerification> {
     return await getIntegrationJson<WalletVerification>(
-      `/api/integration/verify?address=${encodeURIComponent(address)}`,
+      `/api/integration/verify?address=${encodeURIComponent(address)}&community=${encodeURIComponent(this.communityId ?? '')}`,
       WalletVerificationSchema,
       signal,
     )
@@ -646,7 +672,7 @@ export class LiveAccessApi implements AccessApi {
 
   async getProfile(address: string, signal?: AbortSignal): Promise<MemberProfile | null> {
     const path = `/v1/members/${encodeURIComponent(address)}/profile`
-    const raw = await getJson<BackendMember | null>(path, { schema: MemberProfileSchema.nullable(), signal })
+    const raw = await getJson<BackendMember | null>(path, { schema: MemberProfileSchema.nullable(), signal, headers: this.authHeaders() })
     validateMemberProfileResponse(raw, path)
     return raw ? mapMemberProfile(raw, address) : null
   }
@@ -668,7 +694,7 @@ export class LiveAccessApi implements AccessApi {
       }),
     ])
 
-    const raw = await getJson<BackendMember[] | { members: BackendMember[]; nextCursor?: string }>(path, { schema, signal })
+    const raw = await getJson<BackendMember[] | { members: BackendMember[]; nextCursor?: string }>(path, { schema, signal, headers: this.authHeaders() })
 
     if (Array.isArray(raw)) {
       validateMemberRowsResponse(raw, path)
@@ -684,22 +710,23 @@ export class LiveAccessApi implements AccessApi {
 
   async listResources(signal?: AbortSignal): Promise<Resource[]> {
     const path = '/v1/resources'
-    const raw = await getJson<BackendResource[]>(path, { schema: z.array(ResourceSchema), signal })
+    const raw = await getJson<BackendResource[]>(path, { schema: z.array(ResourceSchema), signal, headers: this.authHeaders() })
     validateResourcesResponse(raw, path)
     return raw.map(mapResource)
   }
 
   async listPolicies(signal?: AbortSignal): Promise<AccessPolicy[]> {
     const path = '/v1/policies'
-    const raw = await getJson<BackendPolicy[]>(path, { schema: z.array(AccessPolicySchema), signal })
+    const raw = await getJson<BackendPolicy[]>(path, { schema: z.array(AccessPolicySchema), signal, headers: this.authHeaders() })
     validatePoliciesResponse(raw, path)
     return raw.map(mapPolicy)
   }
 
   async getResource(id: string, signal?: AbortSignal): Promise<ResourceLookupResult> {
-    const path = `/v1/resources/${encodeURIComponent(id)}`
+    ensureOnline();
+  const path = `/v1/resources/${encodeURIComponent(id)}`
     try {
-      const raw = await getJson<BackendResource>(path, { schema: ResourceSchema, signal })
+      const raw = await getJson<BackendResource>(path, { schema: ResourceSchema, signal, headers: this.authHeaders() })
       if (raw && Object.keys(raw).length > 0) {
         validateResourceResponse(raw, path)
         return { status: 'found', data: mapResource(raw), source: 'direct' }
@@ -746,7 +773,7 @@ export class LiveAccessApi implements AccessApi {
   async getPolicy(resourceId: string, signal?: AbortSignal): Promise<AccessPolicy | null> {
     const path = `/v1/policies/${encodeURIComponent(resourceId)}`
     try {
-      const raw = await getJson<BackendPolicy>(path, { schema: AccessPolicySchema, signal })
+      const raw = await getJson<BackendPolicy>(path, { schema: AccessPolicySchema, signal, headers: this.authHeaders() })
       if (raw && Object.keys(raw).length > 0) {
         validatePolicyResponse(raw, path)
         return mapPolicy(raw)
@@ -885,6 +912,7 @@ export class LiveAccessApi implements AccessApi {
         resource_id: result.value.resourceId,
         min_tier: result.value.minTier,
         roles: result.value.roles,
+        updated_at: result.value.updatedAt,
       }),
     })
   }

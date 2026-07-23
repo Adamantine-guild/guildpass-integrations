@@ -23,8 +23,10 @@
   },
   "dependencies": {
     "@radix-ui/react-label": "^2.1.12",
+    "@tanstack/query-sync-storage-persister": "^5.101.4",
     "@tanstack/react-query": "^5.52.0",
     "@tanstack/react-query-devtools": "^5.52.0",
+    "@tanstack/react-query-persist-client": "^5.101.4",
     "@wagmi/connectors": "^5.0.14",
     "autoprefixer": "^10.4.19",
     "class-variance-authority": "^0.7.0",

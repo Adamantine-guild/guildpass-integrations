@@ -39,16 +39,18 @@ export interface MemberCacheClient {
 export function reconcileMemberRoleCache(
   client: MemberCacheClient,
   input: { address: string; role: Role; action: MemberRoleAction },
+  community?: string,
 ): MemberCacheReconcileResult {
-  const cached = client.getQueryData(queryKeys.members.all)
+  const key = queryKeys.members.all(community)
+  const cached = client.getQueryData(key)
 
   if (!Array.isArray(cached)) {
-    void client.invalidateQueries({ queryKey: queryKeys.members.all })
+    void client.invalidateQueries({ queryKey: key })
     return 'invalidated'
   }
 
   const apply = input.action === 'assign' ? applyOptimisticRole : applyOptimisticRemoveRole
-  client.setQueryData(queryKeys.members.all, (current) =>
+  client.setQueryData(key, (current) =>
     apply(current, input.address, input.role),
   )
   return 'patched'

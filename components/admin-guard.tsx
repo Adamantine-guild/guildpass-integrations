@@ -7,13 +7,17 @@ import { getApi } from '@/lib/api';
 import { queryKeys } from '@/lib/query';
 import { useSiweAuth } from '@/lib/wallet/providers';
 import { Button } from '@/components/ui/button';
+import { useParams } from 'next/navigation';
 
 export function AdminGuard({ children }: { children: React.ReactNode }) {
   const { sessionStatus, authSession, signIn, isSigningIn } = useSiweAuth();
   const { address } = useAccount();
+  const params = useParams();
+  const communitySlug = (params?.communitySlug as string) || 'guildpass-demo';
+
   const { data: session } = useQuery({
-    queryKey: queryKeys.session.byAddress(address ?? authSession?.address ?? ''),
-    queryFn: () => getApi(address ?? authSession?.address, authSession?.token).getSession(),
+    queryKey: queryKeys.session.byAddress(address ?? authSession?.address ?? '', communitySlug),
+    queryFn: () => getApi(address ?? authSession?.address, authSession?.token, communitySlug).getSession(),
     enabled: sessionStatus === 'authenticated' && !!(address ?? authSession?.address),
     staleTime: 10_000,
     retry: 1,

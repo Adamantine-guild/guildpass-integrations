@@ -3,6 +3,7 @@
 import { useAccount } from "wagmi";
 import { useQuery } from "@tanstack/react-query";
 import { getApi } from "@/lib/api";
+import { useParams } from "next/navigation";
 import type { MemberRow } from "@/lib/api";
 import { isApiError } from "@/lib/api/errors";
 import { queryKeys } from "@/lib/query";
@@ -142,6 +143,8 @@ function MemberRewardRow({ member }: MemberRewardRowProps) {
 function RewardsContent() {
   const { address } = useAccount();
   const { authSession, markExpired, sessionStatus } = useSiweAuth();
+  const params = useParams();
+  const communitySlug = (params?.communitySlug as string) || 'guildpass-demo';
 
   const {
     data: members,
@@ -150,10 +153,10 @@ function RewardsContent() {
     error,
     refetch,
   } = useQuery<MemberRow[]>({
-    queryKey: [...queryKeys.members.all, address, authSession?.token ?? "anonymous"],
+    queryKey: [...queryKeys.members.all(communitySlug), address, authSession?.token ?? "anonymous"],
     queryFn: async ({ signal }) => {
       try {
-        const paginated = await getApi(address, authSession?.token).listMembers(
+        const paginated = await getApi(address, authSession?.token, communitySlug).listMembers(
           {},
           signal
         );

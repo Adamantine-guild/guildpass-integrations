@@ -15,6 +15,7 @@ import Link from 'next/link'
 import { Button, buttonVariants } from './ui/button'
 import { DisabledTooltip } from './ui/tooltip'
 import { LoadingState, ErrorState, DeniedState, safeErrorMessage } from './ui/api-states'
+import { useParams } from 'next/navigation'
 
 export function Gated({
   children,
@@ -31,12 +32,14 @@ export function Gated({
   resourceId?: string
 }) {
   const { address, chain } = useAccount()
+  const params = useParams()
+  const communitySlug = (params?.communitySlug as string) || 'guildpass-demo'
   const env = String(chain?.id ?? 1)
   const hasExplicitRequirements = minTier !== undefined || roles !== undefined || rule !== undefined
 
   const { data: session, isLoading: sessionLoading, isError, error, refetch } = useQuery({
-    queryKey: queryKeys.session.byAddress(address ?? ''),
-    queryFn: ({ signal }) => getApi(address).getSession(signal),
+    queryKey: queryKeys.session.byAddress(address ?? '', communitySlug),
+    queryFn: ({ signal }) => getApi(address, undefined, communitySlug).getSession(signal),
     enabled: !!address,
     retry: (failureCount, err) => {
       if (isApiError(err) && err.code === 'aborted') return false
@@ -45,8 +48,8 @@ export function Gated({
   })
 
   const { data: policies, isLoading: policiesLoading } = useQuery({
-    queryKey: queryKeys.policies.all,
-    queryFn: ({ signal }) => getApi(address).listPolicies(signal),
+    queryKey: queryKeys.policies.all(communitySlug),
+    queryFn: ({ signal }) => getApi(address, undefined, communitySlug).listPolicies(signal),
     enabled: !!address && !hasExplicitRequirements && !!resourceId,
     retry: (failureCount, err) => {
       if (isApiError(err) && err.code === 'aborted') return false
@@ -55,8 +58,8 @@ export function Gated({
   })
 
   const { data: resources, isLoading: resourcesLoading } = useQuery({
-    queryKey: queryKeys.resources.all,
-    queryFn: ({ signal }) => getApi(address).listResources(signal),
+    queryKey: queryKeys.resources.all(communitySlug),
+    queryFn: ({ signal }) => getApi(address, undefined, communitySlug).listResources(signal),
     enabled: !!address && !hasExplicitRequirements && !!resourceId,
     retry: (failureCount, err) => {
       if (isApiError(err) && err.code === 'aborted') return false
@@ -139,13 +142,15 @@ export function Gated({
 }
 
 export function AccessDenied({ reason }: { reason: string }) {
+  const params = useParams()
+  const communitySlug = (params?.communitySlug as string) || 'guildpass-demo'
   return (
     <DeniedState
       title="Access denied"
       message={reason}
       actions={
         <>
-          <Link href="/dashboard" className={buttonVariants()}>Back to Dashboard</Link>
+          <Link href={`/${communitySlug}/dashboard`} className={buttonVariants()}>Back to Dashboard</Link>
           <DisabledTooltip content="Coming soon">
             <Button
               variant="outline"

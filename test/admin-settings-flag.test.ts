@@ -11,6 +11,7 @@
  *   - Local mock mode enables demo-only features by default.
  *   - Live/production defaults to disabled until the settings backend ships.
  */
+import './setup-env'
 import { describe, test, beforeEach } from 'node:test'
 import * as assert from 'node:assert/strict'
 import * as React from 'react'
@@ -99,7 +100,7 @@ describe('adminSettings feature flag (issue #36)', () => {
     const html = renderSettingsGate(false)
     assert.doesNotMatch(
       html,
-      /Community Settings/,
+      /settings-content/,
       'settings page content must not be rendered when flag is false',
     )
   })

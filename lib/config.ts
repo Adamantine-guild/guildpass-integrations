@@ -26,6 +26,7 @@ export type FeatureFlagKey =
   | 'resources'
   | 'governance'
   | 'rewards'
+  | 'multiCommunity'
 
 export type FeatureFlags = Record<FeatureFlagKey, boolean>
 
@@ -177,6 +178,7 @@ const features: FeatureFlags = {
   resources: flag('NEXT_PUBLIC_FEATURE_RESOURCES', true),
   governance: flag('NEXT_PUBLIC_FEATURE_GOVERNANCE', false),
   rewards: flag('NEXT_PUBLIC_FEATURE_REWARDS', false),
+  multiCommunity: flag('NEXT_PUBLIC_FEATURE_MULTI_COMMUNITY', false),
 }
 
 export const config: AppConfig = Object.freeze({

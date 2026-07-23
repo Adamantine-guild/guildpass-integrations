@@ -73,10 +73,10 @@ export async function injectMockWalletConnector(
         },
         on: () => {}, // eslint-disable-line @typescript-eslint/no-empty-function
         removeListener: () => {}, // eslint-disable-line @typescript-eslint/no-empty-function
-      }
+      };
 
       // Inject the mock provider into the window
-      (window as any).ethereum = mockProvider
+      ;(window as any).ethereum = mockProvider
     },
     { address, isConnected, mockSignature },
   )
@@ -222,7 +222,7 @@ export async function simulateSessionExpiry(page: Page): Promise<void> {
         )
       }
 
-      return originalFetch(...args)
+      return originalFetch.apply(window, args as any)
     }
   })
 }

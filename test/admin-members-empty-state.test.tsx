@@ -83,7 +83,7 @@ require.cache[adminGuardPath] = {
   },
 } as any
 
-const MembersPage = require('../app/admin/members/page').default as React.ComponentType
+const MembersPage = require('../app/[communitySlug]/admin/members/page').default as React.ComponentType
 
 function renderMembersPage() {
   return renderToStaticMarkup(React.createElement(MembersPage))

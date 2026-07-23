@@ -140,15 +140,15 @@ describe('session storage helpers (#117)', () => {
 
   // ── Expiry guard ─────────────────────────────────────────────────────────
 
-  test('load returns null for an expired session and clears it', () => {
+  test('load returns null for an expired session but does not clear it', () => {
     const expired = validSession({
       expiresAt: new Date(Date.now() - 1000).toISOString(),
     })
     storeAuthSession(expired)
 
     assert.equal(loadAuthSession(), null)
-    // Expired load should have cleared the entry.
-    assert.equal(
+    // Expired load should not clear the entry because the refresh token might be valid.
+    assert.notEqual(
       (globalThis as any).window.sessionStorage.getItem(SESSION_KEY),
       null,
     )

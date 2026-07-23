@@ -31,7 +31,7 @@ const SCENARIOS: { id: Scenario; label: string; description: string }[] = [
 export default function DeveloperPage() {
   const { address } = useAccount()
   const queryClient = useQueryClient()
-  const [customAddress, setCustomAddress] = useState(address ?? '0x1234567890123456789012345678901234567890')
+  const [customAddress, setCustomAddress] = useState<string>(address ?? '0x1234567890123456789012345678901234567890')
 
   if (config.apiMode !== 'mock') {
     return (

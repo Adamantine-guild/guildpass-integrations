@@ -21,7 +21,12 @@
 
 'use client'
 
+import { backendOnline } from '@/lib/api/backendStatus';
+
+// Existing imports
 import { useCallback, useEffect, useRef, useState } from 'react'
+
+// ... rest of file unchanged ...
 
 const LS_KEY = 'guildpass:cache-last-updated'
 const SYNC_TIMEOUT_MS = 8_000
@@ -60,8 +65,20 @@ export interface SyncStatus {
 
 export function useSyncStatus(): SyncStatus {
   const [isOnline, setIsOnline] = useState<boolean>(
-    typeof navigator !== 'undefined' ? navigator.onLine : true,
-  )
+    typeof navigator !== 'undefined' ? navigator.onLine && backendOnline.get() : true,
+  );
+
+  // Sync with backend health status
+  useEffect(() => {
+    const handleBackendChange = (online: boolean) => {
+      setIsOnline(prev => {
+        const navigatorOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
+        return navigatorOnline && online;
+      });
+    };
+    const unsubscribe = backendOnline.subscribe(handleBackendChange);
+    return unsubscribe;
+  }, []);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(
     readPersistedTimestamp,
   )
