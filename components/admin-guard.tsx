@@ -1,119 +1,118 @@
-'use client'
+'use client';
 
-import { ReactNode } from 'react'
-import { useAccount } from 'wagmi'
-import { useQuery } from '@tanstack/react-query'
-import { getApi } from '@/lib/api'
-import { AccessDenied } from './gated'
-import { useSiweAuth } from '@/lib/wallet/providers'
-import { Button } from './ui/button'
-import { LoadingState, ErrorState, safeErrorMessage } from './ui/api-states'
+import React, { useEffect, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { useAccount } from 'wagmi';
+import { getApi } from '@/lib/api';
+import { queryKeys } from '@/lib/query';
+import { useSiweAuth } from '@/lib/wallet/providers';
+import { Button } from '@/components/ui/button';
 
-function SiwePrompt() {
-  const { signIn, isSigningIn, error } = useSiweAuth()
-  return (
-    <div className="rounded-md border p-6 max-w-md space-y-4">
-      <div className="flex items-start gap-3">
-        <svg
-          className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.5"
-          aria-hidden="true"
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            d="M12 2L4 6v6c0 5.25 3.5 10.15 8 11.25C16.5 22.15 20 17.25 20 12V6l-8-4z"
-          />
-        </svg>
-        <div>
-          <h2 className="text-base font-semibold">Admin Verification Required</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            To access the admin panel, you need to prove you own this wallet by signing
-            a one-time message. This is a{' '}
-            <strong className="font-medium">gasless, off-chain</strong> signature — it
-            does not cost any ETH and does not execute a transaction.
-          </p>
-          <ul className="mt-3 space-y-1 text-sm text-muted-foreground list-disc list-inside">
-            <li>Your signature is verified by our backend to issue a secure session token.</li>
-            <li>The session expires automatically after 1 hour.</li>
-            <li>You can sign out at any time from the navigation bar.</li>
-          </ul>
-        </div>
-      </div>
+export function AdminGuard({ children }: { children: React.ReactNode }) {
+  const { sessionStatus, authSession, signIn, isSigningIn } = useSiweAuth();
+  const { address } = useAccount();
+  const { data: session } = useQuery({
+    queryKey: queryKeys.session.byAddress(address ?? authSession?.address ?? ''),
+    queryFn: () => getApi(address ?? authSession?.address, authSession?.token).getSession(),
+    enabled: sessionStatus === 'authenticated' && !!(address ?? authSession?.address),
+    staleTime: 10_000,
+    retry: 1,
+  });
+  const [timeLeft, setTimeLeft] = useState<number | null>(null);
 
-      {error && (
-        <p id="siwe-prompt-error" className="text-sm text-destructive">
-          {error}
-        </p>
-      )}
+  useEffect(() => {
+    if (!authSession) {
+      setTimeLeft(null);
+      return;
+    }
 
-      <Button
-        id="siwe-prompt-signin-btn"
-        onClick={signIn}
-        disabled={isSigningIn}
-        className="w-full sm:w-auto"
-      >
-        {isSigningIn ? (
-          <span className="flex items-center gap-1.5">
-            <svg
-              className="h-4 w-4 animate-spin"
-              viewBox="0 0 24 24"
-              fill="none"
-              aria-hidden="true"
-            >
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
-            </svg>
-            Waiting for signature…
-          </span>
-        ) : (
-          'Sign Message to Continue'
-        )}
-      </Button>
-    </div>
-  )
-}
+    const tick = () => {
+      const diff = new Date(authSession.expiresAt).getTime() - Date.now();
+      setTimeLeft(Math.max(0, Math.floor(diff / 1000)));
+    };
 
-export default function AdminGuard({ children }: { children: ReactNode }) {
-  const { address } = useAccount()
-  const { isAuthenticated, authSession } = useSiweAuth()
+    tick();
+    const interval = setInterval(tick, 1000);
+    return () => clearInterval(interval);
+  }, [authSession]);
 
-  const { data: session, isLoading, isError, error, refetch } = useQuery({
-    queryKey: ['session', address],
-    queryFn: () => getApi(address, authSession?.token).getSession(),
-    enabled: !!address && isAuthenticated,
-    retry: 1
-  })
-
-  if (!address) {
-    return <AccessDenied reason="Admin area requires wallet connection." />
-  }
-
-  if (!isAuthenticated) {
-    return <SiwePrompt />
-  }
-
-  if (isLoading) {
-    return <LoadingState message="Checking admin access…" />
-  }
-
-  if (isError) {
+  if (sessionStatus === 'disconnected') {
     return (
-      <ErrorState
-        title="Could not verify admin access"
-        message={safeErrorMessage(error)}
-        onRetry={() => refetch()}
-      />
-    )
+      <div
+        role="status"
+        aria-live="polite"
+        aria-label="Access blocked: wallet disconnected"
+        className="flex flex-col items-center justify-center p-12 text-center bg-white dark:bg-zinc-950 rounded-lg border border-zinc-200 dark:border-zinc-800"
+      >
+        <span className="sr-only">
+          This administrative section is locked because no wallet is connected.
+          Connect your administrative wallet to continue.
+        </span>
+        <h2 className="text-xl font-bold mb-2">Wallet Disconnected</h2>
+        <p className="text-zinc-500 mb-4">Please connect your administrative wallet to access this section.</p>
+      </div>
+    );
+  }
+
+  if (sessionStatus !== 'authenticated') {
+    return (
+      <div
+        role="status"
+        aria-live="polite"
+        aria-label="Access blocked: sign-in required"
+        className="flex flex-col items-center justify-center p-12 text-center bg-white dark:bg-zinc-950 rounded-lg border border-zinc-200 dark:border-zinc-800"
+      >
+        <span className="sr-only">
+          Your wallet is connected but not signed in. Sign in with Ethereum to
+          unlock this administrative section.
+        </span>
+        <h2 className="text-xl font-bold mb-2">SIWE Authentication Required</h2>
+        <p className="text-zinc-500 mb-4">
+          {sessionStatus === 'expired'
+            ? 'Your admin session has expired. Sign in again to continue.'
+            : 'Accessing privileged management consoles requires a secure gasless authentication signature.'}
+        </p>
+        <Button
+          onClick={signIn}
+          disabled={isSigningIn}
+          aria-busy={isSigningIn}
+        >
+          {isSigningIn ? 'Signing…' : 'Sign In With Ethereum'}
+        </Button>
+      </div>
+    );
   }
 
   if (!session?.roles?.includes('admin')) {
-    return <AccessDenied reason="Admin privileges are required to view this page." />
+    return (
+      <div className="flex flex-col items-center justify-center p-12 text-center bg-white dark:bg-zinc-950 rounded-lg border border-zinc-200 dark:border-zinc-800">
+        <h2 className="text-xl font-bold mb-2">Admin Role Required</h2>
+        <p className="text-zinc-500 mb-4">Your authenticated wallet does not have the admin role required for this section.</p>
+      </div>
+    );
   }
 
-  return <>{children}</>
+  const isExpiring = timeLeft !== null && timeLeft > 0 && timeLeft <= 60;
+
+  return (
+    <div className="space-y-4">
+      {isExpiring && (
+        <div className="flex items-center justify-between p-4 bg-amber-50 border border-amber-200 dark:bg-amber-950/30 dark:border-amber-900/50 rounded-lg text-amber-900 dark:text-amber-200">
+          <div className="flex items-center gap-2 text-sm">
+            <span aria-hidden="true">⚠️</span>
+            <span>Your security session will expire in <strong>{timeLeft}s</strong>. Action requests made after expiration will fail.</span>
+          </div>
+          <Button
+            onClick={signIn}
+            disabled={isSigningIn}
+            aria-busy={isSigningIn}
+            size="sm"
+          >
+            {isSigningIn ? 'Signing…' : 'Extend Session'}
+          </Button>
+        </div>
+      )}
+      {children}
+    </div>
+  );
 }
-export { AdminGuard }

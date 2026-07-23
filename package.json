@@ -13,11 +13,16 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
+    "test": "tsc -p test/tsconfig.json --skipLibCheck && node --test test-dist/test/*.test.js",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "test:accessibility": "playwright test test/e2e/accessibility.spec.ts",
     "typecheck": "tsc --noEmit",
     "sync-types": "node scripts/sync-api-types.js --write",
     "check-types": "node scripts/sync-api-types.js --check"
   },
   "dependencies": {
+    "@radix-ui/react-label": "^2.1.12",
     "@tanstack/react-query": "^5.52.0",
     "@tanstack/react-query-devtools": "^5.52.0",
     "@wagmi/connectors": "^5.0.14",
@@ -32,9 +37,15 @@
     "tailwind-merge": "^2.3.0",
     "tailwindcss": "^3.4.3",
     "viem": "^2.17.0",
-    "wagmi": "^2.13.0"
+    "wagmi": "^2.13.0",
+    "zod": "^3.23.8"
+  },
+  "optionalDependencies": {
+    "@guildpass/integration-client": "*"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.10.0",
+    "@playwright/test": "^1.48.0",
     "@types/node": "^20.11.30",
     "@types/react": "^18.2.79",
     "@types/react-dom": "^18.2.25",

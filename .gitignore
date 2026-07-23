@@ -2,6 +2,7 @@ node_modules
 .next
 out
 dist
+test-dist
 .env
 .env.local
 .env.development.local
@@ -9,3 +10,24 @@ dist
 .env.test.local
 *.log
 *.DS_Store
+
+CLAUDE.md
+PLAN.md
+tasks/
+AGENTS.md
+update-test.js
+update-test.mjs
+temp/
+
+# Lock files
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+bun.lock
+
+# Playwright
+.auth/
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/

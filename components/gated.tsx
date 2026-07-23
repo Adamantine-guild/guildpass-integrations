@@ -1,28 +1,117 @@
 'use client'
-import { ReactNode } from 'react'
+import { ReactNode, useMemo } from 'react'
 import { useAccount } from 'wagmi'
 import { useQuery } from '@tanstack/react-query'
-import { getApi, type MembershipTier, type Role } from '@/lib/api'
+import { getApi, type AccessRule, type MembershipTier, type Role } from '@/lib/api'
+import { isApiError } from '@/lib/api/errors'
+import { computeAccessDecision } from '@/lib/api/access-decision'
+import {
+  accessKeys,
+  queryKeys,
+  ACCESS_DECISION_STALE_TIME,
+  ACCESS_DECISION_GC_TIME,
+} from '@/lib/query'
 import Link from 'next/link'
-import { buttonVariants } from './ui/button'
-import { LoadingState, ErrorState, safeErrorMessage } from './ui/api-states'
+import { Button, buttonVariants } from './ui/button'
+import { DisabledTooltip } from './ui/tooltip'
+import { LoadingState, ErrorState, DeniedState, safeErrorMessage } from './ui/api-states'
 
 export function Gated({
   children,
   minTier,
-  roles
+  roles,
+  rule,
+  resourceId
 }: {
   children: ReactNode
   minTier?: MembershipTier
   roles?: Role[]
+  /** Composable AND/OR rule tree; takes precedence over minTier/roles. */
+  rule?: AccessRule
+  resourceId?: string
 }) {
-  const { address } = useAccount()
-  const { data: session, isLoading, isError, error, refetch } = useQuery({
-    queryKey: ['session', address],
-    queryFn: () => getApi(address).getSession(),
+  const { address, chain } = useAccount()
+  const env = String(chain?.id ?? 1)
+  const hasExplicitRequirements = minTier !== undefined || roles !== undefined || rule !== undefined
+
+  const { data: session, isLoading: sessionLoading, isError, error, refetch } = useQuery({
+    queryKey: queryKeys.session.byAddress(address ?? ''),
+    queryFn: ({ signal }) => getApi(address).getSession(signal),
     enabled: !!address,
-    retry: 1
+    retry: (failureCount, err) => {
+      if (isApiError(err) && err.code === 'aborted') return false
+      return failureCount < 1
+    },
   })
+
+  const { data: policies, isLoading: policiesLoading } = useQuery({
+    queryKey: queryKeys.policies.all,
+    queryFn: ({ signal }) => getApi(address).listPolicies(signal),
+    enabled: !!address && !hasExplicitRequirements && !!resourceId,
+    retry: (failureCount, err) => {
+      if (isApiError(err) && err.code === 'aborted') return false
+      return failureCount < 1
+    },
+  })
+
+  const { data: resources, isLoading: resourcesLoading } = useQuery({
+    queryKey: queryKeys.resources.all,
+    queryFn: ({ signal }) => getApi(address).listResources(signal),
+    enabled: !!address && !hasExplicitRequirements && !!resourceId,
+    retry: (failureCount, err) => {
+      if (isApiError(err) && err.code === 'aborted') return false
+      return failureCount < 1
+    },
+  })
+
+  const dynamicPolicy = useMemo(() => {
+    if (!policies || !resourceId) return undefined
+    return policies.find((p) => p.resourceId === resourceId)
+  }, [policies, resourceId])
+
+  const dynamicResource = useMemo(() => {
+    if (!resources || !resourceId) return undefined
+    return resources.find((r) => r.id === resourceId)
+  }, [resources, resourceId])
+
+  const effectiveMinTier = minTier !== undefined
+    ? minTier
+    : (dynamicPolicy?.minTier !== undefined ? dynamicPolicy.minTier : dynamicResource?.minTier)
+
+  const effectiveRoles = roles !== undefined
+    ? roles
+    : (dynamicPolicy?.roles !== undefined ? dynamicPolicy.roles : dynamicResource?.roles)
+
+  // A composable rule (from props or the resource's policy) supersedes the
+  // legacy single-condition minTier/roles requirements.
+  const effectiveRule = hasExplicitRequirements ? rule : dynamicPolicy?.rule
+
+  const requirements = effectiveRule
+    ? { rule: effectiveRule }
+    : { minTier: effectiveMinTier, roles: effectiveRoles }
+
+  const requirementsLoaded =
+    hasExplicitRequirements ||
+    !resourceId ||
+    (policies !== undefined && resources !== undefined)
+
+  const { data: cachedDecision, isLoading: decisionLoading } = useQuery({
+    queryKey: accessKeys.decision(env, address ?? '', resourceId ?? ''),
+    queryFn: () => computeAccessDecision(session!, requirements),
+    enabled: !!session && !!resourceId && requirementsLoaded,
+    staleTime: ACCESS_DECISION_STALE_TIME,
+    gcTime: ACCESS_DECISION_GC_TIME,
+    retry: 1,
+  })
+
+  const fallbackDecision = useMemo(
+    () => session ? computeAccessDecision(session, { minTier: effectiveMinTier, roles: effectiveRoles, rule: effectiveRule }) : undefined,
+    [session, effectiveMinTier, effectiveRoles, effectiveRule]
+  )
+
+  const decision = resourceId ? cachedDecision : fallbackDecision
+  const isRequirementsLoading = !!resourceId && !hasExplicitRequirements && (policiesLoading || resourcesLoading)
+  const isLoading = resourceId ? (sessionLoading || decisionLoading || isRequirementsLoading) : sessionLoading
 
   if (!address) {
     return <AccessDenied reason="Please connect your wallet to continue." />
@@ -32,7 +121,7 @@ export function Gated({
     return <LoadingState message="Checking access…" />
   }
 
-  if (isError) {
+  if (isError && !(isApiError(error) && error.code === 'aborted')) {
     return (
       <ErrorState
         title="Could not verify access"
@@ -42,14 +131,8 @@ export function Gated({
     )
   }
 
-  const hasRole = roles ? roles.some(r => session?.roles?.includes(r)) : true
-  const tiers = ['free', 'standard', 'pro'] as MembershipTier[]
-  const meetsTier = minTier
-    ? tiers.indexOf(session?.membership?.tier as MembershipTier) >= tiers.indexOf(minTier)
-    : true
-
-  if (!hasRole || !meetsTier || !session?.membership?.active) {
-    return <AccessDenied reason="Your current membership does not grant access." />
+  if (!decision?.allowed) {
+    return <AccessDenied reason={decision?.reason ?? 'Your current membership does not grant access.'} />
   }
 
   return <>{children}</>
@@ -57,13 +140,24 @@ export function Gated({
 
 export function AccessDenied({ reason }: { reason: string }) {
   return (
-    <div className="rounded-md border p-6">
-      <div className="text-lg font-medium mb-2">Access Denied</div>
-      <div className="text-sm text-muted-foreground mb-4">{reason}</div>
-      <div className="flex items-center gap-2">
-        <Link href="/dashboard" className={buttonVariants()}>Back to Dashboard</Link>
-        <Link href="/dashboard" className={buttonVariants({ variant: 'outline' })}>Upgrade or Renew</Link>
-      </div>
-    </div>
+    <DeniedState
+      title="Access denied"
+      message={reason}
+      actions={
+        <>
+          <Link href="/dashboard" className={buttonVariants()}>Back to Dashboard</Link>
+          <DisabledTooltip content="Coming soon">
+            <Button
+              variant="outline"
+              disabled
+              aria-disabled="true"
+              className="cursor-not-allowed opacity-60"
+            >
+              Upgrade or Renew
+            </Button>
+          </DisabledTooltip>
+        </>
+      }
+    />
   )
 }

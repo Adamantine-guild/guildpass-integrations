@@ -1,9 +1,11 @@
 "use client"
+import { ReactNode } from "react"
 import { Button } from "./button"
-import { ApiError } from "@/lib/api/live"
+import { ApiError } from "../../lib/api/errors"
+import { cn } from "../../lib/utils"
 
 export function safeErrorMessage(err: unknown): string {
-  if (err instanceof ApiError) return err.message
+  if (err instanceof ApiError) return err.safeMessage
   if (err instanceof Error) {
     if (/fetch|network|connect/i.test(err.message)) {
       return "Unable to connect. Please check your connection and try again."
@@ -13,8 +15,76 @@ export function safeErrorMessage(err: unknown): string {
   return "An unexpected error occurred."
 }
 
+function StateShell({
+  tone,
+  title,
+  message,
+  icon,
+  actions,
+  role,
+  ariaLive = "polite",
+  ariaBusy,
+  className
+}: {
+  tone: "loading" | "empty" | "error" | "denied"
+  title?: string
+  message: string
+  icon?: ReactNode
+  actions?: ReactNode
+  role?: "status" | "alert" | "note"
+  ariaLive?: "polite" | "assertive"
+  ariaBusy?: boolean
+  className?: string
+}) {
+  const toneClass = {
+    loading: "border-border bg-muted/30",
+    empty: "border-dashed border-border bg-muted/20",
+    error: "border-destructive/30 bg-destructive/5",
+    denied: "border-amber-300 bg-amber-50 text-amber-950 dark:border-amber-700/40 dark:bg-amber-900/20 dark:text-amber-100"
+  }[tone]
+
+  return (
+    <div
+      role={role}
+      aria-live={ariaLive}
+      aria-busy={ariaBusy}
+      className={cn("rounded-md border p-4 space-y-2", toneClass, className)}
+    >
+      {title && (
+        <div
+          className={cn(
+            "text-sm font-medium",
+            tone === "error" && "text-destructive",
+            tone === "denied" && "text-amber-900 dark:text-amber-100"
+          )}
+        >
+          {title}
+        </div>
+      )}
+      {icon && <div className="flex justify-center text-muted-foreground">{icon}</div>}
+      <div
+        className={cn(
+          "text-sm text-muted-foreground",
+          tone === "denied" && "text-amber-800 dark:text-amber-200"
+        )}
+      >
+        {message}
+      </div>
+      {actions && <div className="flex flex-wrap items-center gap-2 pt-1">{actions}</div>}
+    </div>
+  )
+}
+
 export function LoadingState({ message = "Loading…" }: { message?: string }) {
-  return <div className="text-sm text-muted-foreground">{message}</div>
+  return (
+    <StateShell
+      tone="loading"
+      message={message}
+      role="status"
+      ariaLive="polite"
+      ariaBusy
+    />
+  )
 }
 
 export function ErrorState({
@@ -27,20 +97,61 @@ export function ErrorState({
   onRetry?: () => void
 }) {
   return (
-    <div className="rounded-md border border-destructive/30 bg-destructive/5 p-4 space-y-2">
-      <div className="text-sm font-medium text-destructive">{title}</div>
-      {message && (
-        <div className="text-xs text-muted-foreground">{message}</div>
-      )}
-      {onRetry && (
+    <StateShell
+      tone="error"
+      title={title}
+      message={message ?? "Please try again."}
+      role="alert"
+      ariaLive="assertive"
+      actions={onRetry && (
         <Button size="sm" variant="outline" onClick={onRetry}>
           Try again
         </Button>
       )}
-    </div>
+    />
   )
 }
 
-export function EmptyState({ message = "Nothing here yet." }: { message?: string }) {
-  return <div className="text-sm text-muted-foreground">{message}</div>
+export function EmptyState({
+  title = "Nothing here yet",
+  message = "There is no data to show right now.",
+  icon,
+  actions
+}: {
+  title?: string
+  message?: string
+  icon?: ReactNode
+  actions?: ReactNode
+}) {
+  return (
+    <StateShell
+      tone="empty"
+      title={title}
+      message={message}
+      icon={icon}
+      role="status"
+      actions={actions}
+      className="text-center"
+    />
+  )
+}
+
+export function DeniedState({
+  title = "Access denied",
+  message,
+  actions
+}: {
+  title?: string
+  message: string
+  actions?: ReactNode
+}) {
+  return (
+    <StateShell
+      tone="denied"
+      title={title}
+      message={message}
+      role="note"
+      actions={actions}
+    />
+  )
 }
