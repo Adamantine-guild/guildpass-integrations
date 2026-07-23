@@ -115,6 +115,9 @@ flowchart TD
 | `lib/integration-client.ts` | Loads the optional private package at runtime; normalises its responses; never runs in the browser |
 | `test/fixtures/openapi.json` | OpenAPI schema that defines the canonical contract for `lib/api/types.ts` |
 | `scripts/sync-api-types.js` | Zero-dependency compiler: converts `openapi.json` → `lib/api/types.ts` |
+| `app/members/[address]/page.tsx` | Public, read-only profile view — feature-flagged (`NEXT_PUBLIC_FEATURE_PROFILES`), no `<Gated>` (reads are public), no wallet required to view |
+| `components/dashboard/profile-editor.tsx` | Self-service profile editor embedded in the dashboard's "Profile" card; `updateProfile()` is the one `MemberAccessApi` mutation and requires a SIWE bearer token |
+| `lib/validation/profile.ts` | `validateProfile()` — field-level validation (length limits, `http(s)` URL checks, social-link dedup), mirrors `lib/validation/policy.ts`'s `{valid, errors}` shape |
 
 ---
 
@@ -162,6 +165,22 @@ sequenceDiagram
 >
 > See [docs/refresh-token-contract.md](./refresh-token-contract.md) for the
 > precise backend contract that `guildpass-core` must implement.
+
+### Member profile edits reuse the SIWE session (no separate auth mechanism)
+
+`MemberAccessApi.updateProfile()` (self-service profile editing, #254) is the
+one mutation that lives outside `AdminAccessApi` yet still requires a token.
+Rather than adding a second, lighter-weight auth mechanism for non-admin
+mutations, it reuses the exact SIWE session shown above — the same
+`SiweAuthProvider` / `useSiweAuth()` context, the same token storage, the same
+cross-tab sync. The only difference from an admin mutation is authorization,
+not authentication: the backend must accept the request when the token's
+address matches the `address` in the path, with no role check. The frontend
+mirrors this — `components/dashboard/profile-editor.tsx` calls `signIn()`
+directly rather than routing through `<AdminGuard>` (which layers on a role
+check this flow doesn't need), and checks `profile.address === this.address`
+client-side before sending the request (`lib/api/live.ts` /
+`lib/api/mock.ts`) as a UX guard, not the real security boundary.
 
 ---
 

@@ -26,6 +26,7 @@ export type FeatureFlagKey =
   | 'resources'
   | 'governance'
   | 'rewards'
+  | 'profiles'
 
 export type FeatureFlags = Record<FeatureFlagKey, boolean>
 
@@ -177,6 +178,9 @@ const features: FeatureFlags = {
   resources: flag('NEXT_PUBLIC_FEATURE_RESOURCES', true),
   governance: flag('NEXT_PUBLIC_FEATURE_GOVERNANCE', false),
   rewards: flag('NEXT_PUBLIC_FEATURE_REWARDS', false),
+  // Rich profile customization / public profile view (#254) — deferred module,
+  // off in every environment (including mock) until explicitly enabled.
+  profiles: flag('NEXT_PUBLIC_FEATURE_PROFILES', false),
 }
 
 export const config: AppConfig = Object.freeze({

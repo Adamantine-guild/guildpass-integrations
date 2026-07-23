@@ -11,7 +11,7 @@ The main frontend MVP for the GuildPass ecosystem. Built with **Next.js 14 App R
 
 ## Features (MVP)
 
-- **Member dashboard** — wallet connect, membership state, community & tier, expiration, badges placeholder, gated resources, profile summary
+- **Member dashboard** — wallet connect, membership state, community & tier, expiration, badges, gated resources, wallet verification status, and a self-service profile editor (`NEXT_PUBLIC_FEATURE_PROFILES`)
 - **Admin dashboard** — overview, member list, role assignment, resource access policies, community settings
 - **Access-gated experiences** — gated pages, gated content sections, event access, denied states, upgrade/renew placeholders
 - **Wallet-aware UX** — connect flow, SIWE-authenticated admin experience, role-aware UI states, admin-only sections
@@ -161,6 +161,7 @@ Modules that are experimental or not yet production-ready are controlled by envi
 | `NEXT_PUBLIC_FEATURE_RESOURCES` | `true` | `true` | Gated resources at `/resources/*` |
 | `NEXT_PUBLIC_FEATURE_ANALYTICS` | `false` | `false` | Analytics module (not yet built) |
 | `NEXT_PUBLIC_FEATURE_GOVERNANCE` | `false` | `false` | Governance module (not yet built) |
+| `NEXT_PUBLIC_FEATURE_PROFILES` | `false` | `false` | Public member profile view at `/members/[address]` — rich profile customization (#254) |
 | `NEXT_PUBLIC_FEATURE_<NAME>_ROLLOUT_PCT` | unset | unset | Optional 0–100 percentage rollout for the matching flag |
 
 **How flags work:**
@@ -277,6 +278,9 @@ The diagram covers:
 | `components/nav.tsx` | Navigation bar |
 | `test/fixtures/openapi.json` | OpenAPI schema contract fixture representing core API models |
 | `scripts/sync-api-types.js` | Zero-dependency compiler converting openapi.json to typescript types |
+| `app/members/[address]/page.tsx` | Public, read-only member profile view (`NEXT_PUBLIC_FEATURE_PROFILES`) |
+| `components/dashboard/profile-editor.tsx` | Self-service profile editor on the dashboard |
+| `lib/validation/profile.ts` | Profile field validation (`validateProfile`) |
 
 ### Composable access rules
 
@@ -291,6 +295,15 @@ Access policies support an optional composable rule tree in addition to the lega
 ```
 
 Primitive conditions are `tier` (tier ≥ X), `role` (has role Y), and `badge` (has badge Z); `and`/`or` nodes nest arbitrarily. When a policy sets `rule`, it takes precedence over `minTier`/`roles`; legacy policies are evaluated by wrapping them into an equivalent one-node tree, so behavior is unchanged. The recursive evaluator lives in [`lib/api/access-decision.ts`](./lib/api/access-decision.ts) (`evaluateAccessRule`), and the mock data seeds two demo policies (`mod-lounge` — a genuine AND, `insider-hub` — a genuine OR).
+
+### Member profiles
+
+Members can customize a `displayName`, `bio`, `avatar` (URL — image upload is a disabled "coming soon" stub, not implemented), and a list of `socialLinks` (`{ platform, url }`), in addition to the existing system-assigned `badges`. The feature is gated behind `NEXT_PUBLIC_FEATURE_PROFILES` (off by default in every environment, including mock mode — see [Feature Flags](#feature-flags)).
+
+- **Editing** — the dashboard's "Profile" card (`components/dashboard/profile-editor.tsx`). Editing requires SIWE sign-in (reusing the same session as admin actions — see [docs/architecture.md](./docs/architecture.md#member-profile-edits-reuse-the-siwe-session-no-separate-auth-mechanism)), but *viewing* your own profile does not.
+- **Public view** — `/members/[address]` (`app/members/[address]/page.tsx`) renders any member's customized fields read-only, with no wallet connection required and no `<Gated>` check (profile reads are public, matching `getProfile()`'s existing unauthenticated contract). Linked from the dashboard's Profile card and from each row in `/admin/members`.
+- **Validation** — [`lib/validation/profile.ts`](./lib/validation/profile.ts) (`validateProfile()`), mirroring `validatePolicy()`'s `{valid, errors}` shape: length limits on `displayName`/`bio`, `http(s)`-only URL checks on `avatar` and each social link, and case-insensitive de-duplication of social link platforms.
+- **`badges` is read-only** — it's system-assigned (community milestones), and `updateProfile()` never accepts client-submitted badges; both the mock and live clients always carry the existing value forward regardless of what's submitted.
 
 ---
 
