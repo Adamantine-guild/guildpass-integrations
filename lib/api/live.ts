@@ -33,6 +33,7 @@ import {
   AccessPolicySchema,
   WebhookEventLogSchema,
   SiweAuthSessionSchema,
+  ContributionEvent,
 } from './types'
 import {
   mapCommunity,
@@ -43,6 +44,7 @@ import {
   mapPolicy,
   mapSession,
   mapWebhookEvent,
+  mapContributionEvent,
 } from './mappers'
 import { ApiError } from './errors'
 import {
@@ -653,6 +655,20 @@ export class LiveAccessApi implements AccessApi {
     const raw = await getJson<BackendMember | null>(path, { schema: MemberProfileSchema.nullable(), signal })
     validateMemberProfileResponse(raw, path)
     return raw ? mapMemberProfile(raw, address) : null
+  }
+
+  async getContributionHistory(address: string, signal?: AbortSignal): Promise<ContributionEvent[]> {
+    const path = `/v1/members/${encodeURIComponent(address)}/events`
+    try {
+      const raw = await getJson<unknown[] | null>(path, { schema: z.array(z.unknown()).nullable(), signal })
+      if (!raw || !Array.isArray(raw)) return []
+      return raw.map((item) => mapContributionEvent(item, address))
+    } catch (err) {
+      if (isApiError(err) && (err.status === 404 || err.code === 'not_found')) {
+        return []
+      }
+      throw err
+    }
   }
 
   async listMembers(params?: { cursor?: string; limit?: number; filter?: string }, signal?: AbortSignal): Promise<MemberRow[] | PaginatedMembers> {

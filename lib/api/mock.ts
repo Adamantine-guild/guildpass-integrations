@@ -43,6 +43,7 @@ import {
   WalletVerification,
   WebhookEventLog,
   WebhookEventUnsubscribe,
+  ContributionEvent,
 } from './types'
 import { ApiError } from './errors'
 import {
@@ -253,6 +254,65 @@ for (let i = 0; i < 50000; i++) {
       badges: i % 100 === 0 ? ['Early Adopter'] : [],
     },
   }
+}
+
+const DEFAULT_CONTRIBUTION_EVENTS: Record<string, ContributionEvent[]> = {
+  '0xabc': [
+    {
+      id: 'evt_01',
+      address: '0xabc',
+      type: 'badge_earned',
+      title: 'Earned "Beta Tester" Badge',
+      description: 'Awarded for active participation in the early preview release.',
+      timestamp: new Date(Date.now() - 1000 * 60 * 60 * 24 * 2).toISOString(),
+      metadata: { badge: 'Beta Tester', category: 'community' },
+    },
+    {
+      id: 'evt_02',
+      address: '0xabc',
+      type: 'resource_access',
+      title: 'Accessed Alpha Docs',
+      description: 'Unlocked restricted community developer resources.',
+      timestamp: new Date(Date.now() - 1000 * 60 * 60 * 24 * 5).toISOString(),
+      metadata: { resourceId: 'alpha', tier: 'standard' },
+    },
+    {
+      id: 'evt_03',
+      address: '0xabc',
+      type: 'membership_update',
+      title: 'Upgraded Tier to Pro',
+      description: 'Subscription upgraded from Standard to Pro tier.',
+      timestamp: new Date(Date.now() - 1000 * 60 * 60 * 24 * 14).toISOString(),
+      metadata: { previousTier: 'standard', newTier: 'pro' },
+    },
+    {
+      id: 'evt_04',
+      address: '0xabc',
+      type: 'role_change',
+      title: 'Role Assigned: Member',
+      description: 'Granted initial Member role in GuildPass Demo Community.',
+      timestamp: new Date(Date.now() - 1000 * 60 * 60 * 24 * 30).toISOString(),
+      metadata: { role: 'member', assignedBy: 'system' },
+    },
+    {
+      id: 'evt_05',
+      address: '0xabc',
+      type: 'attendance',
+      title: 'Attended Community Townhall Q3',
+      description: 'Verified attendance at the quarterly ecosystem governance call.',
+      timestamp: new Date(Date.now() - 1000 * 60 * 60 * 24 * 45).toISOString(),
+      metadata: { eventName: 'Q3 Townhall', verifiedVia: 'POAP' },
+    },
+    {
+      id: 'evt_06',
+      address: '0xabc',
+      type: 'contribution_score',
+      title: 'Contribution Score Milestone (+50 pts)',
+      description: 'Reached 500 total community contribution points.',
+      timestamp: new Date(Date.now() - 1000 * 60 * 60 * 24 * 60).toISOString(),
+      metadata: { points: 50, scoreTotal: 500 },
+    },
+  ],
 }
 
 let community: Community = { ...DEFAULT_COMMUNITY }
@@ -625,6 +685,44 @@ export class MockAccessApi implements AccessApi {
     await initPromise
     const data = ensureAddress(address)
     return data?.profile ?? null
+  }
+
+  async getContributionHistory(address: string, _signal?: AbortSignal): Promise<ContributionEvent[]> {
+    await initPromise
+    if (!address || address.toLowerCase().includes('empty')) {
+      return []
+    }
+    const normalizedAddr = address.toLowerCase()
+    const data = ensureAddress(address)
+    if (!data) return []
+
+    const events = DEFAULT_CONTRIBUTION_EVENTS[normalizedAddr] || DEFAULT_CONTRIBUTION_EVENTS['0xabc']?.map(evt => ({
+      ...evt,
+      address,
+    })) || [
+      {
+        id: `evt_init_${address.slice(0, 6)}`,
+        address,
+        type: 'membership_update',
+        title: `Joined Community`,
+        description: `Active ${data.membership.tier} membership.`,
+        timestamp: new Date(Date.now() - 1000 * 60 * 60 * 24 * 7).toISOString(),
+        metadata: { tier: data.membership.tier },
+      },
+      {
+        id: `evt_role_${address.slice(0, 6)}`,
+        address,
+        type: 'role_change',
+        title: `Role Assigned: ${data.roles.join(', ') || 'member'}`,
+        description: 'Initial role configuration.',
+        timestamp: new Date(Date.now() - 1000 * 60 * 60 * 24 * 7).toISOString(),
+        metadata: { roles: data.roles },
+      },
+    ]
+
+    return [...events].sort(
+      (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+    )
   }
 
   async listMembers(params?: { cursor?: string; limit?: number; filter?: string }, _signal?: AbortSignal): Promise<MemberRow[] | PaginatedMembers> {

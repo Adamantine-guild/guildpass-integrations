@@ -11,7 +11,9 @@ import {
 } from "@/lib/api";
 import { isApiError } from "@/lib/api/errors";
 import { mapVerificationState } from "@/lib/api/mappers";
-import { queryKeys } from "@/lib/query";
+import { queryKeys } from "@/lib/query"
+import { type ContributionEvent } from "@/lib/api";
+import ContributionHistory from "@/components/dashboard/contribution-history";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { MembershipExpiryBadge } from "@/components/ui/membership-expiry-badge";
@@ -412,6 +414,16 @@ export default function DashboardPage() {
               title="No resources available"
               message="No resources have been configured for this community yet."
             />
+          )}
+        </Section>
+        <Section title="Contribution History">
+          {!address ? (
+            <DeniedState
+              title="Wallet connection required"
+              message="Connect your wallet to view your contribution history."
+            />
+          ) : (
+            <ContributionHistory address={address ?? ""} />
           )}
         </Section>
       </div>

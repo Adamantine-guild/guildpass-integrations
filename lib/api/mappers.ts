@@ -10,6 +10,7 @@ import type {
   BackendMember,
   BackendSession,
   WalletVerification,
+  ContributionEvent,
 } from './types'
 import { isApiError } from './errors'
 
@@ -187,5 +188,19 @@ export function mapVerificationState(
     title: 'Not Verified',
     message: 'This wallet is not yet verified.',
     badgeVariant: 'warning',
+  }
+}
+
+// ── Contribution Event ────────────────────────────────────────────────────────
+
+export function mapContributionEvent(raw: any, address: string): ContributionEvent {
+  return {
+    id: raw.id ?? `evt_${Math.random().toString(36).substring(2, 9)}`,
+    address: raw.address ?? address,
+    type: raw.type ?? raw.event_type ?? 'generic',
+    title: raw.title ?? raw.name ?? 'Activity Event',
+    description: raw.description,
+    timestamp: raw.timestamp ?? raw.created_at ?? new Date().toISOString(),
+    metadata: raw.metadata ?? raw.payload ?? raw.details,
   }
 }

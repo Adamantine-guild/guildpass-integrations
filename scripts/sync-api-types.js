@@ -147,16 +147,17 @@ export interface BackendSession {
  */
 export interface MemberAccessApi {
   // ── Read-only (no auth token required) ──────────────────────────────────
-  getSession(): Promise<Session>
-  getCommunity(): Promise<Community>
-  getMembership(address: string): Promise<Membership | null>
-  verifyWallet(address: string): Promise<WalletVerification>
-  getProfile(address: string): Promise<MemberProfile | null>
-  listMembers(): Promise<MemberRow[]>
-  listResources(): Promise<Resource[]>
-  listPolicies(): Promise<AccessPolicy[]>
-  getResource(id: string): Promise<Resource | null>
-  getPolicy(resourceId: string): Promise<AccessPolicy | null>
+  getSession(signal?: AbortSignal): Promise<Session>
+  getCommunity(signal?: AbortSignal): Promise<Community>
+  getMembership(address: string, signal?: AbortSignal): Promise<Membership | null>
+  verifyWallet(address: string, signal?: AbortSignal): Promise<WalletVerification>
+  getProfile(address: string, signal?: AbortSignal): Promise<MemberProfile | null>
+  getContributionHistory(address: string, signal?: AbortSignal): Promise<ContributionEvent[]>
+  listMembers(params?: { cursor?: string; limit?: number; filter?: string }, signal?: AbortSignal): Promise<MemberRow[] | PaginatedMembers>
+  listResources(signal?: AbortSignal): Promise<Resource[]>
+  listPolicies(signal?: AbortSignal): Promise<AccessPolicy[]>
+  getResource(id: string, signal?: AbortSignal): Promise<ResourceLookupResult>
+  getPolicy(resourceId: string, signal?: AbortSignal): Promise<AccessPolicy | null>
 }
 
 /**

@@ -6,6 +6,33 @@
     "version": "1.0.0"
   },
   "paths": {
+    "/v1/members/{address}/events": {
+      "get": {
+        "summary": "Get member contribution history",
+        "operationId": "getContributionHistory",
+        "parameters": [
+          {
+            "name": "address",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of contribution history events for the member.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/ContributionEvent" }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/resources": {
       "get": {
         "summary": "List gated resources",
@@ -468,6 +495,22 @@
           "checkedAt": { "type": "string", "format": "date-time" }
         },
         "required": ["verified", "checkedAt"]
+      },
+      "ContributionEvent": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "address": { "type": "string" },
+          "type": { "type": "string" },
+          "title": { "type": "string" },
+          "description": { "type": "string" },
+          "timestamp": { "type": "string", "format": "date-time" },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "required": ["id", "address", "type", "title", "timestamp"]
       }
     }
   }

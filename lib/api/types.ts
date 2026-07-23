@@ -6,7 +6,6 @@
  */
 
 import { z } from 'zod';
-import { ApiError } from './errors'
 
 export type Role = 'member' | 'moderator' | 'admin'
 
@@ -34,10 +33,6 @@ export const WebhookEventLogSchema = z.object({
   timestamp: z.string(),
   affectedIdentifier: z.string(),
   payloadSummary: WebhookPayloadSummarySchema,
-  /** Raw event payload for detail inspection (optional — added by the replay/debug tool). */
-  fullPayload: z.record(z.unknown()).optional(),
-  /** True when this entry was injected via the replay/debug tool rather than ingested from a real webhook. */
-  isReplay: z.boolean().optional(),
 })
 
 export interface Community {
@@ -123,12 +118,6 @@ export interface Resource {
   content?: ResourceContentBlock[]
 }
 
-export type ResourceLookupResult =
-  | { status: 'found'; data: Resource; source: 'direct' | 'fallback' }
-  | { status: 'not_found' }
-  | { status: 'error'; error: ApiError }
-
-
 export const ResourceSchema = z.object({
   id: z.string(),
   title: z.string(),
@@ -183,6 +172,48 @@ export const MemberRowSchema = z.object({
   active: z.boolean(),
 })
 
+export interface MemberGrowthDataPoint {
+  date: string
+  newMembers: number
+  totalMembers: number
+}
+
+export const MemberGrowthDataPointSchema = z.object({
+  date: z.string(),
+  newMembers: z.number(),
+  totalMembers: z.number(),
+})
+
+export interface ResourceAccessCount {
+  resourceId: string
+  resourceTitle: string
+  accessCount: number
+  deniedCount: number
+}
+
+export const ResourceAccessCountSchema = z.object({
+  resourceId: z.string(),
+  resourceTitle: z.string(),
+  accessCount: z.number(),
+  deniedCount: z.number(),
+})
+
+export interface AnalyticsSummary {
+  totalMembers: number
+  activeMembers: number
+  memberGrowth: MemberGrowthDataPoint[]
+  resourceAccess: ResourceAccessCount[]
+  generatedAt: string
+}
+
+export const AnalyticsSummarySchema = z.object({
+  totalMembers: z.number(),
+  activeMembers: z.number(),
+  memberGrowth: z.array(MemberGrowthDataPointSchema),
+  resourceAccess: z.array(ResourceAccessCountSchema),
+  generatedAt: z.string(),
+})
+
 export const ApiErrorBodySchema = z.object({
   code: z.string().optional(),
   error: z.string().optional(),
@@ -192,20 +223,9 @@ export const ApiErrorBodySchema = z.object({
 
 export interface SiweAuthSession {
   isAuthenticated: true
-  /** Short-lived access token (typically 1 h). Attach as `Authorization: Bearer` on admin mutations. */
   token: string
   address: string
-  /** ISO 8601 expiry of the access token. */
   expiresAt: string
-  /**
-   * Opaque longer-lived refresh credential (typically 7 d).
-   * Must be treated as a secret — never log or expose it.
-   * Optional so that existing persisted sessions without a refresh token
-   * are still valid (they will just not support silent renewal).
-   */
-  refreshToken?: string
-  /** ISO 8601 expiry of the refresh token. Absence means no refresh is available. */
-  refreshExpiresAt?: string
 }
 
 export const SiweAuthSessionSchema = z.object({
@@ -213,14 +233,32 @@ export const SiweAuthSessionSchema = z.object({
   token: z.string(),
   address: z.string(),
   expiresAt: z.string(),
-  refreshToken: z.string().optional(),
-  refreshExpiresAt: z.string().optional(),
 })
 
 export const WalletVerificationSchema = z.object({
   verified: z.boolean(),
   method: z.string().optional(),
   checkedAt: z.string(),
+})
+
+export interface ContributionEvent {
+  id: string
+  address: string
+  type: string
+  title: string
+  description?: string
+  timestamp: string
+  metadata?: Record<string, unknown>
+}
+
+export const ContributionEventSchema = z.object({
+  id: z.string(),
+  address: z.string(),
+  type: z.string(),
+  title: z.string(),
+  description: z.string().optional(),
+  timestamp: z.string(),
+  metadata: z.record(z.unknown()).optional(),
 })
 
 export type WebhookEventStatus = 'success' | 'failed' | 'pending';
@@ -231,8 +269,6 @@ export type WebhookEventType =
   | 'membership.expired' 
   | 'tier.upgraded' 
   | 'policy.updated';
-
-export type WebhookEventUnsubscribe = () => void
 
 export interface WebhookEventLog {
   id: string;
@@ -246,10 +282,6 @@ export interface WebhookEventLog {
     tier?: string;
     reason?: string;
   };
-  /** Raw event payload for detail inspection (optional — added by the replay/debug tool). */
-  fullPayload?: Record<string, unknown>;
-  /** True when this entry was injected via the replay/debug tool rather than ingested from a real webhook. */
-  isReplay?: boolean;
 }
 
 export interface WalletVerification {
@@ -264,77 +296,6 @@ export interface ApiErrorBody {
   message?: string
   details?: Record<string, unknown>
 }
-
-// ── Analytics Types ──────────────────────────────────────────────────────────
-// NOTE: The analytics endpoint is PROVISIONAL. The path /v1/admin/analytics
-// has not yet been confirmed by guildpass-core. This contract is documented
-// here so the frontend and backend can align. Tracked in issue #157.
-
-/**
- * A single data point in the member growth time series.
- */
-export interface MemberGrowthDataPoint {
-  /** ISO 8601 date (YYYY-MM-DD) representing the start of the interval. */
-  date: string
-  /** Number of new members who joined during this interval. */
-  newMembers: number
-  /** Cumulative total member count at end of interval. */
-  totalMembers: number
-}
-
-export const MemberGrowthDataPointSchema = z.object({
-  date: z.string(),
-  newMembers: z.number().int().nonnegative(),
-  totalMembers: z.number().int().nonnegative(),
-})
-
-/**
- * Access attempt counts for a single gated resource.
- */
-export interface ResourceAccessCount {
-  resourceId: string
-  resourceTitle: string
-  /** Total number of access attempts for this resource. */
-  accessCount: number
-  /** Number of denied access attempts (insufficient tier/role). */
-  deniedCount: number
-}
-
-export const ResourceAccessCountSchema = z.object({
-  resourceId: z.string(),
-  resourceTitle: z.string(),
-  accessCount: z.number().int().nonnegative(),
-  deniedCount: z.number().int().nonnegative(),
-})
-
-/**
- * Top-level analytics summary for the admin dashboard.
- *
- * @provisional Endpoint `/v1/admin/analytics` is not yet implemented in
- * guildpass-core. This type definition captures the proposed contract so
- * frontend and backend can align. The mock implementation uses seeded data;
- * the live implementation will use this schema once the backend ships.
- */
-export interface AnalyticsSummary {
-  /** Total community member count. */
-  totalMembers: number
-  /** Count of members with an active membership. */
-  activeMembers: number
-  /** Member growth time series (most recent 30 days, daily intervals). */
-  memberGrowth: MemberGrowthDataPoint[]
-  /** Per-resource access and denial counts. */
-  resourceAccess: ResourceAccessCount[]
-  /** ISO timestamp when this summary was generated. */
-  generatedAt: string
-}
-
-export const AnalyticsSummarySchema = z.object({
-  totalMembers: z.number().int().nonnegative(),
-  activeMembers: z.number().int().nonnegative(),
-  memberGrowth: z.array(MemberGrowthDataPointSchema),
-  resourceAccess: z.array(ResourceAccessCountSchema),
-  generatedAt: z.string(),
-})
 
 // ── Access Decision (cached per wallet + resource) ───────────────────────────
 
@@ -440,11 +401,6 @@ export interface BackendSession {
  * Read-only member and resource queries.
  * No SIWE token is required for these operations.
  */
-export interface PaginatedMembers {
-  members: MemberRow[]
-  nextCursor?: string
-}
-
 export interface MemberAccessApi {
   // ── Read-only (no auth token required) ──────────────────────────────────
   getSession(signal?: AbortSignal): Promise<Session>
@@ -452,6 +408,7 @@ export interface MemberAccessApi {
   getMembership(address: string, signal?: AbortSignal): Promise<Membership | null>
   verifyWallet(address: string, signal?: AbortSignal): Promise<WalletVerification>
   getProfile(address: string, signal?: AbortSignal): Promise<MemberProfile | null>
+  getContributionHistory(address: string, signal?: AbortSignal): Promise<ContributionEvent[]>
   listMembers(params?: { cursor?: string; limit?: number; filter?: string }, signal?: AbortSignal): Promise<MemberRow[] | PaginatedMembers>
   listResources(signal?: AbortSignal): Promise<Resource[]>
   listPolicies(signal?: AbortSignal): Promise<AccessPolicy[]>
@@ -465,25 +422,7 @@ export interface MemberAccessApi {
  */
 export interface AdminAccessApi {
   // ── Admin queries & mutations (require a valid SIWE token context) ────────
-  listWebhookEvents(signal?: AbortSignal): Promise<WebhookEventLog[]>
-  /**
-   * Subscribe to the admin webhook event stream.
-   *
-   * @provisional Live mode attempts `GET /v1/admin/events/stream` as an
-   * SSE-compatible stream. If setup fails, the caller should fall back to
-   * `listWebhookEvents()` polling.
-   */
-  subscribeWebhookEvents(
-    onEvent: (event: WebhookEventLog) => void,
-    onError?: (error: unknown) => void,
-  ): WebhookEventUnsubscribe
-  /**
-   * Fetch the analytics summary for the admin dashboard.
-   *
-   * @provisional Calls `GET /v1/admin/analytics` — endpoint not yet live in
-   * guildpass-core. Contract tracked in issue #157; pending backend confirmation.
-   */
-  getAnalyticsSummary(signal?: AbortSignal): Promise<AnalyticsSummary>
+  listWebhookEvents(): Promise<WebhookEventLog[]>
   assignRole(address: string, role: Role): Promise<void>
   removeRole(address: string, role: Role): Promise<void>
   updatePolicy(policy: AccessPolicy): Promise<void>
@@ -498,19 +437,9 @@ export interface SiweAuthApi {
   getNonce(address: string): Promise<string>
   /**
    * Submit a signed EIP-4361 message and receive an authenticated session
-   * token. The backend verifies the signature and returns a short-lived access
-   * token plus a longer-lived refresh token.
+   * token. The backend verifies the signature and returns a short-lived token.
    */
   siweVerify(message: string, signature: string): Promise<SiweAuthSession>
-  /**
-   * Exchange a valid refresh token for a fresh access token (and a new
-   * refresh token — token rotation). The caller must immediately persist the
-   * returned session and discard the old refresh token.
-   *
-   * Throws a 401 ApiError when the refresh token is expired or invalid,
-   * signalling that the user must re-sign with their wallet.
-   */
-  siweRefresh(refreshToken: string): Promise<SiweAuthSession>
   /** Invalidate the current server-side session (no-op for stateless JWTs). */
   siweLogout(token: string): Promise<void>
   verifyWallet(address: string): Promise<WalletVerification>

@@ -48,4 +48,10 @@ export const queryKeys = {
   analytics: {
     summary: ['analytics', 'summary'] as const,
   },
+
+  // Contribution History
+  contributionHistory: {
+    all: ['contributionHistory'] as const,
+    byAddress: (address: string) => ['contributionHistory', address] as const,
+  },
 }
