@@ -178,6 +178,9 @@ const features: FeatureFlags = {
   resources: flag('NEXT_PUBLIC_FEATURE_RESOURCES', true),
   governance: flag('NEXT_PUBLIC_FEATURE_GOVERNANCE', false),
   rewards: flag('NEXT_PUBLIC_FEATURE_REWARDS', false),
+  // Multi-community support is not implemented — this only reserves nav
+  // space with a disabled switcher stub. Keep false in every environment
+  // until real multi-community logic ships.
   multiCommunity: flag('NEXT_PUBLIC_FEATURE_MULTI_COMMUNITY', false),
 }
 
