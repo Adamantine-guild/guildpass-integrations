@@ -239,6 +239,17 @@ function createApiError(status: number, body?: ApiErrorBody, path?: string): Api
     })
   }
 
+  if (status === 409) {
+    return new ApiError({
+      status,
+      code: 'conflict',
+      safeMessage:
+        body?.message || 'This policy was modified by another user. Please reload and try again.',
+      path,
+      details,
+    })
+  }
+
   if (status === 422) {
     return new ApiError({
       status,
@@ -885,6 +896,7 @@ export class LiveAccessApi implements AccessApi {
         resource_id: result.value.resourceId,
         min_tier: result.value.minTier,
         roles: result.value.roles,
+        updated_at: result.value.updatedAt,
       }),
     })
   }
