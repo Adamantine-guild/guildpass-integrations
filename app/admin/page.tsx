@@ -9,7 +9,7 @@ export default function AdminHome() {
       <div className="space-y-4">
         <h1 className="text-2xl font-semibold">Admin Dashboard</h1>
         <p className="text-muted-foreground">Overview and quick links.</p>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <Link href="/admin/members" className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors bg-primary text-primary-foreground hover:opacity-90 h-9 px-3 py-2">
             Members
           </Link>
@@ -18,6 +18,9 @@ export default function AdminHome() {
           </Link>
           <Link href="/admin/settings" className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors border border-input bg-background hover:bg-accent hover:text-accent-foreground h-9 px-3 py-2">
             Settings
+          </Link>
+          <Link href="/admin/events" className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors border border-input bg-background hover:bg-accent hover:text-accent-foreground h-9 px-3 py-2">
+            Webhook Events
           </Link>
         </div>
         <div className="rounded-md border p-4">

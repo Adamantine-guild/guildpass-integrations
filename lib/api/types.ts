@@ -65,6 +65,29 @@ export interface SiweAuthSession {
   expiresAt: string
 }
 
+export interface WebhookEvent {
+  id: string
+  type: string
+  payload: any
+  createdAt: string
+  status?: string
+}
+
+export interface Paginated<T> {
+  data: T[]
+  total: number
+  page: number
+  limit: number
+}
+
+export interface AdminEventFilterParams {
+  types?: string[]
+  startDate?: string
+  endDate?: string
+  page?: number
+  limit?: number
+}
+
 // ── Client-side State Types ──────────────────────────────────────────────────
 
 /**
@@ -143,6 +166,7 @@ export interface AccessApi {
   // ── Admin mutations (require a valid SIWE token) ─────────────────────────
   assignRole(address: string, role: Role): Promise<void>
   updatePolicy(policy: AccessPolicy): Promise<void>
+  listAdminEvents(params?: AdminEventFilterParams): Promise<Paginated<WebhookEvent>>
 
   // ── SIWE authentication endpoints ────────────────────────────────────────
   /** Fetch a one-time nonce for the given address to include in the SIWE message. */

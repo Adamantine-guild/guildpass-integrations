@@ -27,6 +27,9 @@ import {
   Role,
   Session,
   SiweAuthSession,
+  WebhookEvent,
+  Paginated,
+  AdminEventFilterParams,
 } from './types'
 
 const community: Community = {
@@ -69,6 +72,19 @@ function ensureAddress(addr?: string) {
   }
   return memberStore[addr]
 }
+
+const mockWebhookEvents: WebhookEvent[] = Array.from({ length: 50 }).map((_, i) => {
+  const d = new Date()
+  d.setDate(d.getDate() - i)
+  return {
+    id: `evt_${randomHex()}`,
+    type: i % 3 === 0 ? 'member.joined' : i % 3 === 1 ? 'subscription.updated' : 'role.assigned',
+    payload: { details: `Mock payload for event ${i}` },
+    createdAt: d.toISOString(),
+    status: i % 5 === 0 ? 'failed' : 'delivered'
+  }
+})
+
 
 /** Generate a short random hex nonce (16 bytes). */
 function randomHex(): string {
@@ -137,6 +153,39 @@ export class MockAccessApi implements AccessApi {
     const idx = policies.findIndex((p) => p.resourceId === policy.resourceId)
     if (idx >= 0) policies[idx] = policy
     else policies.push(policy)
+  }
+
+  async listAdminEvents(params?: AdminEventFilterParams): Promise<Paginated<WebhookEvent>> {
+    let events = mockWebhookEvents
+    
+    if (params?.types && params.types.length > 0) {
+      events = events.filter((e) => params.types!.includes(e.type))
+    }
+    
+    if (params?.startDate) {
+      const start = new Date(params.startDate)
+      events = events.filter((e) => new Date(e.createdAt) >= start)
+    }
+    
+    if (params?.endDate) {
+      // Include the end date fully (e.g., up to end of the day)
+      const end = new Date(params.endDate)
+      end.setUTCHours(23, 59, 59, 999)
+      events = events.filter((e) => new Date(e.createdAt) <= end)
+    }
+
+    const page = params?.page || 1
+    const limit = params?.limit || 20
+    const startIndex = (page - 1) * limit
+
+    const paginated = events.slice(startIndex, startIndex + limit)
+
+    return {
+      data: paginated,
+      total: events.length,
+      page,
+      limit
+    }
   }
 
   // ── SIWE mock endpoints ────────────────────────────────────────────────────

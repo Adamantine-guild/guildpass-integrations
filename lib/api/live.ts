@@ -28,6 +28,9 @@ import {
   Role,
   Session,
   SiweAuthSession,
+  WebhookEvent,
+  Paginated,
+  AdminEventFilterParams,
   // Raw backend shapes used for response mapping
   BackendSession,
   BackendMember,
@@ -225,6 +228,24 @@ export class LiveAccessApi implements AccessApi {
         min_tier: policy.minTier,
         roles: policy.roles,
       }),
+    })
+  }
+
+  async listAdminEvents(params?: AdminEventFilterParams): Promise<Paginated<WebhookEvent>> {
+    const searchParams = new URLSearchParams()
+    if (params?.types) {
+      params.types.forEach((t) => searchParams.append('types', t))
+    }
+    if (params?.startDate) searchParams.append('startDate', params.startDate)
+    if (params?.endDate) searchParams.append('endDate', params.endDate)
+    if (params?.page) searchParams.append('page', params.page.toString())
+    if (params?.limit) searchParams.append('limit', params.limit.toString())
+
+    const qs = searchParams.toString()
+    const query = qs ? `?${qs}` : ''
+
+    return getJson<Paginated<WebhookEvent>>(`/v1/admin/events${query}`, {
+      headers: this.authHeaders(),
     })
   }
 
