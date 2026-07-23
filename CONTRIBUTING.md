@@ -10,6 +10,7 @@ Thank you for your interest in contributing to the GuildPass Frontend!
 - [Development Setup](#development-setup)
 - [Branching & Commits](#branching--commits)
 - [Working with API Types](#working-with-api-types)
+- [Before Opening a Pull Request](#before-opening-a-pull-request)
 - [Submitting a Pull Request](#submitting-a-pull-request)
 - [Review Process](#review-process)
 - [Communication](#communication)
@@ -106,8 +107,9 @@ models exposed by **guildpass-core** (the backend). A zero-dependency compiler,
 into TypeScript.
 
 This split exists so the frontend types and the backend contract can't silently
-drift. If you edit `lib/api/types.ts` by hand, the next type check will fail and
-overwrite your changes — **always edit the fixture instead.**
+drift. If you edit `lib/api/types.ts` by hand, `npm run check-types` will fail,
+and the next `npm run sync-types` will overwrite your changes — **always
+edit the fixture instead.**
 
 ### When to touch the fixture
 
@@ -175,17 +177,51 @@ signal to re-sync, not to hand-edit the generated file.
 
 ---
 
+## Before Opening a Pull Request
+
+Use this checklist in order from the repository root before opening or
+updating any pull request:
+
+- [ ] If `test/fixtures/openapi.json` changed, run `npm run sync-types` first.
+- [ ] When types were regenerated, review the generated changes and commit
+      `test/fixtures/openapi.json` and `lib/api/types.ts` together.
+- [ ] Run `npm run lint` and fix all reported issues.
+- [ ] Run `npm run typecheck` and resolve all TypeScript errors.
+- [ ] Run `npm run check-types` to confirm that the generated API types match
+      the OpenAPI fixture.
+
+```bash
+# Only when test/fixtures/openapi.json changed:
+npm run sync-types
+
+# Required before every pull request:
+npm run lint
+npm run typecheck
+npm run check-types
+```
+
+`npm run sync-types` writes generated output to `lib/api/types.ts`, so it is
+only required when the source contract in `test/fixtures/openapi.json`
+changes. UI and component changes that reuse existing API models do not
+require regeneration.
+
+`npm run check-types` never writes files. It compares the output that
+`scripts/sync-api-types.js` would generate with the committed
+`lib/api/types.ts` file and exits non-zero if they differ. Run this check
+before every pull request, whether or not the fixture was changed.
+
+If `check-types` reports drift after an intentional fixture change, run
+`npm run sync-types` and review the generated diff. Do not fix drift by
+editing `lib/api/types.ts` manually.
+
+---
 ## Submitting a Pull Request
 
 1. Push your branch to your fork.
 2. Open a PR against `Adamantine-Guild/guildpass-integrations` on `main`.
 3. Fill in the [PR template](.github/PULL_REQUEST_TEMPLATE.md) completely.
-4. Ensure these pass:
-
-```bash
-npm run typecheck   # Must pass
-npm run lint        # Fix all reported issues
-```
+4. Complete the [pre-PR checklist](#before-opening-a-pull-request) and ensure
+   every required command passes.
 
 ### PR Quality Expectations
 
