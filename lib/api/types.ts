@@ -160,6 +160,8 @@ export interface AccessPolicy {
   minTier?: MembershipTier
   roles?: Role[]
   rule?: AccessRule
+  /** ISO 8601 timestamp of the last policy update. Used for optimistic concurrency control. */
+  updatedAt?: string
 }
 
 export const AccessPolicySchema = z.object({
@@ -167,6 +169,7 @@ export const AccessPolicySchema = z.object({
   minTier: MembershipTierSchema.optional(),
   roles: z.array(RoleSchema).optional(),
   rule: AccessRuleSchema.optional(),
+  updatedAt: z.string().optional(),
 })
 
 export interface MemberRow {
@@ -419,6 +422,8 @@ export interface BackendPolicy {
   min_tier?: MembershipTier
   roles?: Role[]
   rule?: AccessRule
+  updatedAt?: string
+  updated_at?: string
 }
 
 export interface BackendSession {

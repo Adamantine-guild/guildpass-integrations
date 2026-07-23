@@ -93,9 +93,9 @@ const DEFAULT_RESOURCES: Resource[] = [
 ]
 
 const DEFAULT_POLICIES: AccessPolicy[] = [
-  { resourceId: 'alpha', minTier: 'standard' },
-  { resourceId: 'pro-reports', minTier: 'pro' },
-  { resourceId: 'mem-updates', minTier: 'free' },
+  { resourceId: 'alpha', minTier: 'standard', updatedAt: new Date(Date.now() - 1000 * 60 * 60 * 24).toISOString() },
+  { resourceId: 'pro-reports', minTier: 'pro', updatedAt: new Date(Date.now() - 1000 * 60 * 60 * 12).toISOString() },
+  { resourceId: 'mem-updates', minTier: 'free', updatedAt: new Date(Date.now() - 1000 * 60 * 60 * 48).toISOString() },
   // Composable-rule demos. Legacy minTier/roles fields are kept as the closest
   // single-condition approximation for older clients; `rule` is authoritative.
   {
@@ -103,6 +103,7 @@ const DEFAULT_POLICIES: AccessPolicy[] = [
     resourceId: 'mod-lounge',
     minTier: 'standard',
     roles: ['moderator'],
+    updatedAt: new Date(Date.now() - 1000 * 60 * 60 * 6).toISOString(),
     rule: {
       type: 'and',
       rules: [
@@ -115,6 +116,7 @@ const DEFAULT_POLICIES: AccessPolicy[] = [
     // Insider Hub: pro tier OR the "Early Member" badge.
     resourceId: 'insider-hub',
     minTier: 'pro',
+    updatedAt: new Date(Date.now() - 1000 * 60 * 60 * 2).toISOString(),
     rule: {
       type: 'or',
       rules: [
@@ -340,6 +342,7 @@ type MockScenario =
   | 'admin-session-expired' 
   | 'no-roles'
   | 'multiple-communities'
+  | 'concurrent-policy-edit'
 
 /**
  * Replay a webhook event by cloning it into the mock event store.
@@ -549,6 +552,33 @@ export async function applyMockScenario(scenario: MockScenario, address: string 
             'Design Guild',
           ],
         },
+      }
+      break
+      
+    case 'concurrent-policy-edit':
+      // Set up a scenario to test concurrent policy editing
+      memberStore[address] = {
+        membership: {
+          address,
+          tier: 'pro',
+          active: true,
+        },
+        roles: ['admin', 'member'],
+        profile: {
+          address,
+          displayName: 'Admin Testing Concurrency',
+          badges: ['Admin', 'Pro Tier'],
+        },
+      }
+      // Update the 'alpha' policy with a very recent timestamp to simulate
+      // another admin just having edited it
+      const alphaIdx = policies.findIndex((p) => p.resourceId === 'alpha')
+      if (alphaIdx >= 0) {
+        policies[alphaIdx] = {
+          ...policies[alphaIdx],
+          updatedAt: new Date(Date.now() - 1000 * 5).toISOString(), // 5 seconds ago
+          minTier: 'pro', // Changed from 'standard'
+        }
       }
       break
   }
@@ -767,8 +797,32 @@ export class MockAccessApi implements AccessApi {
     }
 
     const idx = policies.findIndex((p) => p.resourceId === result.value.resourceId)
-    if (idx >= 0) policies[idx] = result.value
-    else policies.push(result.value)
+    
+    // Optimistic concurrency control: check if policy was modified since load
+    if (idx >= 0 && policy.updatedAt) {
+      const existingPolicy = policies[idx]
+      if (existingPolicy.updatedAt && existingPolicy.updatedAt !== policy.updatedAt) {
+        // Policy has been modified by another admin - return 409 Conflict
+        throw new ApiError({
+          status: 409,
+          code: 'conflict',
+          safeMessage: 'This policy was modified by another user. Please reload and try again.',
+          details: {
+            currentUpdatedAt: existingPolicy.updatedAt,
+            providedUpdatedAt: policy.updatedAt,
+          },
+        })
+      }
+    }
+    
+    // Update policy with new timestamp
+    const updatedPolicy = {
+      ...result.value,
+      updatedAt: new Date().toISOString(),
+    }
+    
+    if (idx >= 0) policies[idx] = updatedPolicy
+    else policies.push(updatedPolicy)
     schedulePersist()
   }
 

@@ -40,6 +40,9 @@ import {
   policyToDraft,
   storePolicyDraft,
 } from "@/lib/policy-drafts";
+import { PolicyConflictDialog } from "@/components/ui/policy-conflict-dialog";
+import { ScenarioSelector } from "@/components/developer/scenario-selector";
+import { config } from "@/lib/config";
 const ALL_ROLES: Role[] = ["member", "moderator", "admin"];
 const ALL_TIERS: MembershipTier[] = ["free", "standard", "pro"];
 
@@ -120,6 +123,8 @@ function PolicyForm({
       resourceId: resourceIdValue,
       minTier,
       roles: roles.length > 0 ? roles : undefined,
+      // Preserve the updatedAt from the initial policy for concurrency control
+      ...(initial?.updatedAt ? { updatedAt: initial.updatedAt } : {}),
     };
     const result = validatePolicy(policy);
     if (!result.valid) {
@@ -292,6 +297,13 @@ export default function PoliciesPage() {
   const [editingResourceId, setEditingResourceId] = useState<string | null>(
     null,
   );
+  
+  // Conflict detection state
+  const [conflictState, setConflictState] = useState<{
+    attemptedPolicy: AccessPolicy;
+    currentPolicy?: AccessPolicy;
+  } | null>(null);
+  const [isLoadingConflictData, setIsLoadingConflictData] = useState(false);
 
   const {
     data: policies,
@@ -365,6 +377,29 @@ export default function PoliciesPage() {
         markExpired();
       }
 
+      // Check for conflict error (409)
+      if (isApiError(err) && err.status === 409) {
+        // Fetch the current version of the policy from the server
+        setIsLoadingConflictData(true);
+        getApi(address, authSession?.token)
+          .getPolicy(policy.resourceId)
+          .then((currentPolicy) => {
+            setConflictState({
+              attemptedPolicy: policy,
+              currentPolicy: currentPolicy ?? undefined,
+            });
+          })
+          .catch(() => {
+            // If we can't fetch the current policy, still show the dialog
+            setConflictState({
+              attemptedPolicy: policy,
+            });
+          })
+          .finally(() => {
+            setIsLoadingConflictData(false);
+          });
+      }
+
       if (policy?.resourceId) {
         const result = validatePolicy(policy);
         if (!result.valid) {
@@ -401,6 +436,34 @@ export default function PoliciesPage() {
 
     mutate(result.value);
   };
+  
+  // Conflict resolution handlers
+  const handleConflictReload = () => {
+    if (!conflictState) return;
+    
+    // Reload the policy data from the server
+    refetch();
+    setConflictState(null);
+    setRollbackMessage("");
+    setSuccessMessage("Policy reloaded. Please review the current version before editing.");
+  };
+  
+  const handleConflictForceOverwrite = () => {
+    if (!conflictState) return;
+    
+    // Remove the updatedAt field to bypass version check (force overwrite)
+    const { updatedAt, ...policyWithoutVersion } = conflictState.attemptedPolicy;
+    setConflictState(null);
+    setRollbackMessage("");
+    
+    // Retry the save without version check
+    mutate(policyWithoutVersion as AccessPolicy);
+  };
+  
+  const handleConflictCancel = () => {
+    setConflictState(null);
+    setRollbackMessage("");
+  };
 
   const resourcesById = useMemo(() => {
     const map = new Map<string, Resource>();
@@ -412,6 +475,11 @@ export default function PoliciesPage() {
     <FeatureGate enabled={features.adminPolicies} name="Access Policies">
       <AdminGuard>
         <div className="space-y-4">
+          {/* Developer Testing Tools (Mock Mode Only) */}
+          {config.apiMode === 'mock' && (
+            <ScenarioSelector />
+          )}
+          
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <h1 className="text-2xl font-semibold">Access Policies</h1>
             <Button
@@ -673,6 +741,24 @@ export default function PoliciesPage() {
           </Card>
         </div>
       </AdminGuard>
+      
+      {/* Conflict Resolution Dialog */}
+      {conflictState && (
+        <PolicyConflictDialog
+          attemptedPolicy={conflictState.attemptedPolicy}
+          currentPolicy={conflictState.currentPolicy}
+          onReload={handleConflictReload}
+          onForceOverwrite={handleConflictForceOverwrite}
+          onCancel={handleConflictCancel}
+        />
+      )}
+      
+      {/* Loading overlay while fetching conflict data */}
+      {isLoadingConflictData && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-background/60">
+          <LoadingState message="Loading current policy version..." />
+        </div>
+      )}
     </FeatureGate>
   );
 }

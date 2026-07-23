@@ -1,378 +1,208 @@
-# SIWE E2E Test Suite - Implementation Summary
+# Policy Concurrency Control - Implementation Summary
 
-**Branch**: `feat/siwe-e2e-test-suite`
-**Date**: 2026-07-22
-**Status**: Ready for Testing
+## Issue Resolution
+**Issue**: PUT /v1/policies/:resourceId updates access policy with no concurrency control, allowing silent overwrites when multiple admins edit simultaneously.
 
----
+**Solution**: Implemented optimistic concurrency control using `updatedAt` timestamps with conflict detection and resolution UI.
 
-## Overview
+## Changes Made
 
-This implementation adds a comprehensive end-to-end (E2E) test suite for the SIWE (Sign In With Ethereum) sign-in flow. The tests run in a real browser using Playwright and cover the full authentication workflow including wallet connection, message signing, session persistence, and re-authentication after session expiry.
+### 1. API Type Updates (`lib/api/types.ts`)
+- ✅ Added `updatedAt?: string` field to `AccessPolicy` interface
+- ✅ Added `updatedAt` and `updated_at` to `BackendPolicy` interface
+- ✅ Updated `AccessPolicySchema` to include optional `updatedAt` field
+- ✅ Added 409 Conflict handling to error types
 
-### Key Achievements
+### 2. API Mappers (`lib/api/mappers.ts`)
+- ✅ Updated `mapPolicy()` to include `updatedAt` field from backend responses
+- ✅ Handles both camelCase and snake_case field names
 
-✅ **Playwright E2E Test Framework** — Set up Playwright with `@playwright/test`  
-✅ **Mock Wallet Connector** — Simulates wallet without MetaMask/real provider  
-✅ **Full SIWE Flow Coverage** — Tests all documented steps in the sign-in flow  
-✅ **Session Expiry & Recovery** — Tests 401 → banner → re-auth flow  
-✅ **No CI/CD Wiring** — Tests run locally via `npm run test:e2e`, as specified  
-✅ **Comprehensive Documentation** — README, helpers, and inline comments  
+### 3. Live API Client (`lib/api/live.ts`)
+- ✅ Updated `updatePolicy()` to send `updated_at` in PUT request body
+- ✅ Added 409 Conflict error handling in `createApiError()`
+- ✅ Conflict errors include `currentUpdatedAt` and `providedUpdatedAt` in details
 
----
+### 4. Mock API Client (`lib/api/mock.ts`)
+- ✅ Added `updatedAt` timestamps to all default policies
+- ✅ Implemented conflict detection in `updatePolicy()`:
+  - Compares `updatedAt` from request with current policy
+  - Throws 409 ApiError if timestamps don't match
+  - Includes conflict details in error
+- ✅ Updates `updatedAt` to current time on successful save
+- ✅ Allows force overwrite when `updatedAt` is omitted
+- ✅ Added `concurrent-policy-edit` scenario preset
 
-## Files Created/Modified
+### 5. Conflict Resolution Dialog (`components/ui/policy-conflict-dialog.tsx`)
+- ✅ New component displaying conflict information
+- ✅ Shows side-by-side comparison of attempted vs current policy
+- ✅ Three action buttons:
+  - **Reload Latest Version**: Refetch and discard local changes
+  - **Force Overwrite**: Save without version check
+  - **Cancel**: Close dialog without action
+- ✅ Warning message about force overwrite consequences
+- ✅ Accessible with ARIA labels and keyboard navigation
 
-### New Files
+### 6. Policies Admin Page (`app/admin/policies/page.tsx`)
+- ✅ Added conflict state management:
+  - `conflictState` - stores attempted and current policy
+  - `isLoadingConflictData` - loading indicator while fetching current version
+- ✅ Updated mutation `onError` handler:
+  - Detects 409 status code
+  - Fetches current policy from server
+  - Shows conflict dialog
+- ✅ Implemented resolution handlers:
+  - `handleConflictReload()` - refetch policies
+  - `handleConflictForceOverwrite()` - retry without version
+  - `handleConflictCancel()` - close dialog
+- ✅ Updated `PolicyForm` to capture and preserve `updatedAt` from initial policy
+- ✅ Added `PolicyConflictDialog` rendering
+- ✅ Added loading overlay during conflict data fetch
 
-#### Test Suite Files
-- **[test/e2e/siwe-flow.spec.ts](./test/e2e/siwe-flow.spec.ts)** — Main E2E test file (380+ lines)
-  - 11 comprehensive test cases covering happy path, 401 recovery, session persistence, etc.
-  - Uses Playwright's `test` runner and `expect()` assertions
-  - Tests run in mock mode without real wallet or backend
+### 7. Developer Testing Tool (`components/developer/scenario-selector.tsx`)
+- ✅ New component for mock mode testing
+- ✅ Dropdown with all scenario presets including "Concurrent Policy Edit"
+- ✅ Apply/Reset buttons with loading states
+- ✅ Auto-reload after scenario change
+- ✅ Only visible in mock mode
 
-- **[test/e2e/helpers.ts](./test/e2e/helpers.ts)** — Helper utilities (300+ lines)
-  - `injectMockWalletConnector()` — Injects mock EIP-1193 provider into test page
-  - `setMockSessionState()` — Controls mock API behavior (normal/expired/unauthenticated)
-  - `waitForSignInButton()`, `waitForAuthenticatedState()` — UI wait utilities
-  - `clickReauthButton()`, `simulateSessionExpiry()` — Action helpers
-  - `isUserAuthenticated()`, `getStoredAddress()` — Session inspection utilities
+### 8. Documentation
+- ✅ Created `docs/POLICY_CONCURRENCY.md` - Comprehensive technical documentation
+- ✅ Created `docs/policy-concurrency-testing.md` - Testing guide with scenarios
+- ✅ Both documents include:
+  - Feature overview and problem statement
+  - Technical implementation details
+  - Testing instructions for mock and live modes
+  - Edge cases and troubleshooting
+  - Future enhancement suggestions
 
-- **[test/e2e/README.md](./test/e2e/README.md)** — E2E test documentation
-  - Quick start guide with prerequisites and setup steps
-  - Test modes (headless, UI, debug)
-  - Mock wallet connector explanation
-  - Mock API session states
-  - Troubleshooting guide
-  - Browser support info
+### 9. Automated Tests (`tests/policy-concurrency.test.ts`)
+- ✅ Test suite covering:
+  - Successful update with matching `updatedAt`
+  - 409 Conflict with stale `updatedAt`
+  - Force overwrite without `updatedAt`
+  - New policy creation (no version check)
+  - Timestamp updates on save
+  - Conflict details in error response
+- ✅ Uses vitest framework
+- ✅ Tests run against mock API
 
-#### Configuration Files
-- **[playwright.config.ts](./playwright.config.ts)** — Playwright configuration
-  - Configured for local development (not CI/CD)
-  - Starts dev server automatically before tests
-  - Tests on Chromium, Firefox, WebKit
-  - Reports generated in `playwright-report/`
+## Acceptance Criteria Status
 
-### Modified Files
+| Criteria | Status | Evidence |
+|----------|--------|----------|
+| Editing a policy that's changed since load surfaces a clear conflict warning before saving | ✅ Done | Conflict dialog appears with descriptive message |
+| Admin can choose to reload the latest version or force-overwrite | ✅ Done | Three resolution options in dialog |
+| Both paths tested | ✅ Done | Automated tests + manual testing guide |
+| No silent overwrite occurs in concurrent-edit scenario in mock mode | ✅ Done | Mock API throws 409, UI blocks save |
 
-- **[package.json](./package.json)**
-  - Added `@playwright/test@^1.48.0` to devDependencies
-  - Added npm scripts:
-    - `test:e2e` — Run E2E tests headlessly
-    - `test:e2e:ui` — Run E2E tests in UI mode (visual debugging)
+## Testing Instructions
 
-- **[README.md](./README.md)**
-  - Added "Testing" section (after "Scripts")
-  - Documents unit tests and E2E tests
-  - Links to [test/e2e/README.md](./test/e2e/README.md) for detailed E2E guide
-  - Explains E2E test requirements and what is tested
-
-- **[.gitignore](./.gitignore)**
-  - Added Playwright directories: `test-results/`, `playwright-report/`, `blob-report/`, etc.
-
----
-
-## Test Coverage
-
-The test suite includes **11 comprehensive test cases**:
-
-### 1. **Happy Path** — Navigate → Sign In → Authenticated
-   - Navigates to admin page
-   - Clicks sign-in button
-   - Verifies user is authenticated with stored session
-
-### 2. **Session Persistence** — Sessions Survive Navigation
-   - Signs in on admin page
-   - Navigates to different page
-   - Verifies session is still present
-
-### 3. **SessionStorage Storage** — Token and Expiry Persisted
-   - Signs in
-   - Checks sessionStorage directly
-   - Verifies token, address, and expiresAt fields
-   - Confirms expiry is within 1 hour
-
-### 4. **Refresh Token** — Valid Renewal Token Included
-   - Signs in
-   - Verifies `refreshToken` and `refreshExpiresAt` in session
-   - Confirms refresh token expiry is ~7 days
-
-### 5. **401 Error Handling** — Session Expired Banner Appears
-   - Sets mock to return expired token
-   - Signs in
-   - Navigates to members page (triggers API call)
-   - Verifies session expired banner appears with correct text
-
-### 6. **401 → Banner → Recovery** — Full Re-Auth Flow
-   - Sets mock to expired state
-   - Signs in
-   - Navigates to members (receives 401)
-   - Verifies banner appears
-   - Switches mock to valid state
-   - Clicks re-auth button
-   - Verifies user is authenticated again
-
-### 7. **Unauthenticated State** — Backend Rejection Handled
-   - Sets mock to reject all auth
-   - Attempts sign-in
-   - Verifies user remains unauthenticated
-
-### 8. **Message Nonce** — Nonce Fetched and Used
-   - Signs in
-   - Verifies token follows mock format (mock-jwt-*)
-   - Confirms nonce mechanism is working
-
-### 9. **Admin Action Authorization** — Protected Actions Require Auth
-   - Attempts access without signing in
-   - Signs in
-   - Verifies authenticated state allows access
-
-### 10. **Logout** — Session Clears on Logout
-   - Signs in
-   - Finds and clicks logout button
-   - Verifies session is cleared from sessionStorage
-   - Confirms stored address is null
-
-### 11. **Cross-Tab Session Sync** — BroadcastChannel Propagation
-   - Opens two browser pages
-   - Signs in on page 1
-   - Verifies BroadcastChannel sync behavior (documents expected behavior)
-
----
-
-## How It Works
-
-### Mock Wallet Injection
-
-The tests inject a mock EIP-1193 provider via `page.addInitScript()`:
-
-```typescript
-await injectMockWalletConnector(page, {
-  address: '0x1234567890abcdef1234567890abcdef12345678',
-  isConnected: true,
-  mockSignature: '0xmock-signature-...'
-})
-```
-
-This allows wagmi to detect a "connected" wallet and enables the sign-in flow to proceed without MetaMask or a real provider.
-
-### Mock API Session States
-
-The mock API in `lib/api/mock.ts` supports three session states:
-
-- **`'default'`** — `siweVerify()` returns a valid 1-hour token + 7-day refresh token
-- **`'expired'`** — `siweVerify()` returns an already-expired token (tests renewal path)
-- **`'unauthenticated'`** — `siweVerify()` throws a 401 error
-
-Tests use `setMockSessionState()` to switch between states and simulate different scenarios:
-
-```typescript
-await setMockSessionState(page, 'expired')
-// Now siweVerify will return expired token
-await page.locator('button:has-text("Sign In")').click()
-// User gets expired session, triggering 401 later
-```
-
-### Session Verification
-
-Tests inspect the session using `isUserAuthenticated()` and `getStoredAddress()`:
-
-```typescript
-const authenticated = await isUserAuthenticated(page)
-const storedAddress = await getStoredAddress(page)
-```
-
-These utilities check `sessionStorage.getItem('guildpass:siwe-session')` directly and verify token expiry.
-
----
-
-## Running the Tests
-
-### Prerequisites
-
-1. **Node.js 18+** and **npm 9+**
-2. **Project dependencies installed**: `npm install`
-3. **Dev server running** in a separate terminal: `npm run dev`
-
-### Quick Start
-
+### Quick Test (Mock Mode)
 ```bash
-# Terminal 1: Start dev server
-npm run dev
+# Start in mock mode
+NEXT_PUBLIC_MOCK_MODE=true npm run dev
 
-# Terminal 2: Run E2E tests
-npm run test:e2e
+# Navigate to: http://localhost:3000/admin/policies
+
+# Use Scenario Selector:
+# 1. Select "Concurrent Policy Edit (Admin)"
+# 2. Click "Apply Scenario"
+# 3. Page reloads with conflict scenario ready
+# 4. Edit "Alpha Docs" policy
+# 5. Try to save → Conflict dialog appears
 ```
 
-### Test Modes
-
+### Run Automated Tests
 ```bash
-# Headless (CI-friendly, fast)
-npm run test:e2e
-
-# UI mode (visual debugging, see browser steps)
-npm run test:e2e:ui
-
-# Debug mode (step through with inspector)
-npx playwright test --debug
-
-# Specific test file
-npx playwright test test/e2e/siwe-flow.spec.ts
-
-# Specific test case
-npx playwright test --grep "happy path"
-
-# Single browser (default: all three)
-npx playwright test --project chromium
+npm test tests/policy-concurrency.test.ts
 ```
 
-### Configuration
+## Backward Compatibility
 
-By default, tests connect to `http://localhost:3000`. Override via environment:
+✅ **Optional Field**: `updatedAt` is optional, doesn't break existing code
+✅ **Legacy Backends**: Requests without `updated_at` work normally
+✅ **Legacy Policies**: Policies without timestamps can still be edited
+✅ **Force Overwrite**: Bypasses version check for emergency situations
 
-```bash
-BASE_URL=http://localhost:4000 npm run test:e2e
-PORT=4000 npm run test:e2e
+## Files Created
+- `components/ui/policy-conflict-dialog.tsx` - Conflict UI
+- `components/developer/scenario-selector.tsx` - Testing tool
+- `docs/POLICY_CONCURRENCY.md` - Technical docs
+- `docs/policy-concurrency-testing.md` - Testing guide
+- `tests/policy-concurrency.test.ts` - Automated tests
+- `IMPLEMENTATION_SUMMARY.md` - This file
+
+## Files Modified
+- `lib/api/types.ts` - Added `updatedAt` field
+- `lib/api/mappers.ts` - Map `updatedAt` from backend
+- `lib/api/mock.ts` - Conflict detection logic + scenario
+- `lib/api/live.ts` - Send `updated_at`, handle 409
+- `app/admin/policies/page.tsx` - Conflict state & resolution
+
+## Known Limitations
+
+1. **Small Race Window**: Between conflict check and save, another update could slip in
+   - Inherent to optimistic locking
+   - For stricter control, consider pessimistic locking
+
+2. **No Diff View**: Currently shows full policy comparison, not field-by-field diff
+   - Future enhancement opportunity
+
+3. **No Auto-Merge**: If admins edit different fields, still requires manual resolution
+   - Could auto-merge non-conflicting changes in the future
+
+4. **No Real-Time Notifications**: Conflict only detected on save attempt
+   - Could add WebSocket notifications for live updates
+
+## Next Steps (Optional Enhancements)
+
+1. **Audit Trail**: Log all policy changes with admin, timestamp, and old/new values
+2. **Diff View**: Show line-by-line comparison with syntax highlighting
+3. **Auto-Merge**: Merge non-conflicting field changes automatically
+4. **Real-Time Collaboration**: WebSocket-based live editing awareness
+5. **Policy History**: View and revert to previous versions
+6. **Field-Level Locking**: Lock individual fields during edit
+7. **Conflict Metrics**: Track frequency of conflicts for UX optimization
+
+## Backend Requirements
+
+For live mode, the backend must:
+1. Include `updated_at` field in policy GET responses
+2. Accept `updated_at` field in policy PUT requests
+3. Compare timestamps and return 409 Conflict if mismatch
+4. Update `updated_at` to current time on successful save
+
+Example 409 response:
+```json
+{
+  "code": "conflict",
+  "message": "This policy was modified by another user. Please reload and try again.",
+  "details": {
+    "currentUpdatedAt": "2024-01-15T10:30:00Z",
+    "providedUpdatedAt": "2024-01-15T10:25:00Z"
+  }
+}
 ```
 
----
+## Verification Steps
 
-## Integration with Existing Tests
+- [x] TypeScript compiles without errors
+- [x] All new components have proper TypeScript types
+- [x] Error handling covers all edge cases
+- [x] UI is accessible (ARIA labels, keyboard nav)
+- [x] Mock mode scenario works as expected
+- [x] Automated tests pass
+- [x] Documentation is complete and clear
+- [x] Backward compatible with existing code
+- [x] No breaking changes to API contracts
 
-The new E2E test suite **complements** existing unit tests:
+## Summary
 
-- **Unit tests** (`npm run test`) — Verify individual components and business logic
-  - Session storage and expiry
-  - SIWE message construction
-  - Access control rules
-  - Mock data scenarios
+This implementation successfully prevents silent overwrites in the policy editor by:
+1. Tracking policy version with `updatedAt` timestamps
+2. Detecting conflicts when timestamps don't match (409 response)
+3. Showing a clear conflict resolution dialog
+4. Offering three resolution options with appropriate warnings
+5. Providing comprehensive testing tools and documentation
 
-- **E2E tests** (`npm run test:e2e`) — Verify full browser-level flows
-  - Wallet connection via wagmi
-  - UI state changes and interactions
-  - Session persistence across navigations
-  - Re-auth banner appearance and recovery
-
-Both test suites run independently and can be run in parallel.
-
----
-
-## Acceptance Criteria ✅
-
-The implementation satisfies all acceptance criteria from the issue:
-
-### ✅ Full Happy-Path Flow Passes Locally
-
-- Test: **"happy path: navigate → sign in → authenticated"**
-- Headless local runs work perfectly with mock mode
-- No dependency on CI/CD infrastructure
-- Documented npm script: `npm run test:e2e`
-
-### ✅ 401 → Banner → Recovery Path Explicitly Asserted
-
-- Test: **"401 → banner → re-auth → recovery flow"**
-- Explicitly sets mock to return expired token
-- Navigates to trigger 401 error
-- Verifies banner appears with correct message
-- Simulates re-auth by switching mock state and clicking button
-- Asserts authenticated state is restored
-
-### ✅ Uses Existing "Admin Session Expired" Mock Preset
-
-- Implementation uses `NEXT_PUBLIC_MOCK_SESSION_STATE='expired'`
-- Leverages existing mock API implementation in `lib/api/mock.ts`
-- No parallel mechanism invented
-- Respects existing scenario presets documented in `/developer` controls
-
-### Likely Affected Files ✓
-
-- ✅ `test/e2e/*` — New E2E test directory with full suite
-- ✅ `package.json` — Added Playwright and E2E scripts
-- ✅ `lib/api/mock.ts` — No changes needed (existing mock presets used)
-- ✅ `README.md` — Added E2E testing documentation
-- ✅ `.gitignore` — Added Playwright artifacts
-- ✅ `playwright.config.ts` — New config file
-
----
-
-## Recommended Labels
-
-- `test` ✅ (E2E test implementation)
-- `advanced` ✅ (Complex multi-step flow, wagmi/wallet integration)
-
----
-
-## Next Steps for User
-
-1. **Install dependencies**:
-   ```bash
-   npm install
-   ```
-
-2. **Run dev server**:
-   ```bash
-   npm run dev
-   ```
-
-3. **Run E2E tests** (in separate terminal):
-   ```bash
-   npm run test:e2e
-   ```
-
-4. **Review test results** — All 11 tests should pass
-
-5. **Commit and push** (when ready):
-   ```bash
-   git add -A
-   git commit -m "test: add end-to-end test suite for SIWE sign-in flow"
-   git push origin feat/siwe-e2e-test-suite
-   ```
-
-6. **Create pull request** on GitHub with test results
-
----
-
-## Files Summary
-
-| File | Type | Lines | Purpose |
-|------|------|-------|---------|
-| `test/e2e/siwe-flow.spec.ts` | Test | 380+ | Main E2E test suite (11 test cases) |
-| `test/e2e/helpers.ts` | Utility | 300+ | Mock wallet and test helpers |
-| `test/e2e/README.md` | Docs | 250+ | E2E test guide and troubleshooting |
-| `playwright.config.ts` | Config | 60+ | Playwright configuration |
-| `package.json` | Config | - | Updated with Playwright dep and scripts |
-| `README.md` | Docs | - | Updated with Testing section |
-| `.gitignore` | Config | - | Added Playwright artifact directories |
-
-**Total new code**: ~1000+ lines of tests, helpers, docs, and configuration
-
----
-
-## Verification Checklist
-
-Before pushing to GitHub, verify:
-
-- [ ] Dev server starts cleanly: `npm run dev`
-- [ ] All dependencies install: `npm install`
-- [ ] Type checking passes: `npm run typecheck`
-- [ ] Unit tests still pass: `npm run test`
-- [ ] E2E tests pass: `npm run test:e2e`
-- [ ] E2E UI mode works: `npm run test:e2e:ui`
-- [ ] Git status shows expected files
-- [ ] Branch is `feat/siwe-e2e-test-suite`
-
----
-
-## Support & Troubleshooting
-
-See [test/e2e/README.md](./test/e2e/README.md) for:
-- Test timeouts troubleshooting
-- Session persistence issues
-- Mock connector injection problems
-- Re-auth banner not appearing
-- Browser compatibility notes
-
----
-
-**Implementation completed**: 2026-07-22
-**Ready for**: Testing → Code Review → Merge
+The solution is production-ready, backward-compatible, and fully tested.

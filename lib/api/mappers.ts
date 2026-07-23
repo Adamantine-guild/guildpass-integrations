@@ -100,6 +100,10 @@ export function mapPolicy(raw: any): AccessPolicy {
     // Only include the composable rule tree when the backend provides one so
     // legacy policies keep their exact shape.
     ...(raw.rule !== undefined ? { rule: raw.rule } : {}),
+    // Include updatedAt for optimistic concurrency control
+    ...(raw.updatedAt ?? raw.updated_at
+      ? { updatedAt: raw.updatedAt ?? raw.updated_at }
+      : {}),
   }
 }
 
