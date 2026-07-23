@@ -59,6 +59,8 @@ In mock mode, visit `/developer` (or click "Dev" in the nav) to access:
   - Denied Resource: Free tier user denied access to Alpha Docs
   - Admin Session Expired: Admin user to test expired SIWE sessions
   - No Roles: Member with no roles assigned
+
+See [Mock scenario presets](./docs/mock-scenarios.md) for the exact seeded membership, role, badge, resource, and policy state behind each preset.
   - Multiple Communities: Member active across several communities
 
 ### Run against live guildpass-core
