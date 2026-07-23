@@ -60,9 +60,11 @@ import {
   useSignMessage,
   useAccount,
   useDisconnect,
+  useAccountEffect,
 } from "wagmi";
 import { walletConfig } from "@/lib/wallet/config";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { createSyncStoragePersister } from "@tanstack/query-sync-storage-persister";
 import { getApi } from "@/lib/api";
 import { config } from "@/lib/config";
 import { SiweAuthSession, AdminSessionStatus } from "@/lib/api/types";
@@ -145,7 +147,20 @@ const SiweAuthContext = createContext<SiweAuthContextValue | undefined>(
   undefined,
 );
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      // Keep data for 15 minutes to allow offline usage
+      staleTime: 1000 * 60 * 15,
+      gcTime: 1000 * 60 * 60 * 24,
+    },
+  },
+});
+
+// Create a persister that uses localStorage (only on the client)
+const persister = typeof window !== 'undefined'
+  ? createSyncStoragePersister({ storage: window.localStorage })
+  : undefined;
 
 // ── SiweAuthProvider ──────────────────────────────────────────────────────────
 
@@ -326,19 +341,27 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
 
   // ── Drop session when wallet disconnects or switches address ───────────────
 
+  useAccountEffect({
+    onDisconnect() {
+      if (state.authSession) {
+        cancelRenewal();
+        clearAuthSession();
+        dispatch({ type: "clear" });
+        broadcast({ type: "signed-out" });
+      }
+    },
+  });
+
   useEffect(() => {
     const session = state.authSession;
     if (!session) return;
-    if (
-      !isConnected ||
-      (address && session.address.toLowerCase() !== address.toLowerCase())
-    ) {
+    if (address && session.address.toLowerCase() !== address.toLowerCase()) {
       cancelRenewal();
       clearAuthSession();
       dispatch({ type: "clear" });
       broadcast({ type: "signed-out" });
     }
-  }, [address, isConnected, state.authSession, cancelRenewal, broadcast]);
+  }, [address, state.authSession, cancelRenewal, broadcast]);
 
   // ── Expiry polling — mark expired once the access token clock runs out ─────
 
@@ -358,6 +381,75 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
     return () => clearInterval(interval);
   }, [state.authSession, performSilentRefresh]);
 
+  // ── Security validation helpers ───────────────────────────────────────────────
+
+  /**
+   * Validates that the configured SIWE domain matches the actual runtime origin.
+   * This prevents phishing attacks where a malicious site presents a SIWE message
+   * with a domain field that doesn't match the site the user is actually on.
+   *
+   * @throws {Error} If domain mismatch is detected (security error)
+   */
+  const validateSiweDomain = useCallback(() => {
+    if (typeof window === "undefined") return; // Skip validation on server
+
+    const configuredDomain = config.siwe.domain;
+    const actualHost = window.location.host;
+
+    // Normalize both for comparison (handle port differences consistently)
+    const normalizeDomain = (d: string) => d.toLowerCase().replace(/^https?:\/\//, "");
+    const normalizedConfigured = normalizeDomain(configuredDomain);
+    const normalizedActual = normalizeDomain(actualHost);
+
+    if (normalizedConfigured !== normalizedActual) {
+      throw new Error(
+        [
+          "🔒 Security Error: Domain Mismatch",
+          "",
+          `The configured SIWE domain (${configuredDomain}) does not match the current site (${actualHost}).`,
+          "",
+          "This indicates either:",
+          "  • A misconfiguration (NEXT_PUBLIC_SIWE_DOMAIN is stale or incorrect)",
+          "  • A phishing attempt or proxying scenario",
+          "",
+          "For your security, sign-in is blocked. Please contact the site administrator if this persists.",
+        ].join("\n")
+      );
+    }
+  }, []);
+
+  /**
+   * Validates that the wallet's current chainId matches the chainId we're about to
+   * embed in the SIWE message. This prevents signature replay across chains.
+   *
+   * Re-checks immediately before signature request (not just at flow start) since
+   * users can switch chains mid-session.
+   *
+   * @param messageChainId - The chainId embedded in the SIWE message
+   * @throws {Error} If chainId mismatch is detected (security error)
+   */
+  const validateChainId = useCallback((messageChainId: number) => {
+    const currentChainId = chainId;
+    if (currentChainId === undefined) {
+      throw new Error(
+        "🔒 Security Error: Unable to determine wallet chain. Please ensure your wallet is connected."
+      );
+    }
+
+    if (currentChainId !== messageChainId) {
+      throw new Error(
+        [
+          "🔒 Security Error: Chain Mismatch",
+          "",
+          `Your wallet is connected to chain ${currentChainId}, but the sign-in request is for chain ${messageChainId}.`,
+          "",
+          "This prevents signature replay across different chains.",
+          "Please switch your wallet to the correct chain and try again.",
+        ].join("\n")
+      );
+    }
+  }, [chainId]);
+
   // ── Sign-in ─────────────────────────────────────────────────────────────────
 
   const signIn = useCallback(async () => {
@@ -366,8 +458,13 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
     isSigningIn.current = true;
     dispatch({ type: "sign-in-start" });
     try {
+      // Security check: validate domain matches runtime origin
+      validateSiweDomain();
+
       const api = getApi(address);
       const nonce = await api.getNonce(address);
+
+      const messageChainId = chainId ?? 1;
       const message = buildSiweMessage({
         domain: config.siwe.domain,
         address,
@@ -376,10 +473,15 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
           typeof window !== "undefined"
             ? window.location.origin
             : `https://${config.siwe.domain}`,
-        chainId: chainId ?? 1,
+        chainId: messageChainId,
         nonce,
         issuedAt: new Date().toISOString(),
       });
+
+      // Security check: re-validate chainId immediately before signature
+      // (user may have switched chains after message construction)
+      validateChainId(messageChainId);
+
       const signature = await signMessageAsync({ message });
       const session = await api.siweVerify(message, signature);
       storeAuthSession(session);
@@ -391,12 +493,14 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
         type: "sign-in-error",
         message: isApiError(err)
           ? err.safeMessage
-          : "Sign-in was cancelled or failed. Please try again.",
+          : err instanceof Error
+            ? err.message
+            : "Sign-in was cancelled or failed. Please try again.",
       });
     } finally {
       isSigningIn.current = false;
     }
-  }, [address, chainId, signMessageAsync, scheduleRenewal, broadcast]);
+  }, [address, chainId, signMessageAsync, scheduleRenewal, broadcast, validateSiweDomain, validateChainId]);
 
   // ── Logout ──────────────────────────────────────────────────────────────────
 
