@@ -9,6 +9,7 @@
  *   "Route is fully hidden when the flag is false (the default everywhere),
  *    verified by test."
  */
+import './setup-env'
 import { describe, test, beforeEach } from 'node:test'
 import * as assert from 'node:assert/strict'
 import * as React from 'react'
@@ -29,7 +30,8 @@ require.cache[require.resolve('wagmi')] = {
 } as any
 
 const mockNextNavigation = {
-  usePathname: () => '/admin/analytics'
+  usePathname: () => '/admin/analytics',
+  useParams: () => ({ communitySlug: 'guildpass-demo' }),
 }
 require.cache[require.resolve('next/navigation')] = {
   id: require.resolve('next/navigation'),
@@ -222,6 +224,7 @@ describe('Analytics feature flag', () => {
   test('Nav component hides Analytics link when flag is false', () => {
     // Clear config cache to reload features with default analytics = false
     delete process.env.NEXT_PUBLIC_FEATURE_ANALYTICS
+    process.env.NEXT_PUBLIC_MOCK_MODE = 'true'
     clearConfigCache()
     
     // Import Nav dynamically so it gets the fresh features/config
@@ -238,6 +241,7 @@ describe('Analytics feature flag', () => {
 
   test('Nav component shows Analytics link when flag is true', () => {
     process.env.NEXT_PUBLIC_FEATURE_ANALYTICS = 'true'
+    process.env.NEXT_PUBLIC_MOCK_MODE = 'true'
     clearConfigCache()
     
     delete require.cache[require.resolve('../components/nav')]
@@ -255,10 +259,11 @@ describe('Analytics feature flag', () => {
 
   test('visiting AnalyticsPage directly renders FeatureUnavailable when flag is false', () => {
     delete process.env.NEXT_PUBLIC_FEATURE_ANALYTICS
+    process.env.NEXT_PUBLIC_MOCK_MODE = 'true'
     clearConfigCache()
     
-    delete require.cache[require.resolve('../app/admin/analytics/page')]
-    const AnalyticsPage = require('../app/admin/analytics/page').default
+    delete require.cache[require.resolve('../app/[communitySlug]/admin/analytics/page')]
+    const AnalyticsPage = require('../app/[communitySlug]/admin/analytics/page').default
     
     const html = renderToStaticMarkup(React.createElement(AnalyticsPage))
     assert.match(

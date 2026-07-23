@@ -18,6 +18,7 @@ import { applyOptimisticPolicy } from "@/lib/api/optimistic";
 import { AdminGuard } from "@/components/admin-guard";
 import { queryKeys } from "@/lib/query";
 import { Badge } from "@/components/ui/badge";
+import { useParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -286,6 +287,8 @@ export default function PoliciesPage() {
   const { address } = useAccount();
   const { authSession, markExpired, sessionStatus } = useSiweAuth();
   const qc = useQueryClient();
+  const params = useParams();
+  const communitySlug = (params?.communitySlug as string) || 'guildpass-demo';
 
   const [pendingPolicyId, setPendingPolicyId] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState("");
@@ -312,8 +315,8 @@ export default function PoliciesPage() {
     error,
     refetch,
   } = useQuery<AccessPolicy[]>({
-    queryKey: queryKeys.policies.all,
-    queryFn: ({ signal }) => getApi(address).listPolicies(signal),
+    queryKey: queryKeys.policies.all(communitySlug),
+    queryFn: ({ signal }) => getApi(address, undefined, communitySlug).listPolicies(signal),
     retry: (failureCount, err) => {
       if (isApiError(err) && err.code === 'aborted') return false;
       return failureCount < 1;
@@ -321,8 +324,8 @@ export default function PoliciesPage() {
   });
 
   const { data: resources } = useQuery<Resource[]>({
-    queryKey: queryKeys.resources.all,
-    queryFn: ({ signal }) => getApi(address).listResources(signal),
+    queryKey: queryKeys.resources.all(communitySlug),
+    queryFn: ({ signal }) => getApi(address, undefined, communitySlug).listResources(signal),
     retry: (failureCount, err) => {
       if (isApiError(err) && err.code === 'aborted') return false;
       return failureCount < 1;
@@ -336,12 +339,12 @@ export default function PoliciesPage() {
     reset: resetMutation,
   } = useMutation<void, unknown, AccessPolicy, PolicyRollback>({
     mutationFn: (policy: AccessPolicy) =>
-      getApi(address, authSession?.token).updatePolicy(policy),
+      getApi(address, authSession?.token, communitySlug).updatePolicy(policy),
 
     onMutate: async (policy) => {
-      await qc.cancelQueries({ queryKey: queryKeys.policies.all });
+      await qc.cancelQueries({ queryKey: queryKeys.policies.all(communitySlug) });
       const previousPolicies = qc.getQueryData<AccessPolicy[]>(
-        queryKeys.policies.all,
+        queryKeys.policies.all(communitySlug),
       );
 
       setPendingPolicyId(policy.resourceId);
@@ -349,7 +352,7 @@ export default function PoliciesPage() {
       setRollbackMessage("");
 
       qc.setQueryData<AccessPolicy[]>(
-        queryKeys.policies.all,
+        queryKeys.policies.all(communitySlug),
         (currentPolicies) => applyOptimisticPolicy(currentPolicies, policy),
       );
 
@@ -370,7 +373,7 @@ export default function PoliciesPage() {
     },
 
     onError: (err: unknown, policy, context) => {
-      qc.setQueryData(queryKeys.policies.all, context?.previousPolicies);
+      qc.setQueryData(queryKeys.policies.all(communitySlug), context?.previousPolicies);
       setRollbackMessage(`Change reverted: ${safeErrorMessage(err)}`);
 
       if (err instanceof AuthError) {
@@ -381,7 +384,7 @@ export default function PoliciesPage() {
       if (isApiError(err) && err.status === 409) {
         // Fetch the current version of the policy from the server
         setIsLoadingConflictData(true);
-        getApi(address, authSession?.token)
+        getApi(address, authSession?.token, communitySlug)
           .getPolicy(policy.resourceId)
           .then((currentPolicy) => {
             setConflictState({
@@ -413,7 +416,7 @@ export default function PoliciesPage() {
 
     onSettled: () => {
       setPendingPolicyId(null);
-      qc.invalidateQueries({ queryKey: queryKeys.policies.all });
+      qc.invalidateQueries({ queryKey: queryKeys.policies.all(communitySlug) });
     },
   });
 

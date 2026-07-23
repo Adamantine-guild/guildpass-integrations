@@ -64,6 +64,7 @@ import {
 } from "wagmi";
 import { walletConfig } from "@/lib/wallet/config";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { createSyncStoragePersister } from "@tanstack/query-sync-storage-persister";
 import { getApi } from "@/lib/api";
 import { config } from "@/lib/config";
 import { SiweAuthSession, AdminSessionStatus } from "@/lib/api/types";

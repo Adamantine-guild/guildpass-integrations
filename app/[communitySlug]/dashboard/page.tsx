@@ -1,6 +1,7 @@
 'use client'
 import { useAccount } from 'wagmi'
 import { useQuery, useQueryClient, useIsFetching } from '@tanstack/react-query'
+import { useParams } from 'next/navigation'
 import {
   getApi,
   type MemberProfile,
@@ -80,6 +81,8 @@ function Section({
 export default function DashboardPage() {
   const { address, isConnected } = useAccount();
   const queryClient = useQueryClient();
+  const params = useParams();
+  const communitySlug = (params?.communitySlug as string) || 'guildpass-demo';
 
   // Tracks whether *any* dashboard query is currently refetching in the
   // background.  Used to show a spinner on the manual refresh button and
@@ -89,10 +92,11 @@ export default function DashboardPage() {
       predicate(query) {
         const key = query.queryKey;
         return (
-          key[0] === 'session' ||
+          (key[0] === 'session' ||
           key[0] === 'walletVerification' ||
           key[0] === 'profile' ||
-          key[0] === 'resources'
+          key[0] === 'resources') &&
+          key[2] === communitySlug
         );
       },
     }) > 0;
@@ -100,10 +104,10 @@ export default function DashboardPage() {
   async function handleRefresh() {
     if (!address || isRefreshing) return;
     await Promise.all([
-      queryClient.invalidateQueries({ queryKey: queryKeys.session.byAddress(address) }),
-      queryClient.invalidateQueries({ queryKey: queryKeys.walletVerification.byAddress(address) }),
-      queryClient.invalidateQueries({ queryKey: queryKeys.profile.byAddress(address) }),
-      queryClient.invalidateQueries({ queryKey: queryKeys.resources.all }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.session.byAddress(address, communitySlug) }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.walletVerification.byAddress(address, communitySlug) }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.profile.byAddress(address, communitySlug) }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.resources.all(communitySlug) }),
     ]);
   }
 
@@ -114,8 +118,8 @@ export default function DashboardPage() {
     error,
     refetch,
   } = useQuery<Session>({
-    queryKey: queryKeys.session.byAddress(address ?? ""),
-    queryFn: ({ signal }) => getApi(address).getSession(signal),
+    queryKey: queryKeys.session.byAddress(address ?? "", communitySlug),
+    queryFn: ({ signal }) => getApi(address, undefined, communitySlug).getSession(signal),
     enabled: !!address,
     retry: retryUnlessAborted,
     staleTime: DASHBOARD_STALE_TIME,
@@ -129,8 +133,8 @@ export default function DashboardPage() {
     error: verifyError,
     refetch: refetchVerification,
   } = useQuery<WalletVerification>({
-    queryKey: queryKeys.walletVerification.byAddress(address ?? ""),
-    queryFn: ({ signal }) => getApi(address).verifyWallet(address as string, signal),
+    queryKey: queryKeys.walletVerification.byAddress(address ?? "", communitySlug),
+    queryFn: ({ signal }) => getApi(address, undefined, communitySlug).verifyWallet(address as string, signal),
     enabled: !!address,
     retry: retryUnlessAborted,
     staleTime: DASHBOARD_STALE_TIME,
@@ -144,8 +148,8 @@ export default function DashboardPage() {
     error: profileError,
     refetch: refetchProfile,
   } = useQuery<MemberProfile | null>({
-    queryKey: queryKeys.profile.byAddress(address ?? ""),
-    queryFn: ({ signal }) => getApi(address).getProfile(address as string, signal),
+    queryKey: queryKeys.profile.byAddress(address ?? "", communitySlug),
+    queryFn: ({ signal }) => getApi(address, undefined, communitySlug).getProfile(address as string, signal),
     enabled: !!address,
     retry: retryUnlessAborted,
     staleTime: DASHBOARD_STALE_TIME,
@@ -159,8 +163,8 @@ export default function DashboardPage() {
     error: resourcesError,
     refetch: refetchResources,
   } = useQuery<Resource[]>({
-    queryKey: queryKeys.resources.all,
-    queryFn: ({ signal }) => getApi(address).listResources(signal),
+    queryKey: queryKeys.resources.all(communitySlug),
+    queryFn: ({ signal }) => getApi(address, undefined, communitySlug).listResources(signal),
     enabled: !!address && features.resources,
     staleTime: DASHBOARD_STALE_TIME,
     gcTime: DASHBOARD_GC_TIME,
@@ -179,7 +183,7 @@ export default function DashboardPage() {
   }
 
   function getResourceHref(resource: Resource): string | null {
-    if (features.resources) return `/resources/${resource.id}`;
+    if (features.resources) return `/${communitySlug}/resources/${resource.id}`;
     return null;
   }
 

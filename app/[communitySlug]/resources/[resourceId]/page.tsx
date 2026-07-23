@@ -13,7 +13,9 @@ import { features } from '@/lib/features';
 import { EmptyState } from "@/components/ui/api-states";
 
 export default function DynamicResourceDocs() {
-  const { resourceId } = useParams() as { resourceId: string };
+  const params = useParams() as { resourceId: string; communitySlug?: string };
+  const resourceId = params.resourceId;
+  const communitySlug = params.communitySlug || 'guildpass-demo';
   const { address } = useAccount();
 
   const {
@@ -21,8 +23,8 @@ export default function DynamicResourceDocs() {
     isLoading: resourceLoading,
     refetch,
   } = useQuery({
-    queryKey: queryKeys.resources.detail(resourceId),
-    queryFn: () => getApi(address).getResource(resourceId),
+    queryKey: queryKeys.resources.detail(resourceId, communitySlug),
+    queryFn: () => getApi(address, undefined, communitySlug).getResource(resourceId),
     enabled: !!resourceId && !!address,
     retry: 1,
   });
@@ -30,8 +32,8 @@ export default function DynamicResourceDocs() {
   const resource = resourceResult?.status === 'found' ? resourceResult.data : undefined;
 
   const { data: policy, isLoading: policyLoading } = useQuery({
-    queryKey: queryKeys.policies.byResource(resourceId),
-    queryFn: () => getApi(address).getPolicy(resourceId),
+    queryKey: queryKeys.policies.byResource(resourceId, communitySlug),
+    queryFn: () => getApi(address, undefined, communitySlug).getPolicy(resourceId),
     enabled: !!resourceId && !!address && resourceResult?.status === 'found',
     retry: 1,
   });

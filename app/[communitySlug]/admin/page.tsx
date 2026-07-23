@@ -4,6 +4,7 @@ import { useState, useCallback, useEffect, Fragment } from 'react';
 import { useAccount } from 'wagmi';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getApi, replayMockEvent } from '@/lib/api';
+import { useParams } from 'next/navigation';
 import { config } from '@/lib/config';
 import { isApiError } from '@/lib/api/errors';
 import { queryKeys } from '@/lib/query';
@@ -124,6 +125,8 @@ function WebhookLogsContent() {
   const { address } = useAccount();
   const { authSession, markExpired, sessionStatus } = useSiweAuth();
   const queryClient = useQueryClient();
+  const params = useParams();
+  const communitySlug = (params?.communitySlug as string) || 'guildpass-demo';
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -139,10 +142,10 @@ function WebhookLogsContent() {
     error,
     refetch,
   } = useQuery({
-    queryKey: [...queryKeys.webhookEvents.all, address, authSession?.token ?? 'anonymous'],
+    queryKey: [...queryKeys.webhookEvents.all(communitySlug), address, authSession?.token ?? 'anonymous'],
     queryFn: async ({ signal }) => {
       try {
-        return await getApi(address, authSession?.token).listWebhookEvents(signal);
+        return await getApi(address, authSession?.token, communitySlug).listWebhookEvents(signal);
       } catch (err) {
         if (isApiError(err) && err.code === 'aborted') throw err;
         if (isApiError(err) && err.code === 'unauthorized') {
@@ -165,11 +168,11 @@ function WebhookLogsContent() {
     if (!address || sessionStatus !== 'authenticated') return undefined;
 
     setStreamAvailable(true);
-    const api = getApi(address, authSession?.token);
+    const api = getApi(address, authSession?.token, communitySlug);
     return api.subscribeWebhookEvents(
       (event) => {
         queryClient.setQueryData<WebhookEventLog[]>(
-          [...queryKeys.webhookEvents.all, address, authSession?.token ?? 'anonymous'],
+          [...queryKeys.webhookEvents.all(communitySlug), address, authSession?.token ?? 'anonymous'],
           (current = []) => [event, ...current.filter((existing) => existing.id !== event.id)],
         );
       },
@@ -180,26 +183,26 @@ function WebhookLogsContent() {
         }
         setStreamAvailable(false);
         void queryClient.invalidateQueries({
-          queryKey: [...queryKeys.webhookEvents.all, address, authSession?.token ?? 'anonymous'],
+          queryKey: [...queryKeys.webhookEvents.all(communitySlug), address, authSession?.token ?? 'anonymous'],
         });
       },
     );
-  }, [address, authSession?.token, markExpired, queryClient, sessionStatus]);
+  }, [address, authSession?.token, markExpired, queryClient, sessionStatus, communitySlug]);
 
   const handleReplay = useCallback(async (eventId: string) => {
     setReplayingId(eventId);
     try {
-      await replayMockEvent(eventId);
+      await replayMockEvent(eventId, communitySlug);
       // Invalidate the query so the feed refreshes and shows the replayed entry
       await queryClient.invalidateQueries({
-        queryKey: [...queryKeys.webhookEvents.all, address, authSession?.token ?? 'anonymous'],
+        queryKey: [...queryKeys.webhookEvents.all(communitySlug), address, authSession?.token ?? 'anonymous'],
       });
     } catch {
       // Error already handled by the replay function throwing
     } finally {
       setReplayingId(null);
     }
-  }, [queryClient, address, authSession?.token]);
+  }, [queryClient, address, authSession?.token, communitySlug]);
 
   const toggleExpand = useCallback((id: string) => {
     setExpandedId((prev) => (prev === id ? null : id));

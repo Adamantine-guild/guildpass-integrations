@@ -232,7 +232,7 @@ describe('SIWE Security Validation: Domain & Chain Mismatch Protection', () => {
       const validateAtSignatureTime = (msgChainId: number, currentChainId: number) => {
         if (currentChainId !== msgChainId) {
           throw new Error(
-            `🔒 Security Error: Chain Mismatch\n\nYour wallet is connected to chain ${currentChainId}, but the sign-in request is for chain ${msgChainId}.`
+            `🔒 Security Error: Chain Mismatch\n\nYour wallet is connected to chain ${currentChainId}, but the sign-in request is for chain ${msgChainId}.\n\nThis prevents signature replay across different chains.`
           )
         }
       }
@@ -269,7 +269,7 @@ describe('SIWE Security Validation: Domain & Chain Mismatch Protection', () => {
       assert.ok(domainMismatchError.includes('Domain Mismatch'))
       assert.ok(domainMismatchError.includes('phishing'))
       assert.ok(domainMismatchError.includes('misconfiguration'))
-      assert.notMatch(domainMismatchError, /generic/i, 'Should not use generic error language')
+      assert.ok(!/generic/i.test(domainMismatchError), 'Should not use generic error language')
     })
 
     test('chain mismatch error should be distinct from generic errors', () => {
@@ -285,7 +285,7 @@ describe('SIWE Security Validation: Domain & Chain Mismatch Protection', () => {
       assert.ok(chainMismatchError.includes('🔒 Security Error'))
       assert.ok(chainMismatchError.includes('Chain Mismatch'))
       assert.ok(chainMismatchError.includes('signature replay'))
-      assert.notMatch(chainMismatchError, /generic/i, 'Should not use generic error language')
+      assert.ok(!/generic/i.test(chainMismatchError), 'Should not use generic error language')
     })
 
     test('security errors should include actionable guidance', () => {

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { config } from '@/lib/config'
+import { config } from './config'
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
 

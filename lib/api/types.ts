@@ -355,6 +355,29 @@ export interface AccessDecision {
   checkedAt: string
 }
 
+export interface WebhookEvent {
+  id: string
+  type: string
+  payload: any
+  createdAt: string
+  status?: string
+}
+
+export interface Paginated<T> {
+  data: T[]
+  total: number
+  page: number
+  limit: number
+}
+
+export interface AdminEventFilterParams {
+  types?: string[]
+  startDate?: string
+  endDate?: string
+  page?: number
+  limit?: number
+}
+
 // ── Client-side State Types ──────────────────────────────────────────────────
 
 /**

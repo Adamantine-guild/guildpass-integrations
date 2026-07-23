@@ -9,6 +9,7 @@ export type ApiErrorCode =
   | 'service_unavailable'
   | 'bad_request'
   | 'unknown_error'
+  | 'conflict'
   | 'aborted';
 
 export interface ApiErrorOptions {
@@ -71,5 +72,11 @@ export class OfflineError extends ApiError {
 }
 
 export function isApiError(err: unknown): err is ApiError {
-  return err instanceof ApiError;
+  return (
+    err instanceof ApiError ||
+    (err instanceof Error &&
+      err.name === 'ApiError' &&
+      'code' in err &&
+      'safeMessage' in err)
+  );
 }

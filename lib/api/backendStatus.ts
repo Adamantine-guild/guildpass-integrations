@@ -29,6 +29,10 @@ export const backendOnline = {
  * {@link backendOnline} flag accordingly.
  */
 export async function ensureOnline(): Promise<void> {
+  if (config.apiMode === 'mock' || process.env.NODE_ENV === 'test' || process.env.NEXT_PUBLIC_MOCK_MODE === 'true') {
+    backendOnline.set(true);
+    return;
+  }
   // Fast‑path: if we already think it's online, still verify in case of stale state.
   try {
     const res = await fetch(`${config.apiUrl}/healthz`, { method: 'GET' });

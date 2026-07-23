@@ -3,6 +3,7 @@
 import { useAccount } from "wagmi";
 import { useQuery } from "@tanstack/react-query";
 import { getApi } from "@/lib/api";
+import { useParams } from "next/navigation";
 import type { AnalyticsSummary, MemberGrowthDataPoint, ResourceAccessCount } from "@/lib/api";
 import { isApiError } from "@/lib/api/errors";
 import { queryKeys } from "@/lib/query";
@@ -204,6 +205,8 @@ function SessionExpiredState() {
 function AnalyticsContent() {
   const { address } = useAccount();
   const { authSession, markExpired, sessionStatus } = useSiweAuth();
+  const params = useParams();
+  const communitySlug = (params?.communitySlug as string) || 'guildpass-demo';
 
   const {
     data: summary,
@@ -212,10 +215,10 @@ function AnalyticsContent() {
     error,
     refetch,
   } = useQuery<AnalyticsSummary>({
-    queryKey: [...queryKeys.analytics.summary, address, authSession?.token ?? "anonymous"],
+    queryKey: [...queryKeys.analytics.summary(communitySlug), address, authSession?.token ?? "anonymous"],
     queryFn: async ({ signal }) => {
       try {
-        return await getApi(address, authSession?.token).getAnalyticsSummary(signal);
+        return await getApi(address, authSession?.token, communitySlug).getAnalyticsSummary(signal);
       } catch (err) {
         if (isApiError(err) && err.code === 'aborted') throw err;
         if (isApiError(err) && err.code === "unauthorized") {
