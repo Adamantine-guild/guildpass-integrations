@@ -3,6 +3,7 @@ import { describe, test, beforeEach, afterEach } from 'node:test'
 import * as assert from 'node:assert/strict'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
+// @ts-ignore - no declaration file
 import nextConfig from '../next.config.mjs'
 import {
   loadAuthSessionIncludingExpired,
@@ -66,7 +67,7 @@ describe('SIWE Threat Model & Security Hardening Tests', () => {
     )
 
     assert.ok(headersMap.has('Content-Security-Policy'), 'Must set Content-Security-Policy')
-    const csp = headersMap.get('Content-Security-Policy')!
+    const csp = headersMap.get('Content-Security-Policy') as string
     assert.ok(csp.includes("default-src 'self'"), "CSP must include default-src 'self'")
     assert.ok(csp.includes("frame-ancestors 'none'"), "CSP must include frame-ancestors 'none'")
     assert.ok(csp.includes("object-src 'none'"), "CSP must include object-src 'none'")
