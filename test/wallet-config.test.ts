@@ -279,3 +279,157 @@ describe('env var cleanup between cases', () => {
     assert.ok(config.transports[1])
   })
 })
+
+// ── Happy path: valid single chain ───────────────────────────────────────────
+describe('NEXT_PUBLIC_WALLET_CHAINS — valid single chain', () => {
+  test('accepts "mainnet" alone and returns exactly one chain with id 1', () => {
+    setEnv({ NEXT_PUBLIC_WALLET_CHAINS: 'mainnet' })
+    const config = loadWalletConfig()
+    assert.equal(config.chains.length, 1)
+    assert.equal(config.chains[0].id, 1)
+  })
+
+  test('accepts "base" alone and returns exactly one chain with id 8453', () => {
+    setEnv({ NEXT_PUBLIC_WALLET_CHAINS: 'base' })
+    const config = loadWalletConfig()
+    assert.equal(config.chains.length, 1)
+    assert.equal(config.chains[0].id, 8453)
+  })
+
+  test('accepts "sepolia" alone and returns exactly one chain with id 11155111', () => {
+    setEnv({ NEXT_PUBLIC_WALLET_CHAINS: 'sepolia' })
+    const config = loadWalletConfig()
+    assert.equal(config.chains.length, 1)
+    assert.equal(config.chains[0].id, 11155111)
+  })
+
+  test('builds a transport for the single configured chain', () => {
+    setEnv({ NEXT_PUBLIC_WALLET_CHAINS: 'mainnet' })
+    const config = loadWalletConfig()
+    assert.ok(config.transports[1], 'transport missing for mainnet (id 1)')
+  })
+})
+
+// ── Happy path: valid multi-chain list ───────────────────────────────────────
+describe('NEXT_PUBLIC_WALLET_CHAINS — valid multi-chain list', () => {
+  test('accepts "mainnet,sepolia" and returns exactly two chains in order', () => {
+    setEnv({ NEXT_PUBLIC_WALLET_CHAINS: 'mainnet,sepolia' })
+    const config = loadWalletConfig()
+    assert.equal(config.chains.length, 2)
+    assert.equal(config.chains[0].id, 1)
+    assert.equal(config.chains[1].id, 11155111)
+  })
+
+  test('accepts "base,mainnet" and returns exactly two chains in order', () => {
+    setEnv({ NEXT_PUBLIC_WALLET_CHAINS: 'base,mainnet' })
+    const config = loadWalletConfig()
+    assert.equal(config.chains.length, 2)
+    assert.equal(config.chains[0].id, 8453)
+    assert.equal(config.chains[1].id, 1)
+  })
+
+  test('accepts "mainnet,base,sepolia" and returns all three supported chains', () => {
+    setEnv({ NEXT_PUBLIC_WALLET_CHAINS: 'mainnet,base,sepolia' })
+    const config = loadWalletConfig()
+    assert.equal(config.chains.length, 3)
+    assert.equal(config.chains[0].id, 1)
+    assert.equal(config.chains[1].id, 8453)
+    assert.equal(config.chains[2].id, 11155111)
+  })
+
+  test('builds a transport for every chain in a multi-chain list', () => {
+    setEnv({ NEXT_PUBLIC_WALLET_CHAINS: 'mainnet,base,sepolia' })
+    const config = loadWalletConfig()
+    for (const chain of config.chains) {
+      assert.ok(
+        config.transports[chain.id],
+        `transport missing for chain id ${chain.id}`,
+      )
+    }
+  })
+
+  test('handles surrounding whitespace in CSV values', () => {
+    setEnv({ NEXT_PUBLIC_WALLET_CHAINS: ' mainnet , sepolia ' })
+    const config = loadWalletConfig()
+    assert.equal(config.chains.length, 2)
+    assert.equal(config.chains[0].id, 1)
+    assert.equal(config.chains[1].id, 11155111)
+  })
+})
+
+// ── Duplicate chain deduplication ────────────────────────────────────────────
+describe('NEXT_PUBLIC_WALLET_CHAINS — duplicate chain deduplication', () => {
+  test('deduplicated "mainnet,mainnet" results in a single mainnet chain', () => {
+    setEnv({ NEXT_PUBLIC_WALLET_CHAINS: 'mainnet,mainnet' })
+    const config = loadWalletConfig()
+    assert.equal(config.chains.length, 1)
+    assert.equal(config.chains[0].id, 1)
+  })
+
+  test('deduplicated "base,mainnet,base" retains first occurrence of each chain', () => {
+    setEnv({ NEXT_PUBLIC_WALLET_CHAINS: 'base,mainnet,base' })
+    const config = loadWalletConfig()
+    assert.equal(config.chains.length, 2)
+    assert.equal(config.chains[0].id, 8453)
+    assert.equal(config.chains[1].id, 1)
+  })
+})
+
+// ── Happy path: valid connector ──────────────────────────────────────────────
+describe('NEXT_PUBLIC_WALLET_CONNECTORS — valid connector', () => {
+  test('accepts "injected" explicitly and reflects it in connectorNames', () => {
+    setEnv({ NEXT_PUBLIC_WALLET_CONNECTORS: 'injected' })
+    const config = loadWalletConfig()
+    assert.deepEqual(config.connectorNames, ['injected'])
+    assert.equal(config.connectors.length, 1)
+  })
+})
+
+// ── RPC URL: transport wiring ─────────────────────────────────────────────────
+describe('NEXT_PUBLIC_WALLET_RPC_<CHAIN> — transport wiring', () => {
+  test('a valid MAINNET RPC URL results in a transport for mainnet', () => {
+    setEnv({
+      NEXT_PUBLIC_WALLET_CHAINS: 'mainnet',
+      NEXT_PUBLIC_WALLET_RPC_MAINNET: 'https://mainnet.example.io/rpc',
+    })
+    const config = loadWalletConfig()
+    // A transport must exist for mainnet (id 1)
+    assert.ok(config.transports[1], 'transport missing for mainnet (id 1)')
+  })
+
+  test('a valid BASE RPC URL results in a transport for base', () => {
+    setEnv({
+      NEXT_PUBLIC_WALLET_CHAINS: 'base',
+      NEXT_PUBLIC_WALLET_RPC_BASE: 'https://base.example.io/rpc',
+    })
+    const config = loadWalletConfig()
+    assert.ok(config.transports[8453], 'transport missing for base (id 8453)')
+  })
+
+  test('accepts http:// (not just https://) as a valid RPC protocol', () => {
+    setEnv({
+      NEXT_PUBLIC_WALLET_CHAINS: 'sepolia',
+      NEXT_PUBLIC_WALLET_RPC_SEPOLIA: 'http://sepolia.example.io/rpc',
+    })
+    const config = loadWalletConfig()
+    assert.equal(config.chains.length, 1)
+    assert.equal(config.chains[0].id, 11155111)
+  })
+
+  test('chains without an RPC env var still get a default transport', () => {
+    setEnv({
+      NEXT_PUBLIC_WALLET_CHAINS: 'mainnet,base',
+      NEXT_PUBLIC_WALLET_RPC_MAINNET: 'https://mainnet.example.io/rpc',
+      // BASE intentionally omitted
+    })
+    const config = loadWalletConfig()
+    assert.ok(config.transports[1], 'transport missing for mainnet')
+    assert.ok(config.transports[8453], 'transport missing for base (no custom RPC)')
+  })
+})
+
+// NOTE: mock-mode error fallback tests live in wallet-config-mock-fallback.test.ts.
+// That suite must run in a separate file because `lib/config.ts` is frozen at
+// module-import time; switching apiMode mid-suite is not possible without
+// clearing the lib/config cache, which would break the `instanceof ConfigError`
+// checks in this file. See wallet-config-mock-fallback.test.ts for details.
