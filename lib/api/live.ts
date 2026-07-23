@@ -63,6 +63,8 @@ export { ApiError as AuthError } from './errors'
 
 import { PolicyValidationError, validatePolicy } from '../validation/policy'
 import { config } from '../config'
+import { ensureOnline, backendOnline } from '@/lib/api/backendStatus'
+import { OfflineError } from '@/lib/api/errors'
 
 const BASE = config.apiUrl
 
@@ -444,6 +446,8 @@ function isAbortError(err: unknown): boolean {
  * counted by the circuit breaker.
  */
 async function getJson<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  // Abort if backend is offline
+  ensureOnline();
   const {
     schema,
     prefixBase = true,
@@ -697,7 +701,8 @@ export class LiveAccessApi implements AccessApi {
   }
 
   async getResource(id: string, signal?: AbortSignal): Promise<ResourceLookupResult> {
-    const path = `/v1/resources/${encodeURIComponent(id)}`
+    ensureOnline();
+  const path = `/v1/resources/${encodeURIComponent(id)}`
     try {
       const raw = await getJson<BackendResource>(path, { schema: ResourceSchema, signal })
       if (raw && Object.keys(raw).length > 0) {

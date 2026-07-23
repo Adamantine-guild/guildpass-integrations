@@ -3,6 +3,7 @@ import './globals.css'
 import { RootProviders } from '@/lib/wallet/providers'
 import { Nav } from '@/components/nav'
 import { SwRegistrar } from '@/components/sw-registrar'
+import SyncStatusBanner from '@/components/ui/sync-status-banner'
 
 export const metadata: Metadata = {
   title: {
@@ -25,6 +26,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <RootProviders>
           {/* Registers the service worker for dashboard offline caching */}
           <SwRegistrar />
+          {/* Offline/Degraded status banner */}
+          <SyncStatusBanner className="mb-4 w-full" />
           <Nav />
           <main className="mx-auto max-w-6xl px-4 py-6">{children}</main>
         </RootProviders>

@@ -145,7 +145,20 @@ const SiweAuthContext = createContext<SiweAuthContextValue | undefined>(
   undefined,
 );
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      // Keep data for 15 minutes to allow offline usage
+      staleTime: 1000 * 60 * 15,
+      gcTime: 1000 * 60 * 60 * 24,
+    },
+  },
+});
+
+// Create a persister that uses localStorage (only on the client)
+const persister = typeof window !== 'undefined'
+  ? createSyncStoragePersister({ storage: window.localStorage })
+  : undefined;
 
 // ── SiweAuthProvider ──────────────────────────────────────────────────────────
 
