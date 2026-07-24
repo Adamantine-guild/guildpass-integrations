@@ -28,6 +28,7 @@ The reset also restores the seeded webhook event log and the synthetic member st
 | Admin Session Expired | `pro`, `active: true` | `admin`, `member` | `Admin`, `Pro Tier` | Uses default policies unchanged; combine with `NEXT_PUBLIC_MOCK_SESSION_STATE=expired` to exercise expired SIWE handling. | Admin screens, privileged navigation, and expired-token recovery flows. |
 | No Roles | `free`, `active: true` | none (`[]`) | `New User` | Uses default policies unchanged. | Empty-role states, role assignment UI, and access checks that depend on explicit roles. |
 | Multiple Communities | `standard`, `active: true` | `member` | `GuildPass Demo Community`, `Builders Collective`, `Design Guild` | Replaces the active community with `guildpass-hub` / `GuildPass Hub (Multi-Community)`. | Multi-community copy, hub-style membership summaries, and badge rendering. |
+| Customized Profile | `standard`, `active: true` | `member` | `Early Member`, `Standard Tier` | Uses default policies unchanged. Seeds `bio`, `avatar`, and three `socialLinks` entries in addition to `displayName`/`badges`. | The public profile view and editor pre-fill (#254) against a fully-populated profile, as opposed to the sparse defaults every other preset seeds. |
 
 ## Adding a new scenario preset
 

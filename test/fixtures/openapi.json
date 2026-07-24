@@ -235,12 +235,33 @@
         },
         "required": ["address", "tier", "active"]
       },
+      "SocialLink": {
+        "type": "object",
+        "description": "A single social/external link shown on a member's public profile.",
+        "properties": {
+          "platform": {
+            "type": "string",
+            "description": "Short label for the linked platform, e.g. 'twitter', 'github', 'website'."
+          },
+          "url": { "type": "string", "format": "uri" }
+        },
+        "required": ["platform", "url"]
+      },
       "MemberProfile": {
         "type": "object",
         "properties": {
           "address": { "type": "string" },
           "displayName": { "type": "string" },
           "bio": { "type": "string" },
+          "avatar": {
+            "type": "string",
+            "format": "uri",
+            "description": "URL of the member's avatar image."
+          },
+          "socialLinks": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/SocialLink" }
+          },
           "badges": {
             "type": "array",
             "items": { "type": "string" }

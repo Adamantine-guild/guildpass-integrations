@@ -157,6 +157,10 @@ export interface MemberAccessApi {
   listPolicies(): Promise<AccessPolicy[]>
   getResource(id: string): Promise<Resource | null>
   getPolicy(resourceId: string): Promise<AccessPolicy | null>
+  // NOTE: ownership/auth enforcement for this mutation is not yet decided
+  // (tracked with the #254 profile-customization work) — placed here to
+  // match the read-only getProfile() it pairs with, pending that decision.
+  updateProfile(profile: MemberProfile): Promise<void>
 }
 
 /**

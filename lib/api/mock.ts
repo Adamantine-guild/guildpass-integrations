@@ -25,6 +25,7 @@
  * Scenario presets and reset functionality for developer testing are also included.
  */
 import { PolicyValidationError, validatePolicy } from '../validation/policy'
+import { ProfileValidationError, validateProfile } from '../validation/profile'
 import {
   AccessApi,
   AccessPolicy,
@@ -451,14 +452,15 @@ function ensureAddress(addr?: string, communityId: string = 'guildpass-demo') {
   return state.memberStore[addr]
 }
 
-type MockScenario = 
-  | 'active-member' 
-  | 'expired-member' 
-  | 'denied-resource' 
-  | 'admin-session-expired' 
+type MockScenario =
+  | 'active-member'
+  | 'expired-member'
+  | 'denied-resource'
+  | 'admin-session-expired'
   | 'no-roles'
   | 'multiple-communities'
   | 'concurrent-policy-edit'
+  | 'customized-profile'
 
 /**
  * Replay a webhook event by cloning it into the mock event store.
@@ -542,6 +544,7 @@ export async function resetMockData() {
   for (const cid of Object.keys(MOCK_COMMUNITIES)) {
     getCommunityState(cid)
   }
+  mockRoleMutationShouldFail = false
   await clearPersistedState()
 }
 
@@ -700,6 +703,32 @@ export async function applyMockScenario(scenario: MockScenario, address: string 
         }
       }
       break
+
+    case 'customized-profile':
+      // A member who has filled out every rich-profile field (#254), to
+      // exercise the public profile view and editor pre-fill against a
+      // fully-populated record rather than only the sparse defaults.
+      demoState.memberStore[address] = {
+        membership: {
+          address,
+          tier: 'standard',
+          active: true,
+        },
+        roles: ['member'],
+        profile: {
+          address,
+          displayName: 'Ada Lovelace',
+          bio: 'Builder and early GuildPass member, exploring what token-gated communities can look like.',
+          avatar: 'https://example.com/avatars/ada-lovelace.png',
+          socialLinks: [
+            { platform: 'twitter', url: 'https://example.com/twitter/ada' },
+            { platform: 'github', url: 'https://example.com/github/ada' },
+            { platform: 'website', url: 'https://example.com/ada' },
+          ],
+          badges: ['Early Member', 'Standard Tier'],
+        },
+      }
+      break
   }
   schedulePersist()
 }
@@ -728,6 +757,37 @@ function throwMockUnauthorized(): never {
     status: 401,
     code: 'unauthorized',
     safeMessage: 'Session expired. Please sign in again.',
+  })
+}
+
+/**
+ * When true, the next assignRole()/removeRole() call throws a generic
+ * (non-auth) failure instead of succeeding — issue #243. This exists
+ * alongside NEXT_PUBLIC_MOCK_SESSION_STATE=expired rather than reusing it:
+ * that flag is read once at module load and specifically simulates auth/
+ * session state, whereas this is a runtime-togglable flag for exercising
+ * the optimistic-update rollback path for an ordinary server error, from
+ * either a test or the /developer dev-tools page. Reset by resetMockData().
+ */
+let mockRoleMutationShouldFail = false
+
+/**
+ * Toggle a simulated non-auth failure for the next assignRole()/
+ * removeRole() call(s). Mock-only — LiveAccessApi has no equivalent, and
+ * this must never be called from application code, only from tests or the
+ * /developer page.
+ */
+export function setMockRoleMutationFailure(shouldFail: boolean): void {
+  mockRoleMutationShouldFail = shouldFail
+}
+
+/** Throw a mock 500 ApiError — simulates an ordinary (non-auth) server failure. */
+function throwMockRoleMutationFailure(): never {
+  throw new ApiError({
+    status: 500,
+    code: 'server_error',
+    safeMessage: 'Simulated role mutation failure (mock mode).',
+    retryable: true,
   })
 }
 
@@ -785,6 +845,50 @@ export class MockAccessApi implements AccessApi {
     await initPromise
     const data = ensureAddress(address, this.communityId)
     return data?.profile ?? null
+  }
+
+  /**
+   * Updates the caller's own profile. Mirrors the live client's self-service
+   * ownership check (`this.address` must match `profile.address`) even
+   * though mock mode has no real signature to verify, so the two clients
+   * behave the same way from a caller's perspective. `badges` is
+   * system-assigned and is always preserved from the existing record,
+   * regardless of what the caller passes.
+   */
+  async updateProfile(profile: MemberProfile): Promise<void> {
+    await initPromise
+    if (MOCK_SESSION_STATE === 'expired') throwMockUnauthorized()
+
+    if (!this.address || this.address.toLowerCase() !== profile.address?.toLowerCase()) {
+      throw new ApiError({
+        status: 403,
+        code: 'forbidden',
+        safeMessage: 'You can only edit your own profile.',
+      })
+    }
+
+    const result = validateProfile(profile)
+    if (!result.valid) {
+      throw new ProfileValidationError(result.errors)
+    }
+
+    const data = ensureAddress(result.value.address)
+    if (!data) {
+      throw new ApiError({
+        status: 404,
+        code: 'not_found',
+        safeMessage: `Member "${result.value.address}" not found.`,
+      })
+    }
+
+    data.profile = {
+      ...data.profile,
+      displayName: result.value.displayName,
+      bio: result.value.bio,
+      avatar: result.value.avatar,
+      socialLinks: result.value.socialLinks,
+    }
+    schedulePersist()
   }
 
   async listMembers(params?: { cursor?: string; limit?: number; filter?: string }, _signal?: AbortSignal): Promise<MemberRow[] | PaginatedMembers> {
@@ -924,6 +1028,7 @@ export class MockAccessApi implements AccessApi {
   async assignRole(address: string, role: Role): Promise<void> {
     await initPromise
     if (MOCK_SESSION_STATE === 'expired') throwMockUnauthorized()
+    if (mockRoleMutationShouldFail) throwMockRoleMutationFailure()
     const data = ensureAddress(address, this.communityId)
     if (!data) return
     if (!data.roles.includes(role)) data.roles.push(role)
@@ -933,6 +1038,7 @@ export class MockAccessApi implements AccessApi {
   async removeRole(address: string, role: Role): Promise<void> {
     await initPromise
     if (MOCK_SESSION_STATE === 'expired') throwMockUnauthorized()
+    if (mockRoleMutationShouldFail) throwMockRoleMutationFailure()
     const state = getCommunityState(this.communityId)
     const data = state.memberStore[address]
     if (!data) return
@@ -978,6 +1084,39 @@ export class MockAccessApi implements AccessApi {
     if (idx >= 0) state.policies[idx] = updatedPolicy
     else state.policies.push(updatedPolicy)
     schedulePersist()
+  }
+
+  async listAdminEvents(params?: AdminEventFilterParams): Promise<Paginated<WebhookEvent>> {
+    let events = mockWebhookEvents
+    
+    if (params?.types && params.types.length > 0) {
+      events = events.filter((e) => params.types!.includes(e.type))
+    }
+    
+    if (params?.startDate) {
+      const start = new Date(params.startDate)
+      events = events.filter((e) => new Date(e.createdAt) >= start)
+    }
+    
+    if (params?.endDate) {
+      // Include the end date fully (e.g., up to end of the day)
+      const end = new Date(params.endDate)
+      end.setUTCHours(23, 59, 59, 999)
+      events = events.filter((e) => new Date(e.createdAt) <= end)
+    }
+
+    const page = params?.page || 1
+    const limit = params?.limit || 20
+    const startIndex = (page - 1) * limit
+
+    const paginated = events.slice(startIndex, startIndex + limit)
+
+    return {
+      data: paginated,
+      total: events.length,
+      page,
+      limit
+    }
   }
 
   // ── SIWE mock endpoints ────────────────────────────────────────────────────

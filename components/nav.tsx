@@ -112,6 +112,29 @@ function CommunitySwitcher({ activeSlug }: { activeSlug: string }) {
   );
 }
 
+function CommunitySwitcher() {
+  return (
+    <div
+      className="relative inline-flex"
+      title="More communities coming soon"
+    >
+      <button
+        type="button"
+        disabled
+        aria-disabled="true"
+        aria-label="Community switcher (disabled, more communities coming soon)"
+        className={cn(
+          "flex items-center gap-1 rounded-sm border px-2 py-1 text-sm text-muted-foreground",
+          "cursor-not-allowed opacity-60",
+        )}
+      >
+        GuildPass Community
+        <span aria-hidden="true">▾</span>
+      </button>
+    </div>
+  );
+}
+
 export function Nav() {
   const pathname = usePathname();
   const { address } = useAccount();
@@ -194,6 +217,7 @@ export function Nav() {
               {it.label}
             </Link>
           ))}
+          {features.multiCommunity && <CommunitySwitcher />}
           <ConnectButton />
         </nav>
       </div>

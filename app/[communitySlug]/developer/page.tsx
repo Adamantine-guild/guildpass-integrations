@@ -3,7 +3,7 @@
 import { useAccount } from 'wagmi'
 import { useQueryClient } from '@tanstack/react-query'
 import { config } from '@/lib/config'
-import { resetMockData, applyMockScenario } from '@/lib/api'
+import { resetMockData, applyMockScenario, setMockRoleMutationFailure } from '@/lib/api'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -32,6 +32,7 @@ export default function DeveloperPage() {
   const { address } = useAccount()
   const queryClient = useQueryClient()
   const [customAddress, setCustomAddress] = useState<string>(address ?? '0x1234567890123456789012345678901234567890')
+  const [roleMutationFailureEnabled, setRoleMutationFailureEnabled] = useState(false)
 
   if (config.apiMode !== 'mock') {
     return (
@@ -55,12 +56,19 @@ export default function DeveloperPage() {
 
   const handleReset = async () => {
     await resetMockData()
+    setRoleMutationFailureEnabled(false)
     await queryClient.invalidateQueries()
   }
 
   const handleApplyScenario = async (scenario: Scenario) => {
     await applyMockScenario(scenario, customAddress)
     await queryClient.invalidateQueries()
+  }
+
+  const handleToggleRoleMutationFailure = () => {
+    const next = !roleMutationFailureEnabled
+    setMockRoleMutationFailure(next)
+    setRoleMutationFailureEnabled(next)
   }
 
   return (
@@ -109,6 +117,26 @@ export default function DeveloperPage() {
               </div>
             ))}
           </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Simulate Role Mutation Failure</CardTitle>
+          <CardDescription>
+            Forces the next assign/remove-role call on the Members page to fail
+            with a generic server error, so the optimistic-update rollback and
+            error toast can be exercised without a session-expiry scenario (#243).
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex items-center gap-3">
+          <Button
+            variant={roleMutationFailureEnabled ? 'destructive' : 'outline'}
+            onClick={handleToggleRoleMutationFailure}
+          >
+            {roleMutationFailureEnabled ? 'Disable failure simulation' : 'Enable failure simulation'}
+          </Button>
+          {roleMutationFailureEnabled && <Badge variant="destructive">Active</Badge>}
         </CardContent>
       </Card>
     </div>
