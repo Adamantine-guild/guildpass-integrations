@@ -30,7 +30,10 @@ function formatRelativeTime(iso: string): string {
 }
 
 export function SyncStatusBanner({ className }: { className?: string }) {
-  const { isOnline, lastUpdatedAt, isSyncing } = useSyncStatus()
+  const { isOnline, isBackendReachable, lastUpdatedAt, isSyncing } = useSyncStatus()
+  // True browser connectivity, independent of backend reachability — lets us
+  // tell "you're offline" apart from "the configured backend can't be reached"
+  const browserOnline = typeof navigator !== 'undefined' ? navigator.onLine : true
 
   // Nothing to show when we are online and not mid-sync
   if (isOnline && !isSyncing) return null
@@ -94,6 +97,34 @@ export function SyncStatusBanner({ className }: { className?: string }) {
     )
   }
 
+  // Browser is online but the configured backend can't be reached — this is
+  // a deployment/configuration problem (e.g. a misconfigured or unreachable
+  // NEXT_PUBLIC_CORE_API_URL), not a user connectivity problem. Say so
+  // explicitly rather than showing a generic offline message. See #228.
+  if (browserOnline && !isBackendReachable) {
+    return (
+      <div
+        role="alert"
+        aria-live="assertive"
+        aria-label="Backend unreachable"
+        className={cn(
+          'flex items-center gap-2 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive',
+          className,
+        )}
+      >
+        <span
+          className="inline-block h-2 w-2 shrink-0 rounded-full bg-destructive"
+          aria-hidden="true"
+        />
+        <span>
+          Can&apos;t reach the backend service. This usually means the app is
+          misconfigured — check that <code>NEXT_PUBLIC_CORE_API_URL</code> is
+          set correctly for this deployment, or that the backend is running.
+        </span>
+      </div>
+    )
+  }
+
   // Offline with no cached data at all
   return (
     <div
@@ -101,7 +132,7 @@ export function SyncStatusBanner({ className }: { className?: string }) {
       aria-live="assertive"
       aria-label="Offline — no cached data available"
       className={cn(
-        'flex items-center gap-2 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive',
+       'flex items-center gap-2 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive',
         className,
       )}
     >

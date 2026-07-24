@@ -52,6 +52,13 @@ export interface SyncStatus {
   /** Whether the browser currently has a network connection. */
   isOnline: boolean
   /**
+   * False specifically when the configured backend (NEXT_PUBLIC_CORE_API_URL)
+   * is unreachable, as opposed to the browser itself being offline. Lets the
+   * UI show an actionable "backend unreachable" message distinct from a
+   * generic "you're offline" message. See issue #228.
+   */
+  isBackendReachable: boolean
+  /**
    * ISO timestamp of the most recent successful background cache write,
    * or null if no sync has been recorded yet.
    */
@@ -67,10 +74,14 @@ export function useSyncStatus(): SyncStatus {
   const [isOnline, setIsOnline] = useState<boolean>(
     typeof navigator !== 'undefined' ? navigator.onLine && backendOnline.get() : true,
   );
+  const [isBackendReachable, setIsBackendReachable] = useState<boolean>(
+    backendOnline.get(),
+  );
 
   // Sync with backend health status
   useEffect(() => {
     const handleBackendChange = (online: boolean) => {
+      setIsBackendReachable(online)
       setIsOnline(prev => {
         const navigatorOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
         return navigatorOnline && online;
@@ -151,5 +162,5 @@ export function useSyncStatus(): SyncStatus {
   // Cleanup on unmount
   useEffect(() => () => clearSyncTimeout(), [clearSyncTimeout])
 
-  return { isOnline, lastUpdatedAt, isSyncing }
+  return { isOnline, isBackendReachable, lastUpdatedAt, isSyncing }
 }

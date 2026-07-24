@@ -3,6 +3,7 @@ import './globals.css'
 import { RootProviders } from '@/lib/wallet/providers'
 import { Nav } from '@/components/nav'
 import { SwRegistrar } from '@/components/sw-registrar'
+import { BackendHealthCheck } from '@/components/backend-health-check'
 import SyncStatusBanner from '@/components/ui/sync-status-banner'
 
 export const metadata: Metadata = {
@@ -26,6 +27,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <RootProviders>
           {/* Registers the service worker for dashboard offline caching */}
           <SwRegistrar />
+          {/* One-time startup check so a misconfigured/unreachable backend
+              surfaces immediately, not just after a user action fails */}
+          <BackendHealthCheck />
           {/* Offline/Degraded status banner */}
           <SyncStatusBanner className="mb-4 w-full" />
           <Nav />
