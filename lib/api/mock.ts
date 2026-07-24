@@ -544,6 +544,7 @@ export async function resetMockData() {
   for (const cid of Object.keys(MOCK_COMMUNITIES)) {
     getCommunityState(cid)
   }
+  mockRoleMutationShouldFail = false
   await clearPersistedState()
 }
 
@@ -756,6 +757,37 @@ function throwMockUnauthorized(): never {
     status: 401,
     code: 'unauthorized',
     safeMessage: 'Session expired. Please sign in again.',
+  })
+}
+
+/**
+ * When true, the next assignRole()/removeRole() call throws a generic
+ * (non-auth) failure instead of succeeding — issue #243. This exists
+ * alongside NEXT_PUBLIC_MOCK_SESSION_STATE=expired rather than reusing it:
+ * that flag is read once at module load and specifically simulates auth/
+ * session state, whereas this is a runtime-togglable flag for exercising
+ * the optimistic-update rollback path for an ordinary server error, from
+ * either a test or the /developer dev-tools page. Reset by resetMockData().
+ */
+let mockRoleMutationShouldFail = false
+
+/**
+ * Toggle a simulated non-auth failure for the next assignRole()/
+ * removeRole() call(s). Mock-only — LiveAccessApi has no equivalent, and
+ * this must never be called from application code, only from tests or the
+ * /developer page.
+ */
+export function setMockRoleMutationFailure(shouldFail: boolean): void {
+  mockRoleMutationShouldFail = shouldFail
+}
+
+/** Throw a mock 500 ApiError — simulates an ordinary (non-auth) server failure. */
+function throwMockRoleMutationFailure(): never {
+  throw new ApiError({
+    status: 500,
+    code: 'server_error',
+    safeMessage: 'Simulated role mutation failure (mock mode).',
+    retryable: true,
   })
 }
 
@@ -996,6 +1028,7 @@ export class MockAccessApi implements AccessApi {
   async assignRole(address: string, role: Role): Promise<void> {
     await initPromise
     if (MOCK_SESSION_STATE === 'expired') throwMockUnauthorized()
+    if (mockRoleMutationShouldFail) throwMockRoleMutationFailure()
     const data = ensureAddress(address, this.communityId)
     if (!data) return
     if (!data.roles.includes(role)) data.roles.push(role)
@@ -1005,6 +1038,7 @@ export class MockAccessApi implements AccessApi {
   async removeRole(address: string, role: Role): Promise<void> {
     await initPromise
     if (MOCK_SESSION_STATE === 'expired') throwMockUnauthorized()
+    if (mockRoleMutationShouldFail) throwMockRoleMutationFailure()
     const state = getCommunityState(this.communityId)
     const data = state.memberStore[address]
     if (!data) return

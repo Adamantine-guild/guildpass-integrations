@@ -400,6 +400,11 @@ export default function MembersPage() {
         action: "remove",
       }, communitySlug);
       setSuccessMessage(`Role "${input.role}" removed from ${input.address}.`);
+      addToast({
+        tone: "success",
+        title: `Role removed from ${input.address.slice(0, 6)}…${input.address.slice(-4)}`,
+        description: `The ${input.role} role was removed successfully.`,
+      });
       resetMutation();
     },
     onError: (err: unknown, _input, context) => {
@@ -409,8 +414,18 @@ export default function MembersPage() {
         }
       }
       void qc.invalidateQueries({ queryKey: queryKeys.members.all(communitySlug) });
-      setRollbackMessage(`Change reverted: ${safeErrorMessage(err)}`);
-      if (err instanceof AuthError) {
+      const isExpiredSession = err instanceof AuthError && err.code === "unauthorized";
+      const message = isExpiredSession
+        ? "Session expired. Use the re-authentication banner to sign in again."
+        : safeErrorMessage(err);
+
+      setRollbackMessage(`Change reverted: ${message}`);
+      addToast({
+        tone: isExpiredSession ? "warning" : "error",
+        title: isExpiredSession ? "Admin session expired" : "Failed to remove role",
+        description: message,
+      });
+      if (isExpiredSession) {
         markExpired();
       }
     },

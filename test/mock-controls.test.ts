@@ -1,8 +1,9 @@
 import './setup-env'
 import { describe, it, beforeEach } from 'node:test'
 import assert from 'node:assert'
-import { resetMockData, applyMockScenario } from '../lib/api/mock'
+import { resetMockData, applyMockScenario, setMockRoleMutationFailure } from '../lib/api/mock'
 import { getApi } from '../lib/api'
+import { isApiError } from '../lib/api/errors'
 
 describe('Mock Controls', () => {
   const TEST_ADDRESS = '0x1234567890123456789012345678901234567890'
@@ -50,5 +51,54 @@ describe('Mock Controls', () => {
     const policies = await api.listPolicies()
     const alphaPolicy = policies.find(p => p.resourceId === 'alpha')
     assert.strictEqual(alphaPolicy?.minTier, 'standard')
+  })
+})
+
+describe('Simulated role mutation failure (#243)', () => {
+  const TEST_ADDRESS = '0x1234567890123456789012345678901234567890'
+
+  beforeEach(async () => {
+    await resetMockData()
+    setMockRoleMutationFailure(false)
+  })
+
+  it('assignRole and removeRole succeed normally while the toggle is off', async () => {
+    const api = getApi(TEST_ADDRESS)
+    await assert.doesNotReject(api.assignRole(TEST_ADDRESS, 'moderator'))
+    await assert.doesNotReject(api.removeRole(TEST_ADDRESS, 'moderator'))
+  })
+
+  it('assignRole throws a generic (non-auth) failure once enabled', async () => {
+    setMockRoleMutationFailure(true)
+    const api = getApi(TEST_ADDRESS)
+    await assert.rejects(
+      api.assignRole(TEST_ADDRESS, 'moderator'),
+      (err: unknown) => isApiError(err) && err.status === 500 && err.code === 'server_error',
+    )
+  })
+
+  it('removeRole throws a generic (non-auth) failure once enabled', async () => {
+    setMockRoleMutationFailure(true)
+    const api = getApi(TEST_ADDRESS)
+    await assert.rejects(
+      api.removeRole(TEST_ADDRESS, 'member'),
+      (err: unknown) => isApiError(err) && err.status === 500 && err.code === 'server_error',
+    )
+  })
+
+  it('disabling the toggle restores normal behavior', async () => {
+    setMockRoleMutationFailure(true)
+    const api = getApi(TEST_ADDRESS)
+    await assert.rejects(api.assignRole(TEST_ADDRESS, 'moderator'))
+
+    setMockRoleMutationFailure(false)
+    await assert.doesNotReject(api.assignRole(TEST_ADDRESS, 'moderator'))
+  })
+
+  it('resetMockData() clears the toggle', async () => {
+    setMockRoleMutationFailure(true)
+    await resetMockData()
+    const api = getApi(TEST_ADDRESS)
+    await assert.doesNotReject(api.assignRole(TEST_ADDRESS, 'moderator'))
   })
 })
