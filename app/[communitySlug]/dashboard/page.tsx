@@ -28,10 +28,7 @@ import {
 } from "@/components/ui/api-states";
 import { SyncStatusBanner } from "@/components/ui/sync-status-banner";
 import { AddressText } from "@/components/wallet/address-text";
-<<<<<<< HEAD:app/[communitySlug]/dashboard/page.tsx
 import { DisabledTooltip } from "@/components/ui/tooltip";
-=======
->>>>>>> db34015a7da0d36e0f9617f6bb6cd0ab8bc596f6:app/dashboard/page.tsx
 import { ProfileEditor } from "@/components/dashboard/profile-editor";
 import { features } from "@/lib/features";
 

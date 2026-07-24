@@ -707,7 +707,7 @@ export async function applyMockScenario(scenario: MockScenario, address: string 
       // A member who has filled out every rich-profile field (#254), to
       // exercise the public profile view and editor pre-fill against a
       // fully-populated record rather than only the sparse defaults.
-      memberStore[address] = {
+      demoState.memberStore[address] = {
         membership: {
           address,
           tier: 'standard',

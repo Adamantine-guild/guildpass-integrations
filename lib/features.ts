@@ -8,10 +8,7 @@ export type FeatureFlags = {
   resources: boolean
   governance: boolean
   rewards: boolean
-<<<<<<< HEAD
   multiCommunity: boolean
-=======
->>>>>>> db34015a7da0d36e0f9617f6bb6cd0ab8bc596f6
   profiles: boolean
 }
 
@@ -33,10 +30,7 @@ const FEATURE_ENV: Record<FeatureFlagKey, string> = {
   resources: 'NEXT_PUBLIC_FEATURE_RESOURCES',
   governance: 'NEXT_PUBLIC_FEATURE_GOVERNANCE',
   rewards: 'NEXT_PUBLIC_FEATURE_REWARDS',
-<<<<<<< HEAD
   multiCommunity: 'NEXT_PUBLIC_FEATURE_MULTI_COMMUNITY',
-=======
->>>>>>> db34015a7da0d36e0f9617f6bb6cd0ab8bc596f6
   profiles: 'NEXT_PUBLIC_FEATURE_PROFILES',
 }
 
@@ -102,9 +96,6 @@ export const featureRollouts: Record<FeatureFlagKey, FeatureRollout> = {
   resources: getFeatureRollout('resources'),
   governance: getFeatureRollout('governance'),
   rewards: getFeatureRollout('rewards'),
-<<<<<<< HEAD
   multiCommunity: getFeatureRollout('multiCommunity'),
-=======
->>>>>>> db34015a7da0d36e0f9617f6bb6cd0ab8bc596f6
   profiles: getFeatureRollout('profiles'),
 }
