@@ -282,6 +282,11 @@ export default function DashboardPage() {
                   <MembershipExpiryBadge expiresAt={membership.expiresAt} />
                 ) : null}
               </div>
+              <div className="pt-3">
+                <Link href="/billing" className={buttonVariants({ variant: "outline", size: "sm" })}>
+                  Manage Billing
+                </Link>
+              </div>
             </div>
           )}
         </Section>

@@ -154,6 +154,7 @@ export function Nav() {
       enabled: features.resources,
     },
     { href: `${prefix}/events/demo` as Route, label: "Event", enabled: features.events },
+    { href: `/billing` as Route, label: "Billing", enabled: true },
     {
       href: `${prefix}/developer` as Route,
       label: "Dev",
