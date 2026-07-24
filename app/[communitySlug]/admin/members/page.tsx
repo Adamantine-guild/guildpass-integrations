@@ -32,6 +32,8 @@ import { AddressText } from "@/components/wallet/address-text";
 import { isWalletAddress, normalizeAddress } from "@/lib/wallet/address";
 import { BulkActionToolbar, type BulkResult } from "@/components/ui/bulk-action-toolbar";
 import { Users } from "lucide-react";
+import Link from "next/link";
+import { features } from "@/lib/features";
 
 type AssignRoleInput = {
   address: string;
@@ -738,6 +740,14 @@ export default function MembersPage() {
                            aria-label={`Select ${m.address}`}
                          />
                          <AddressText address={m.address} className="text-sm" />
+                         {features.profiles && (
+                           <Link
+                             href={`/members/${m.address}`}
+                             className="text-xs text-primary underline-offset-4 hover:underline"
+                           >
+                             View profile
+                           </Link>
+                         )}
                        </div>
                        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                          <span>Tier: {m.tier}</span>

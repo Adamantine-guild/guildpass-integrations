@@ -68,10 +68,23 @@ export const MembershipSchema = z.object({
   expiresAt: z.string().optional(),
 })
 
+export interface SocialLink {
+  platform: string
+  url: string
+}
+
+export const SocialLinkSchema = z.object({
+  platform: z.string(),
+  url: z.string(),
+})
+
 export interface MemberProfile {
   address: string
   displayName?: string
   bio?: string
+  /** URL of the member's avatar image. */
+  avatar?: string
+  socialLinks?: SocialLink[]
   badges: string[]
 }
 
@@ -79,6 +92,8 @@ export const MemberProfileSchema = z.object({
   address: z.string(),
   displayName: z.string().optional(),
   bio: z.string().optional(),
+  avatar: z.string().optional(),
+  socialLinks: z.array(SocialLinkSchema).optional(),
   badges: z.array(z.string()),
 })
 
@@ -424,6 +439,9 @@ export interface BackendMember {
   display_name?: string
   username?: string
   bio?: string
+  avatar?: string
+  socialLinks?: SocialLink[]
+  social_links?: SocialLink[]
   badges?: string[]
 }
 
@@ -485,6 +503,16 @@ export interface MemberAccessApi {
   listPolicies(signal?: AbortSignal): Promise<AccessPolicy[]>
   getResource(id: string, signal?: AbortSignal): Promise<ResourceLookupResult>
   getPolicy(resourceId: string, signal?: AbortSignal): Promise<AccessPolicy | null>
+  /**
+   * Updates the caller's own profile (display name, bio, avatar, social
+   * links). The one mutation on this interface: unlike the rest of
+   * {@link MemberAccessApi} it requires a SIWE bearer token, but reuses the
+   * existing member/admin SIWE session rather than a separate auth
+   * mechanism — the backend must reject the request unless the token's
+   * address matches `profile.address`. `badges` is system-assigned and is
+   * not settable through this method.
+   */
+  updateProfile(profile: MemberProfile): Promise<void>
 }
 
 /**

@@ -62,6 +62,7 @@ import {
 export { ApiError as AuthError } from './errors'
 
 import { PolicyValidationError, validatePolicy } from '../validation/policy'
+import { ProfileValidationError, validateProfile } from '../validation/profile'
 import { config } from '../config'
 import { ensureOnline, backendOnline } from '@/lib/api/backendStatus'
 import { OfflineError } from '@/lib/api/errors'
@@ -675,6 +676,47 @@ export class LiveAccessApi implements AccessApi {
     const raw = await getJson<BackendMember | null>(path, { schema: MemberProfileSchema.nullable(), signal, headers: this.authHeaders() })
     validateMemberProfileResponse(raw, path)
     return raw ? mapMemberProfile(raw, address) : null
+  }
+
+  /**
+   * Updates the caller's own profile (display name, bio, avatar, social
+   * links). `badges` is system-assigned and cannot be set through this
+   * method — the backend is expected to ignore it if sent.
+   *
+   * Ownership: self-service only. The frontend requires `profile.address` to
+   * match the connected wallet address bound to this client instance, and
+   * relies on the SIWE bearer token (`this.token`, the same session used by
+   * admin mutations) for the real, server-side ownership check — the backend
+   * must reject the request unless the token's address matches `address` in
+   * the path. No new auth mechanism is introduced for this; it reuses the
+   * existing SIWE session rather than requiring a per-request signature.
+   */
+  async updateProfile(profile: MemberProfile): Promise<void> {
+    const result = validateProfile(profile)
+
+    if (!result.valid) {
+      throw new ProfileValidationError(result.errors)
+    }
+
+    if (!this.address || this.address.toLowerCase() !== result.value.address.toLowerCase()) {
+      throw new ApiError({
+        status: 403,
+        code: 'forbidden',
+        safeMessage: 'You can only edit your own profile.',
+      })
+    }
+
+    await getJson<void>(`/v1/members/${encodeURIComponent(result.value.address)}/profile`, {
+      method: 'PUT',
+      headers: this.authHeaders(),
+      body: JSON.stringify({
+        address: result.value.address,
+        display_name: result.value.displayName,
+        bio: result.value.bio,
+        avatar: result.value.avatar,
+        social_links: result.value.socialLinks,
+      }),
+    })
   }
 
   async listMembers(params?: { cursor?: string; limit?: number; filter?: string }, signal?: AbortSignal): Promise<MemberRow[] | PaginatedMembers> {

@@ -43,6 +43,7 @@
     "../lib/api/validators.ts",
     "../lib/api/mock-storage.ts",
     "../lib/api/role-removal.ts",
-    "../lib/validation/policy.ts"
+    "../lib/validation/policy.ts",
+    "../lib/validation/profile.ts"
   ]
 }

@@ -29,6 +29,7 @@ import {
 import { SyncStatusBanner } from "@/components/ui/sync-status-banner";
 import { AddressText } from "@/components/wallet/address-text";
 import { DisabledTooltip } from "@/components/ui/tooltip";
+import { ProfileEditor } from "@/components/dashboard/profile-editor";
 import { features } from "@/lib/features";
 
 /**
@@ -304,12 +305,23 @@ export default function DashboardPage() {
             </div>
           )}
         </Section>
-        
-        <Section title="Profile Summary">
+
+        <Section title="Profile">
           {!address ? (
             <DeniedState
               title="Wallet connection required"
-              message="Connect your wallet to load your profile and verification state."
+              message="Connect your wallet to view and edit your profile."
+            />
+          ) : (
+            <ProfileEditor address={address} />
+          )}
+        </Section>
+
+        <Section title="Wallet Verification">
+          {!address ? (
+            <DeniedState
+              title="Wallet connection required"
+              message="Connect your wallet to load your verification state."
             />
           ) : isVerifying ? (
             <LoadingState />

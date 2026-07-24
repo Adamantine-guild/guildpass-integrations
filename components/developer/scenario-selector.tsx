@@ -13,14 +13,15 @@ import { Select } from "@/components/ui/select";
 import { applyMockScenario, resetMockData } from "@/lib/api/mock";
 import { config } from "@/lib/config";
 
-type MockScenario = 
-  | 'active-member' 
-  | 'expired-member' 
-  | 'denied-resource' 
-  | 'admin-session-expired' 
+type MockScenario =
+  | 'active-member'
+  | 'expired-member'
+  | 'denied-resource'
+  | 'admin-session-expired'
   | 'no-roles'
   | 'multiple-communities'
-  | 'concurrent-policy-edit';
+  | 'concurrent-policy-edit'
+  | 'customized-profile';
 
 const SCENARIOS: Record<MockScenario, string> = {
   'active-member': 'Active Standard Member',
@@ -30,6 +31,7 @@ const SCENARIOS: Record<MockScenario, string> = {
   'no-roles': 'Member with No Roles',
   'multiple-communities': 'Multi-Community Member',
   'concurrent-policy-edit': 'Concurrent Policy Edit (Admin)',
+  'customized-profile': 'Customized Profile (Avatar, Bio, Links)',
 };
 
 export function ScenarioSelector() {

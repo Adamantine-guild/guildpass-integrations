@@ -54,12 +54,18 @@ export function mapMembership(raw: BackendMember): Membership {
 // ── Member Profile ───────────────────────────────────────────────────────────
 
 export function mapMemberProfile(raw: any, address: string): MemberProfile {
+  const socialLinks = raw.socialLinks ?? raw.social_links
   return {
     address,
     displayName:
       raw.displayName ?? raw.display_name ?? raw.username ?? 'Unknown',
     bio: raw.bio,
     badges: raw.badges ?? [],
+    // Only present when set — keeps callers that never touch these new
+    // fields (existing snapshots/tests) unaffected, matching the
+    // conditional-key convention already used elsewhere in this module.
+    ...(raw.avatar ? { avatar: raw.avatar } : {}),
+    ...(socialLinks ? { socialLinks } : {}),
   }
 }
 

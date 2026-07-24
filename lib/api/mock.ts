@@ -25,6 +25,7 @@
  * Scenario presets and reset functionality for developer testing are also included.
  */
 import { PolicyValidationError, validatePolicy } from '../validation/policy'
+import { ProfileValidationError, validateProfile } from '../validation/profile'
 import {
   AccessApi,
   AccessPolicy,
@@ -451,14 +452,15 @@ function ensureAddress(addr?: string, communityId: string = 'guildpass-demo') {
   return state.memberStore[addr]
 }
 
-type MockScenario = 
-  | 'active-member' 
-  | 'expired-member' 
-  | 'denied-resource' 
-  | 'admin-session-expired' 
+type MockScenario =
+  | 'active-member'
+  | 'expired-member'
+  | 'denied-resource'
+  | 'admin-session-expired'
   | 'no-roles'
   | 'multiple-communities'
   | 'concurrent-policy-edit'
+  | 'customized-profile'
 
 /**
  * Replay a webhook event by cloning it into the mock event store.
@@ -700,6 +702,32 @@ export async function applyMockScenario(scenario: MockScenario, address: string 
         }
       }
       break
+
+    case 'customized-profile':
+      // A member who has filled out every rich-profile field (#254), to
+      // exercise the public profile view and editor pre-fill against a
+      // fully-populated record rather than only the sparse defaults.
+      demoState.memberStore[address] = {
+        membership: {
+          address,
+          tier: 'standard',
+          active: true,
+        },
+        roles: ['member'],
+        profile: {
+          address,
+          displayName: 'Ada Lovelace',
+          bio: 'Builder and early GuildPass member, exploring what token-gated communities can look like.',
+          avatar: 'https://example.com/avatars/ada-lovelace.png',
+          socialLinks: [
+            { platform: 'twitter', url: 'https://example.com/twitter/ada' },
+            { platform: 'github', url: 'https://example.com/github/ada' },
+            { platform: 'website', url: 'https://example.com/ada' },
+          ],
+          badges: ['Early Member', 'Standard Tier'],
+        },
+      }
+      break
   }
   schedulePersist()
 }
@@ -785,6 +813,50 @@ export class MockAccessApi implements AccessApi {
     await initPromise
     const data = ensureAddress(address, this.communityId)
     return data?.profile ?? null
+  }
+
+  /**
+   * Updates the caller's own profile. Mirrors the live client's self-service
+   * ownership check (`this.address` must match `profile.address`) even
+   * though mock mode has no real signature to verify, so the two clients
+   * behave the same way from a caller's perspective. `badges` is
+   * system-assigned and is always preserved from the existing record,
+   * regardless of what the caller passes.
+   */
+  async updateProfile(profile: MemberProfile): Promise<void> {
+    await initPromise
+    if (MOCK_SESSION_STATE === 'expired') throwMockUnauthorized()
+
+    if (!this.address || this.address.toLowerCase() !== profile.address?.toLowerCase()) {
+      throw new ApiError({
+        status: 403,
+        code: 'forbidden',
+        safeMessage: 'You can only edit your own profile.',
+      })
+    }
+
+    const result = validateProfile(profile)
+    if (!result.valid) {
+      throw new ProfileValidationError(result.errors)
+    }
+
+    const data = ensureAddress(result.value.address)
+    if (!data) {
+      throw new ApiError({
+        status: 404,
+        code: 'not_found',
+        safeMessage: `Member "${result.value.address}" not found.`,
+      })
+    }
+
+    data.profile = {
+      ...data.profile,
+      displayName: result.value.displayName,
+      bio: result.value.bio,
+      avatar: result.value.avatar,
+      socialLinks: result.value.socialLinks,
+    }
+    schedulePersist()
   }
 
   async listMembers(params?: { cursor?: string; limit?: number; filter?: string }, _signal?: AbortSignal): Promise<MemberRow[] | PaginatedMembers> {
