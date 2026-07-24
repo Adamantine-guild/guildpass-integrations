@@ -4,7 +4,7 @@ import { RootProviders } from '@/lib/wallet/providers'
 import { Nav } from '@/components/nav'
 import { SwRegistrar } from '@/components/sw-registrar'
 import { BackendHealthCheck } from '@/components/backend-health-check'
-import SyncStatusBanner from '@/components/ui/sync-status-banner'
+import { SyncStatusBanner } from '@/components/ui/sync-status-banner'
 
 export const metadata: Metadata = {
   title: {

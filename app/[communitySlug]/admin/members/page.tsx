@@ -767,7 +767,7 @@ export default function MembersPage() {
                        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                          <span>Tier: {m.tier}</span>
                          <div className="flex flex-wrap gap-1">
-                           {m.roles.map((r) => (
+                           {m.roles.map((r: string) => (
                              <button
                                key={r}
                                type="button"

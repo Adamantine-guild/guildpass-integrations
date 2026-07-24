@@ -83,4 +83,16 @@ export const queryKeys = {
         ? ['analytics', 'summary', community] as const
         : ['analytics', 'summary'] as const,
   },
+
+  // Billing
+  billing: {
+    subscription: (address: string, community: string = 'guildpass-demo') =>
+      ['billing', 'subscription', address, community] as const,
+    plans: (community: string = 'guildpass-demo') =>
+      ['billing', 'plans', community] as const,
+    paymentMethods: (address: string, community: string = 'guildpass-demo') =>
+      ['billing', 'paymentMethods', address, community] as const,
+    invoices: (address: string, community: string = 'guildpass-demo') =>
+      ['billing', 'invoices', address, community] as const,
+  },
 }
