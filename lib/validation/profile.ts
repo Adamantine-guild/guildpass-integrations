@@ -1,4 +1,5 @@
 import type { MemberProfile, SocialLink } from '../api/types'
+import { isApiError } from '../api/errors'
 
 const DISPLAY_NAME_MAX_LENGTH = 50
 const BIO_MAX_LENGTH = 280
@@ -112,4 +113,65 @@ export function validateProfile(
       socialLinks: normalizeSocialLinks(profile.socialLinks),
     },
   }
+}
+
+// The live API is called with snake_case field names (see updateProfile in
+// lib/api/live.ts), so a real 422 response's `details` bag may key its
+// per-field messages either way depending on backend implementation. Accept
+// both so we don't silently drop a server-side rejection.
+const SERVER_DETAIL_KEY_TO_FIELD: Record<string, keyof ProfileValidationErrors> = {
+  displayName: 'displayName',
+  display_name: 'displayName',
+  bio: 'bio',
+  avatar: 'avatar',
+  avatar_url: 'avatar',
+  avatarUrl: 'avatar',
+  socialLinks: 'socialLinks',
+  social_links: 'socialLinks',
+}
+
+function detailToMessage(value: unknown): string | undefined {
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    return trimmed ? trimmed : undefined
+  }
+  if (Array.isArray(value)) {
+    const messages = value.filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
+    return messages.length > 0 ? messages.join(' ') : undefined
+  }
+  if (value && typeof value === 'object' && 'message' in value) {
+    const message = (value as { message?: unknown }).message
+    return typeof message === 'string' && message.trim() ? message.trim() : undefined
+  }
+  return undefined
+}
+
+/**
+ * Maps a failed profile update onto the same field-keyed shape used for
+ * client-side validation errors, so inline messages render the same way
+ * whether the rejection happened before the request left the browser (a
+ * `ProfileValidationError`, e.g. from the mock API's own re-validation) or
+ * came back from the live backend as a 422 with field-level `details`.
+ *
+ * Returns `{}` for anything that isn't a field-level validation error
+ * (network errors, auth errors, 5xx, etc.) — callers should fall back to a
+ * generic error message for those instead of clearing/hiding form errors.
+ */
+export function mapServerValidationErrors(err: unknown): ProfileValidationErrors {
+  if (err instanceof ProfileValidationError) {
+    return err.errors
+  }
+
+  if (isApiError(err) && err.code === 'validation_error' && err.details) {
+    const mapped: ProfileValidationErrors = {}
+    for (const [key, value] of Object.entries(err.details)) {
+      const field = SERVER_DETAIL_KEY_TO_FIELD[key]
+      if (!field) continue
+      const message = detailToMessage(value)
+      if (message) mapped[field] = message
+    }
+    return mapped
+  }
+
+  return {}
 }
