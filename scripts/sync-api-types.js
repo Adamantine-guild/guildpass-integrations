@@ -14,6 +14,8 @@ export type WebhookEventType =
   | 'tier.upgraded' 
   | 'policy.updated';
 
+export type WebhookEventUnsubscribe = () => void
+
 export interface WebhookEventLog {
   id: string;
   eventType: WebhookEventType;
@@ -26,6 +28,10 @@ export interface WebhookEventLog {
     tier?: string;
     reason?: string;
   };
+  /** Raw event payload for detail inspection (optional — added by the replay/debug tool). */
+  fullPayload?: Record<string, unknown>;
+  /** True when this entry was injected via the replay/debug tool rather than ingested from a real webhook. */
+  isReplay?: boolean;
 }
 
 export interface WalletVerification {
@@ -39,6 +45,56 @@ export interface ApiErrorBody {
   error?: string
   message?: string
   details?: Record<string, unknown>
+}
+
+// ── Analytics Types ──────────────────────────────────────────────────────────
+// NOTE: The analytics endpoint is PROVISIONAL. The path /v1/admin/analytics
+// has not yet been confirmed by guildpass-core. This contract is documented
+// here so the frontend and backend can align. Tracked in issue #157.
+
+/**
+ * A single data point in the member growth time series.
+ */
+export interface MemberGrowthDataPoint {
+  /** ISO 8601 date (YYYY-MM-DD) representing the start of the interval. */
+  date: string
+  /** Number of new members who joined during this interval. */
+  newMembers: number
+  /** Cumulative total member count at end of interval. */
+  totalMembers: number
+}
+
+/**
+ * Access attempt counts for a single gated resource.
+ */
+export interface ResourceAccessCount {
+  resourceId: string
+  resourceTitle: string
+  /** Total number of access attempts for this resource. */
+  accessCount: number
+  /** Number of denied access attempts (insufficient tier/role). */
+  deniedCount: number
+}
+
+/**
+ * Top-level analytics summary for the admin dashboard.
+ *
+ * @provisional Endpoint \`/v1/admin/analytics\` is not yet implemented in
+ * guildpass-core. This type definition captures the proposed contract so
+ * frontend and backend can align. The mock implementation uses seeded data;
+ * the live implementation will use this schema once the backend ships.
+ */
+export interface AnalyticsSummary {
+  /** Total community member count. */
+  totalMembers: number
+  /** Count of members with an active membership. */
+  activeMembers: number
+  /** Member growth time series (most recent 30 days, daily intervals). */
+  memberGrowth: MemberGrowthDataPoint[]
+  /** Per-resource access and denial counts. */
+  resourceAccess: ResourceAccessCount[]
+  /** ISO timestamp when this summary was generated. */
+  generatedAt: string
 }
 
 // ── Access Decision (cached per wallet + resource) ───────────────────────────
@@ -55,6 +111,29 @@ export interface AccessDecision {
   reason: string
   /** ISO timestamp of when the check was performed */
   checkedAt: string
+}
+
+export interface WebhookEvent {
+  id: string
+  type: string
+  payload: any
+  createdAt: string
+  status?: string
+}
+
+export interface Paginated<T> {
+  data: T[]
+  total: number
+  page: number
+  limit: number
+}
+
+export interface AdminEventFilterParams {
+  types?: string[]
+  startDate?: string
+  endDate?: string
+  page?: number
+  limit?: number
 }
 
 // ── Client-side State Types ──────────────────────────────────────────────────
@@ -103,6 +182,9 @@ export interface BackendMember {
   display_name?: string
   username?: string
   bio?: string
+  avatar?: string
+  socialLinks?: SocialLink[]
+  social_links?: SocialLink[]
   badges?: string[]
 }
 
@@ -124,6 +206,8 @@ export interface BackendPolicy {
   min_tier?: MembershipTier
   roles?: Role[]
   rule?: AccessRule
+  updatedAt?: string
+  updated_at?: string
 }
 
 export interface BackendSession {
@@ -145,22 +229,43 @@ export interface BackendSession {
  * Read-only member and resource queries.
  * No SIWE token is required for these operations.
  */
+export interface PaginatedMembers {
+  members: MemberRow[]
+  nextCursor?: string
+}
+
 export interface MemberAccessApi {
   // ── Read-only (no auth token required) ──────────────────────────────────
-  getSession(): Promise<Session>
-  getCommunity(): Promise<Community>
-  getMembership(address: string): Promise<Membership | null>
-  verifyWallet(address: string): Promise<WalletVerification>
-  getProfile(address: string): Promise<MemberProfile | null>
-  listMembers(): Promise<MemberRow[]>
-  listResources(): Promise<Resource[]>
-  listPolicies(): Promise<AccessPolicy[]>
-  getResource(id: string): Promise<Resource | null>
-  getPolicy(resourceId: string): Promise<AccessPolicy | null>
-  // NOTE: ownership/auth enforcement for this mutation is not yet decided
-  // (tracked with the #254 profile-customization work) — placed here to
-  // match the read-only getProfile() it pairs with, pending that decision.
+  getSession(signal?: AbortSignal): Promise<Session>
+  getCommunity(signal?: AbortSignal): Promise<Community>
+  getMembership(address: string, signal?: AbortSignal): Promise<Membership | null>
+  verifyWallet(address: string, signal?: AbortSignal): Promise<WalletVerification>
+  getProfile(address: string, signal?: AbortSignal): Promise<MemberProfile | null>
+  listMembers(params?: { cursor?: string; limit?: number; filter?: string }, signal?: AbortSignal): Promise<MemberRow[] | PaginatedMembers>
+  listResources(signal?: AbortSignal): Promise<Resource[]>
+  listPolicies(signal?: AbortSignal): Promise<AccessPolicy[]>
+  getResource(id: string, signal?: AbortSignal): Promise<ResourceLookupResult>
+  getPolicy(resourceId: string, signal?: AbortSignal): Promise<AccessPolicy | null>
+  /**
+   * Updates the caller's own profile (display name, bio, avatar, social
+   * links). The one mutation on this interface: unlike the rest of
+   * {@link MemberAccessApi} it requires a SIWE bearer token, but reuses the
+   * existing member/admin SIWE session rather than a separate auth
+   * mechanism — the backend must reject the request unless the token's
+   * address matches \`profile.address\`. \`badges\` is system-assigned and is
+   * not settable through this method.
+   */
   updateProfile(profile: MemberProfile): Promise<void>
+
+  // ── Social Graph (Connections / Blocks) ──
+  getConnections(address: string, signal?: AbortSignal): Promise<Connection[]>
+  getPrivacySettings(address: string, signal?: AbortSignal): Promise<MemberPrivacySettings>
+  updatePrivacySettings(address: string, settings: MemberPrivacySettings): Promise<void>
+  blockMember(targetAddress: string): Promise<void>
+  unblockMember(targetAddress: string): Promise<void>
+  createConnectionRequest(targetAddress: string): Promise<void>
+  acceptConnectionRequest(targetAddress: string): Promise<void>
+  rejectConnectionRequest(targetAddress: string): Promise<void>
 }
 
 /**
@@ -169,10 +274,33 @@ export interface MemberAccessApi {
  */
 export interface AdminAccessApi {
   // ── Admin queries & mutations (require a valid SIWE token context) ────────
-  listWebhookEvents(): Promise<WebhookEventLog[]>
+  listWebhookEvents(signal?: AbortSignal): Promise<WebhookEventLog[]>
+  /**
+   * Subscribe to the admin webhook event stream.
+   *
+   * @provisional Live mode attempts \`GET /v1/admin/events/stream\` as an
+   * SSE-compatible stream. If setup fails, the caller should fall back to
+   * \`listWebhookEvents()\` polling.
+   */
+  subscribeWebhookEvents(
+    onEvent: (event: WebhookEventLog) => void,
+    onError?: (error: unknown) => void,
+  ): WebhookEventUnsubscribe
+  /**
+   * Fetch the analytics summary for the admin dashboard.
+   *
+   * @provisional Calls \`GET /v1/admin/analytics\` — endpoint not yet live in
+   * guildpass-core. Contract tracked in issue #157; pending backend confirmation.
+   */
+  getAnalyticsSummary(signal?: AbortSignal): Promise<AnalyticsSummary>
   assignRole(address: string, role: Role): Promise<void>
   removeRole(address: string, role: Role): Promise<void>
   updatePolicy(policy: AccessPolicy): Promise<void>
+
+  // ── Moderation Queue ──
+  listReports(signal?: AbortSignal): Promise<ModerationReport[]>
+  getReport(id: string, signal?: AbortSignal): Promise<ModerationReport | null>
+  updateReportState(id: string, state: ModerationState, updates?: Partial<ModerationReport>): Promise<void>
 }
 
 /**
@@ -184,9 +312,19 @@ export interface SiweAuthApi {
   getNonce(address: string): Promise<string>
   /**
    * Submit a signed EIP-4361 message and receive an authenticated session
-   * token. The backend verifies the signature and returns a short-lived token.
+   * token. The backend verifies the signature and returns a short-lived access
+   * token plus a longer-lived refresh token.
    */
   siweVerify(message: string, signature: string): Promise<SiweAuthSession>
+  /**
+   * Exchange a valid refresh token for a fresh access token (and a new
+   * refresh token — token rotation). The caller must immediately persist the
+   * returned session and discard the old refresh token.
+   *
+   * Throws a 401 ApiError when the refresh token is expired or invalid,
+   * signalling that the user must re-sign with their wallet.
+   */
+  siweRefresh(refreshToken: string): Promise<SiweAuthSession>
   /** Invalidate the current server-side session (no-op for stateless JWTs). */
   siweLogout(token: string): Promise<void>
   verifyWallet(address: string): Promise<WalletVerification>
@@ -316,6 +454,12 @@ function generateTypes(schema) {
  */
 
 import { z } from 'zod';
+import { ApiError } from './errors'
+
+export type ResourceLookupResult =
+  | { status: 'found'; data: Resource; source: 'direct' | 'fallback' }
+  | { status: 'not_found' }
+  | { status: 'error'; error: ApiError }
 
 `;
 
