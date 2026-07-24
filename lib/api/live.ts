@@ -136,76 +136,172 @@ async function parseErrorBody(
   }
 }
 
-async function getJson<T>(path: string, init?: RequestInit): Promise<T> {
-  let res: Response
+// ── Circuit Breaker & Retry Logic ──────────────────────────────────────────────
 
-  try {
-    res = await fetch(`${BASE}${path}`, {
+const CIRCUIT_FAILURE_THRESHOLD = 3
+const CIRCUIT_FAILURE_WINDOW_MS = 30000
+
+interface CircuitEntry {
+  failures: number
+  firstFailureAt: number
+}
+
+const circuitBreakers = new Map<string, CircuitEntry>()
+
+function getCircuit(path: string): CircuitEntry {
+  let entry = circuitBreakers.get(path)
+  if (!entry) {
+    entry = { failures: 0, firstFailureAt: 0 }
+    circuitBreakers.set(path, entry)
+  }
+  return entry
+}
+
+export function isCircuitOpen(path: string): boolean {
+  const entry = circuitBreakers.get(path)
+  if (!entry) return false
+  
+  if (entry.failures >= CIRCUIT_FAILURE_THRESHOLD) {
+    if (Date.now() - entry.firstFailureAt < CIRCUIT_FAILURE_WINDOW_MS) {
+      return true
+    } else {
+      // Time window passed, reset
+      entry.failures = 0
+      entry.firstFailureAt = 0
+      return false
+    }
+  }
+  return false
+}
+
+function assertCircuitAllowsRequest(path: string) {
+  if (isCircuitOpen(path)) {
+    throw new ApiError({
+      status: 503,
+      code: 'service_unavailable',
+      safeMessage: 'Service is temporarily unavailable due to repeated failures.',
+      path,
+      retryable: true,
+    })
+  }
+}
+
+function recordCircuitFailure(path: string) {
+  const entry = getCircuit(path)
+  const now = Date.now()
+  if (entry.failures === 0 || now - entry.firstFailureAt >= CIRCUIT_FAILURE_WINDOW_MS) {
+    entry.failures = 1
+    entry.firstFailureAt = now
+  } else {
+    entry.failures++
+  }
+}
+
+function recordCircuitSuccess(path: string) {
+  const entry = circuitBreakers.get(path)
+  if (entry) {
+    entry.failures = 0
+    entry.firstFailureAt = 0
+  }
+}
+
+function shouldRetryRequest(method: string, error: ApiError, attempt: number): boolean {
+  const MAX_RETRIES = 3;
+  if (method !== 'GET') return false; // Only retry GETs by design
+  if (attempt >= MAX_RETRIES) return false;
+  return error.retryable === true;
+}
+
+const backoffDelayMs = (attempt: number) => Math.min(1000 * Math.pow(2, attempt), 10000);
+
+function normalizeCircuitPath(path: string): string {
+  let base = path.split('?')[0];
+  // Replace ethereum addresses with a placeholder so they share the same circuit
+  base = base.replace(/0x[a-fA-F0-9]{40}/g, ':address');
+  return base;
+}
+
+async function executeWithResilience<T>(
+  path: string, 
+  method: string, 
+  fetchFn: () => Promise<Response>
+): Promise<T> {
+  const circuitPath = normalizeCircuitPath(path);
+  let attempt = 0;
+
+  while (true) {
+    assertCircuitAllowsRequest(circuitPath);
+
+    let res: Response;
+    try {
+      res = await fetchFn();
+    } catch (cause) {
+      recordCircuitFailure(circuitPath);
+      const err = new ApiError({
+        code: 'network_error',
+        safeMessage: 'Unable to connect. Please check your connection and try again.',
+        retryable: true,
+        cause,
+      });
+      if (shouldRetryRequest(method, err, attempt)) {
+        attempt++;
+        await new Promise(r => setTimeout(r, backoffDelayMs(attempt)));
+        continue;
+      }
+      throw err;
+    }
+
+    if (!res.ok) {
+      const errBody = await parseErrorBody(res);
+      const apiErr = createApiError(res.status, errBody, path);
+      if (res.status >= 500) {
+        recordCircuitFailure(circuitPath);
+      }
+      
+      if (shouldRetryRequest(method, apiErr, attempt)) {
+        attempt++;
+        await new Promise(r => setTimeout(r, backoffDelayMs(attempt)));
+        continue;
+      }
+      throw apiErr;
+    }
+
+    recordCircuitSuccess(circuitPath);
+
+    if (res.status === 204 || res.status === 205) {
+      return {} as T
+    }
+
+    const text = await res.text()
+    if (!text.trim()) {
+      return {} as T
+    }
+
+    return JSON.parse(text) as T
+  }
+}
+
+async function getJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const method = init?.method ?? 'GET'
+  return executeWithResilience<T>(path, method, () => 
+    fetch(`${BASE}${path}`, {
       ...init,
       headers: {
         'Content-Type': 'application/json',
         ...(init?.headers ?? {}),
       },
     })
-  } catch (cause) {
-    throw new ApiError({
-      code: 'network_error',
-      safeMessage:
-        'Unable to connect. Please check your connection and try again.',
-      retryable: true,
-      cause,
-    })
-  }
-
-  if (!res.ok) {
-    throw createApiError(res.status, await parseErrorBody(res), path)
-  }
-
-  if (res.status === 204 || res.status === 205) {
-    return {} as T
-  }
-
-  const text = await res.text()
-  if (!text.trim()) {
-    return {} as T
-  }
-
-  return JSON.parse(text) as T
+  )
 }
 
 async function getIntegrationJson<T>(path: string): Promise<T> {
-  let res: Response
-
-  try {
-    res = await fetch(path, {
+  return executeWithResilience<T>(path, 'GET', () => 
+    fetch(path, {
       headers: {
         'Content-Type': 'application/json',
       },
     })
-  } catch (cause) {
-    throw new ApiError({
-      code: 'network_error',
-      safeMessage:
-        'Unable to connect to the integration gateway. Please check your configuration and try again.',
-      retryable: true,
-      cause,
-    })
-  }
-
-  if (!res.ok) {
-    throw createApiError(res.status, await parseErrorBody(res))
-  }
-
-  if (res.status === 204 || res.status === 205) {
-    return {} as T
-  }
-
-  const text = await res.text()
-  if (!text.trim()) {
-    return {} as T
-  }
-
-  return JSON.parse(text) as T
+  )
 }
 
 // ── Response mappers are now in ./mappers ─────────────────────────────────────

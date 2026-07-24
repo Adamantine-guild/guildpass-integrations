@@ -8,6 +8,7 @@ export type ApiErrorCode =
   | 'server_error'
   | 'bad_request'
   | 'unknown_error'
+  | 'service_unavailable'
 
 export interface ApiErrorOptions {
   status?: number

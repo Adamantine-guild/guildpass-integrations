@@ -89,7 +89,7 @@ async function handleVerifyGet(
 describe('GET /api/integration/membership', () => {
   it('returns 400 when address query param is missing', async () => {
     const req = mockNextRequest({})
-    const fetchMembership = mock.fn<typeof handleMembershipGet>()
+    const fetchMembership = mock.fn<(address: string) => Promise<unknown>>()
 
     const res = await handleMembershipGet(req, fetchMembership)
 
@@ -151,7 +151,7 @@ describe('GET /api/integration/membership', () => {
 describe('GET /api/integration/verify', () => {
   it('returns 400 when address query param is missing', async () => {
     const req = mockNextRequest({})
-    const verify = mock.fn<typeof handleVerifyGet>()
+    const verify = mock.fn<(address: string) => Promise<unknown>>()
 
     const res = await handleVerifyGet(req, verify)
 

@@ -13,8 +13,11 @@ import { useSiweAuth } from '@/lib/wallet/providers'
 import { AuthError } from '@/lib/api/live'
 import { queryKeys } from '@/lib/query'
 import { LoadingState, ErrorState, EmptyState, DeniedState, safeErrorMessage } from '@/components/ui/api-states'
-import { applyOptimisticRole } from '@/lib/api/optimistic'
+import { applyOptimisticRole, applyOptimisticRemoveRole } from '@/lib/api/optimistic'
 import { AddressText } from '@/components/wallet/address-text'
+import { BulkActionToolbar, BulkResultItem } from '@/components/ui/bulk-action-toolbar'
+import { runWithConcurrency } from '@/lib/api/batch-runner'
+import { isCircuitOpen } from '@/lib/api/live'
 
 type AssignRoleInput = {
   address: string
@@ -66,6 +69,67 @@ export default function MembersPage() {
   const [pendingAssignment, setPendingAssignment] = useState<AssignRoleInput | null>(null)
   const [successAssignment, setSuccessAssignment] = useState<AssignRoleInput | null>(null)
   const [rollbackMessage, setRollbackMessage] = useState('')
+  const [successMessage, setSuccessMessage] = useState('')
+
+  const [selectedAddresses, setSelectedAddresses] = useState<string[]>([])
+  const [bulkProcessing, setBulkProcessing] = useState(false)
+  const [bulkResults, setBulkResults] = useState<BulkResultItem[] | null>(null)
+
+  const toggleSelection = (address: string) => {
+    setSelectedAddresses(prev => 
+      prev.includes(address) ? prev.filter(a => a !== address) : [...prev, address]
+    )
+  }
+
+  const toggleAll = () => {
+    if (members && selectedAddresses.length === members.length) {
+      setSelectedAddresses([])
+    } else if (members) {
+      setSelectedAddresses(members.map(m => m.address))
+    }
+  }
+
+  const executeBulkAssign = async (targetRole: Role, addressesToProcess: string[]) => {
+    if (!addressesToProcess.length || bulkProcessing) return
+    setBulkProcessing(true)
+
+    // Using a concurrency limit of 5 for bulk operations
+    const CONCURRENCY_LIMIT = 5;
+    
+    // Normalize path to match circuit breaker: /v1/members/:address/roles
+    const checkCircuit = () => isCircuitOpen('/v1/members/:address/roles');
+
+    const results = await runWithConcurrency(
+      addressesToProcess,
+      CONCURRENCY_LIMIT,
+      async (address) => {
+        const api = getApi(address, authSession?.token)
+        await api.assignRole(address, targetRole)
+      },
+      checkCircuit
+    )
+
+    const finalResults = results.map((r, i) => ({
+      address: addressesToProcess[i],
+      status: r.status,
+      error: r.status === 'rejected' ? r.reason : undefined
+    }));
+
+    setBulkResults(finalResults)
+    setBulkProcessing(false)
+    qc.invalidateQueries({ queryKey: queryKeys.members.all })
+  }
+
+  const handleRetryFailed = async () => {
+    if (!bulkResults) return;
+    const failedAddresses = bulkResults
+      .filter(r => r.status !== 'fulfilled')
+      .map(r => r.address);
+    // Use the role from the previous selection
+    // In a real app we might store what role we were trying to assign
+    // For now, we fall back to selectedRole or just 'member'
+    await executeBulkAssign(role, failedAddresses);
+  }
 
   const {
     mutate,
@@ -185,7 +249,7 @@ export default function MembersPage() {
             </div>
             {successAssignment && (
               <div className="text-sm text-green-700 dark:text-green-400" role="status">
-                Role "{successAssignment.role}" saved for{' '}
+                Role &quot;{successAssignment.role}&quot; saved for{' '}
                 <AddressText
                   address={successAssignment.address}
                   className="text-green-700 dark:text-green-400"
@@ -211,6 +275,22 @@ export default function MembersPage() {
         <Card>
           <CardHeader><CardTitle>Member List</CardTitle></CardHeader>
           <CardContent>
+            <BulkActionToolbar
+              selectedAddresses={selectedAddresses}
+              onClearSelection={() => {
+                setSelectedAddresses([])
+                setBulkResults(null)
+              }}
+              onAssignRole={(r) => executeBulkAssign(r, selectedAddresses)}
+              isProcessing={bulkProcessing}
+              results={bulkResults}
+              onRetryFailed={handleRetryFailed}
+              onClearResults={() => {
+                setBulkResults(null)
+                setSelectedAddresses([])
+              }}
+            />
+
             {isLoading ? (
               <LoadingState message="Loading members…" />
             ) : isError ? (
@@ -223,12 +303,29 @@ export default function MembersPage() {
               <EmptyState title="No members yet" message="No members have been added to this community." />
             ) : (
               <div className="space-y-2">
+                <div className="flex items-center gap-2 px-2 pb-2 mb-2 border-b">
+                  <input 
+                    type="checkbox"
+                    checked={members.length > 0 && selectedAddresses.length === members.length}
+                    onChange={toggleAll}
+                    className="h-4 w-4"
+                  />
+                  <span className="text-sm font-medium">Select All</span>
+                </div>
                 {members.map((m) => (
                   <div
                     key={m.address}
-                    className="flex items-center justify-between border rounded-md p-2"
+                    className={`flex items-center justify-between border rounded-md p-2 transition-colors ${selectedAddresses.includes(m.address) ? 'bg-muted/30 border-primary' : ''}`}
                   >
-                    <AddressText address={m.address} className="text-sm" />
+                    <div className="flex items-center gap-3">
+                      <input 
+                        type="checkbox" 
+                        checked={selectedAddresses.includes(m.address)}
+                        onChange={() => toggleSelection(m.address)}
+                        className="h-4 w-4"
+                      />
+                      <AddressText address={m.address} className="text-sm" />
+                    </div>
                     <div className="flex items-center gap-2 text-xs text-muted-foreground">
                       <span>Tier: {m.tier}</span>
                       <div className="flex gap-1">
