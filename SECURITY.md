@@ -50,8 +50,9 @@ authentication for admin mutations.
 Mutation handlers in `/api/integration/*` should call
 `validateIntegrationGatewayCsrf(request)` before doing any privileged work. The
 utility rejects cross-origin `Origin` headers with HTTP 403 and falls back to a
-`Referer` origin check when `Origin` is absent. Safe read-only methods (`GET`,
-`HEAD`, `OPTIONS`) are not blocked.
+`Referer` origin check when `Origin` is absent. Mutations without either header
+are rejected with HTTP 403. Safe read-only methods (`GET`, `HEAD`, `OPTIONS`) are
+not blocked.
 
 Allowed origin configuration:
 
