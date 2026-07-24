@@ -49,13 +49,26 @@ require.cache[require.resolve('next/link')] = {
 } as any
 
 const mockReactQuery = {
+  // A single blanket useQuery mock backs every call in the tree — both
+  // AdminGuard's session lookup (needs `roles`) and AnalyticsContent's
+  // summary query (needs the ComputedAnalyticsSummary shape) share this same
+  // canned response, since the mock doesn't distinguish by query key.
   useQuery: () => ({
     data: {
       roles: ['admin'],
       totalMembers: 100,
       activeMembers: 50,
-      memberGrowth: [],
-      resourceAccess: [],
+      roleDistribution: [
+        { role: 'member', count: 80 },
+        { role: 'moderator', count: 15 },
+        { role: 'admin', count: 5 },
+      ],
+      tierDistribution: [
+        { tier: 'free', count: 40 },
+        { tier: 'standard', count: 40 },
+        { tier: 'pro', count: 20 },
+      ],
+      signupsOverTime: [{ date: '2026-01-01', count: 3 }],
       generatedAt: new Date().toISOString()
     },
     isLoading: false,
@@ -271,6 +284,30 @@ describe('Analytics feature flag', () => {
       /Analytics is not available/,
       'direct visit to AnalyticsPage must show FeatureUnavailable when flag is false',
     )
+  })
+
+  // ── Route-level content test ───────────────────────────────────────────────
+
+  test('visiting AnalyticsPage renders real computed content when flag is true', () => {
+    process.env.NEXT_PUBLIC_FEATURE_ANALYTICS = 'true'
+    process.env.NEXT_PUBLIC_MOCK_MODE = 'true'
+    clearConfigCache()
+
+    delete require.cache[require.resolve('../app/[communitySlug]/admin/analytics/page')]
+    const AnalyticsPage = require('../app/[communitySlug]/admin/analytics/page').default
+
+    const html = renderToStaticMarkup(React.createElement(AnalyticsPage))
+    assert.doesNotMatch(
+      html,
+      /Analytics is not available/,
+      'analytics content must render when the flag is true and the session is authenticated',
+    )
+    assert.match(html, /Total Members/)
+    assert.match(html, /Role Distribution/)
+    assert.match(html, /Tier Distribution/)
+    assert.match(html, /New Members Over Time/)
+    // No mention of the retired provisional-endpoint / mock-data caveat.
+    assert.doesNotMatch(html, /pending backend confirmation/)
   })
 })
 

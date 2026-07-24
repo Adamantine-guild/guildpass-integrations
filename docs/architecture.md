@@ -118,6 +118,7 @@ flowchart TD
 | `app/members/[address]/page.tsx` | Public, read-only profile view — feature-flagged (`NEXT_PUBLIC_FEATURE_PROFILES`), no `<Gated>` (reads are public), no wallet required to view |
 | `components/dashboard/profile-editor.tsx` | Self-service profile editor embedded in the dashboard's "Profile" card; `updateProfile()` is the one `MemberAccessApi` mutation and requires a SIWE bearer token |
 | `lib/validation/profile.ts` | `validateProfile()` — field-level validation (length limits, `http(s)` URL checks, social-link dedup), mirrors `lib/validation/policy.ts`'s `{valid, errors}` shape |
+| `lib/api/analytics.ts` | `computeAnalyticsSummary()` / `fetchAllMembers()` — client-side analytics aggregation from `listMembers()` + `listWebhookEvents()`, no dedicated backend endpoint |
 
 ---
 
@@ -204,3 +205,32 @@ flowchart LR
 
 `INTEGRATION_API_KEY` is a **server-only** environment variable and is never
 bundled into browser JavaScript.
+
+---
+
+## Analytics: computed client-side, not a dedicated backend endpoint
+
+`/admin/analytics` (`NEXT_PUBLIC_FEATURE_ANALYTICS`, #249) does not call a
+dedicated analytics endpoint. `AccessApi` still has a
+`getAnalyticsSummary()` method backed by a `@provisional GET
+/v1/admin/analytics` (see `test/fixtures/openapi.json` and
+`lib/api/live.ts`) — it's left in place for whenever guildpass-core ships a
+real backend aggregation endpoint, but the analytics page does not call it.
+
+Instead, `lib/api/analytics.ts`'s `computeAnalyticsSummary(members, events)`
+is a pure function that derives everything from two calls the rest of the
+app already makes — `listMembers()` (`GET /v1/members`) and
+`listWebhookEvents()` (`GET /v1/admin/events`) — so analytics works
+identically, and without any backend dependency, in both mock and live mode.
+`fetchAllMembers()` walks `listMembers()`'s pagination (`nextCursor`) to
+completion before computing, since a real deployment may paginate even
+without page-size params.
+
+This shapes what the page can honestly show. `WebhookEventType` only covers
+membership lifecycle and policy updates (`membership.created`,
+`membership.expired`, `tier.upgraded`, `policy.updated`) — there is no
+resource-access event type — so a per-resource access/denial breakdown
+is **not** derivable from real data today; the page deliberately doesn't
+show one. "New Members Over Time" is a `membership.created`-event proxy
+rather than a guaranteed-complete signup history, and is not zero-filled
+across a fixed date range — only days with a real event appear.

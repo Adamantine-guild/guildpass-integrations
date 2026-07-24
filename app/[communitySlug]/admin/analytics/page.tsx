@@ -4,8 +4,15 @@ import { useAccount } from "wagmi";
 import { useQuery } from "@tanstack/react-query";
 import { getApi } from "@/lib/api";
 import { useParams } from "next/navigation";
-import type { AnalyticsSummary, MemberGrowthDataPoint, ResourceAccessCount } from "@/lib/api";
 import { isApiError } from "@/lib/api/errors";
+import {
+  computeAnalyticsSummary,
+  fetchAllMembers,
+  type ComputedAnalyticsSummary,
+  type RoleDistributionEntry,
+  type SignupsDataPoint,
+  type TierDistributionEntry,
+} from "@/lib/api/analytics";
 import { queryKeys } from "@/lib/query";
 import { FeatureGate } from "@/components/feature-gate";
 import { AdminGuard } from "@/components/admin-guard";
@@ -14,6 +21,7 @@ import { useSiweAuth } from "@/lib/wallet/providers";
 import {
   ErrorState,
   LoadingState,
+  EmptyState,
   safeErrorMessage,
 } from "@/components/ui/api-states";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -49,39 +57,49 @@ function StatCard({
   );
 }
 
-// ── Member growth bar chart (SVG, no external dependencies) ──────────────────
+// ── Signups-over-time bar chart (SVG, no external dependencies) ──────────────
 
-function MemberGrowthChart({ data }: { data: MemberGrowthDataPoint[] }) {
-  if (data.length === 0) return null;
+function SignupsChart({ data }: { data: SignupsDataPoint[] }) {
+  if (data.length === 0) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">New Members Over Time</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <EmptyState
+            title="No signups recorded yet"
+            message="This chart is built from membership.created events in the admin event log — it will fill in as they occur."
+          />
+        </CardContent>
+      </Card>
+    );
+  }
 
-  const maxNew = Math.max(...data.map((d) => d.newMembers), 1);
+  const maxCount = Math.max(...data.map((d) => d.count), 1);
   const chartHeight = 80;
-  const barWidth = 8;
-  const gap = 2;
+  const barWidth = 16;
+  const gap = 6;
   const totalWidth = data.length * (barWidth + gap) - gap;
-  const labelEvery = Math.ceil(data.length / 6);
+  const labelEvery = Math.max(1, Math.ceil(data.length / 8));
+  const totalSignups = data.reduce((sum, d) => sum + d.count, 0);
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">
-          New Members (Last 30 Days)
-        </CardTitle>
+        <CardTitle className="text-base">New Members Over Time</CardTitle>
       </CardHeader>
       <CardContent>
         <div className="overflow-x-auto">
           <svg
             viewBox={`0 0 ${totalWidth} ${chartHeight + 20}`}
-            aria-label="Bar chart of new members joined per day over the last 30 days"
+            aria-label="Bar chart of new members per day, derived from membership.created events"
             role="img"
             className="w-full"
             style={{ minWidth: totalWidth }}
           >
             {data.map((point, i) => {
-              const barH = Math.max(
-                2,
-                (point.newMembers / maxNew) * chartHeight,
-              );
+              const barH = Math.max(2, (point.count / maxCount) * chartHeight);
               const x = i * (barWidth + gap);
               const y = chartHeight - barH;
               const showLabel = i % labelEvery === 0;
@@ -95,7 +113,7 @@ function MemberGrowthChart({ data }: { data: MemberGrowthDataPoint[] }) {
                     height={barH}
                     rx={1}
                     className="fill-primary"
-                    aria-label={`${point.date}: ${point.newMembers} new members`}
+                    aria-label={`${point.date}: ${point.count} new member${point.count === 1 ? "" : "s"}`}
                   />
                   {showLabel && (
                     <text
@@ -114,9 +132,9 @@ function MemberGrowthChart({ data }: { data: MemberGrowthDataPoint[] }) {
           </svg>
         </div>
         <p className="mt-2 text-xs text-muted-foreground">
-          Total members at end of period:{" "}
+          Total signups shown:{" "}
           <span className="font-medium text-foreground">
-            {data[data.length - 1]?.totalMembers ?? 0}
+            {totalSignups.toLocaleString()}
           </span>
         </p>
       </CardContent>
@@ -124,57 +142,56 @@ function MemberGrowthChart({ data }: { data: MemberGrowthDataPoint[] }) {
   );
 }
 
-// ── Resource access table ─────────────────────────────────────────────────────
+// ── Distribution bars (role / tier) ───────────────────────────────────────────
 
-function ResourceAccessTable({ data }: { data: ResourceAccessCount[] }) {
+function DistributionBars({
+  title,
+  items,
+}: {
+  title: string;
+  items: { label: string; count: number }[];
+}) {
+  const max = Math.max(...items.map((i) => i.count), 1);
+
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">Resource Access Summary</CardTitle>
+        <CardTitle className="text-base">{title}</CardTitle>
       </CardHeader>
-      <CardContent className="p-0">
-        <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-border text-left text-sm">
-            <thead className="bg-muted text-muted-foreground uppercase text-xs font-semibold tracking-wider">
-              <tr>
-                <th className="px-4 py-3">Resource</th>
-                <th className="px-4 py-3 text-right">Total Accesses</th>
-                <th className="px-4 py-3 text-right">Denied</th>
-                <th className="px-4 py-3 text-right">Denial Rate</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border bg-transparent text-card-foreground">
-              {data.map((row) => {
-                const denialRate =
-                  row.accessCount > 0
-                    ? ((row.deniedCount / row.accessCount) * 100).toFixed(1)
-                    : "0.0";
-                return (
-                  <tr key={row.resourceId} className="hover:bg-muted/50 transition-colors">
-                    <td className="px-4 py-3 font-medium text-foreground">
-                      {row.resourceTitle}
-                      <span className="ml-1.5 font-mono text-xs text-muted-foreground">
-                        ({row.resourceId})
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-right tabular-nums">
-                      {row.accessCount.toLocaleString()}
-                    </td>
-                    <td className="px-4 py-3 text-right tabular-nums text-red-600 dark:text-red-400">
-                      {row.deniedCount.toLocaleString()}
-                    </td>
-                    <td className="px-4 py-3 text-right tabular-nums text-muted-foreground">
-                      {denialRate}%
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+      <CardContent className="space-y-3">
+        {items.map((item) => (
+          <div key={item.label} className="space-y-1">
+            <div className="flex items-center justify-between text-sm">
+              <span className="font-medium capitalize text-foreground">
+                {item.label}
+              </span>
+              <span className="tabular-nums text-muted-foreground">
+                {item.count.toLocaleString()}
+              </span>
+            </div>
+            <div
+              role="img"
+              aria-label={`${item.label}: ${item.count}`}
+              className="h-2 w-full overflow-hidden rounded-full bg-muted"
+            >
+              <div
+                className="h-full rounded-full bg-primary"
+                style={{ width: `${(item.count / max) * 100}%` }}
+              />
+            </div>
+          </div>
+        ))}
       </CardContent>
     </Card>
   );
+}
+
+function roleItems(distribution: RoleDistributionEntry[]) {
+  return distribution.map((entry) => ({ label: entry.role, count: entry.count }));
+}
+
+function tierItems(distribution: TierDistributionEntry[]) {
+  return distribution.map((entry) => ({ label: entry.tier, count: entry.count }));
 }
 
 // ── Session-expired re-auth helper ────────────────────────────────────────────
@@ -214,13 +231,18 @@ function AnalyticsContent() {
     isError,
     error,
     refetch,
-  } = useQuery<AnalyticsSummary>({
+  } = useQuery<ComputedAnalyticsSummary>({
     queryKey: [...queryKeys.analytics.summary(communitySlug), address, authSession?.token ?? "anonymous"],
     queryFn: async ({ signal }) => {
       try {
-        return await getApi(address, authSession?.token, communitySlug).getAnalyticsSummary(signal);
+        const api = getApi(address, authSession?.token, communitySlug);
+        const [members, events] = await Promise.all([
+          fetchAllMembers(api, signal),
+          api.listWebhookEvents(signal),
+        ]);
+        return computeAnalyticsSummary(members, events);
       } catch (err) {
-        if (isApiError(err) && err.code === 'aborted') throw err;
+        if (isApiError(err) && err.code === "aborted") throw err;
         if (isApiError(err) && err.code === "unauthorized") {
           markExpired();
         }
@@ -229,7 +251,7 @@ function AnalyticsContent() {
     },
     enabled: !!address && sessionStatus === "authenticated",
     retry: (failureCount, err) => {
-      if (isApiError(err) && err.code === 'aborted') return false;
+      if (isApiError(err) && err.code === "aborted") return false;
       if (isApiError(err) && err.code === "unauthorized") return false;
       return failureCount < 1;
     },
@@ -247,10 +269,8 @@ function AnalyticsContent() {
           Analytics
         </h1>
         <p className="text-sm text-muted-foreground">
-          Community growth and resource access overview.{" "}
-          <span className="font-medium text-yellow-600 dark:text-yellow-400">
-            Mock data — live endpoint pending backend confirmation (issue #157).
-          </span>
+          Community growth and membership overview, computed from live member
+          and event data — no dedicated analytics backend required.
         </p>
       </div>
 
@@ -261,7 +281,7 @@ function AnalyticsContent() {
         <SessionExpiredState />
       ) : isLoading ? (
         <LoadingState message="Loading analytics…" />
-      ) : isError && !(isApiError(error) && error.code === 'aborted') ? (
+      ) : isError && !(isApiError(error) && error.code === "aborted") ? (
         <ErrorState
           title="Error loading analytics"
           message={safeErrorMessage(error)}
@@ -278,25 +298,41 @@ function AnalyticsContent() {
             <StatCard
               label="Active Members"
               value={summary.activeMembers.toLocaleString()}
-              description={`${((summary.activeMembers / summary.totalMembers) * 100).toFixed(0)}% of total`}
+              description={
+                summary.totalMembers > 0
+                  ? `${((summary.activeMembers / summary.totalMembers) * 100).toFixed(0)}% of total`
+                  : undefined
+              }
             />
             <StatCard
-              label="New (30 Days)"
-              value={summary.memberGrowth
-                .reduce((s, d) => s + d.newMembers, 0)
+              label="Signups Recorded"
+              value={summary.signupsOverTime
+                .reduce((sum, d) => sum + d.count, 0)
                 .toLocaleString()}
+              description="From membership.created events"
             />
             <StatCard
-              label="Resources Tracked"
-              value={summary.resourceAccess.length}
+              label="Admins"
+              value={
+                summary.roleDistribution.find((r) => r.role === "admin")?.count ?? 0
+              }
             />
           </div>
 
-          {/* Member growth chart */}
-          <MemberGrowthChart data={summary.memberGrowth} />
+          {/* Signups-over-time chart */}
+          <SignupsChart data={summary.signupsOverTime} />
 
-          {/* Resource access table */}
-          <ResourceAccessTable data={summary.resourceAccess} />
+          {/* Role and tier distribution */}
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <DistributionBars
+              title="Role Distribution"
+              items={roleItems(summary.roleDistribution)}
+            />
+            <DistributionBars
+              title="Tier Distribution"
+              items={tierItems(summary.tierDistribution)}
+            />
+          </div>
 
           {/* Generated-at footer */}
           <p className="text-right text-xs text-muted-foreground">

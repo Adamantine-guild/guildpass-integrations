@@ -12,7 +12,7 @@ The main frontend MVP for the GuildPass ecosystem. Built with **Next.js 14 App R
 ## Features (MVP)
 
 - **Member dashboard** — wallet connect, membership state, community & tier, expiration, badges, gated resources, wallet verification status, and a self-service profile editor (`NEXT_PUBLIC_FEATURE_PROFILES`)
-- **Admin dashboard** — overview, member list, role assignment, resource access policies, community settings
+- **Admin dashboard** — overview, member list, role assignment, resource access policies, community settings, analytics (`NEXT_PUBLIC_FEATURE_ANALYTICS`)
 - **Access-gated experiences** — gated pages, gated content sections, event access, denied states, upgrade/renew placeholders
 - **Wallet-aware UX** — connect flow, SIWE-authenticated admin experience, role-aware UI states, admin-only sections
 - **SIWE authentication** — Sign-In with Ethereum (EIP-4361) for admin sessions; gasless off-chain signature; short-lived token attached to all mutations
@@ -159,7 +159,7 @@ Modules that are experimental or not yet production-ready are controlled by envi
 | `NEXT_PUBLIC_FEATURE_ADMIN_SETTINGS` | `true` | `false` | Advanced admin community settings at `/admin/settings` (persistence deferred for MVP) |
 | `NEXT_PUBLIC_FEATURE_EVENTS` | `true` | `false` | Event access page at `/events/*` |
 | `NEXT_PUBLIC_FEATURE_RESOURCES` | `true` | `true` | Gated resources at `/resources/*` |
-| `NEXT_PUBLIC_FEATURE_ANALYTICS` | `false` | `false` | Analytics module (not yet built) |
+| `NEXT_PUBLIC_FEATURE_ANALYTICS` | `false` | `false` | Analytics at `/admin/analytics` — membership growth, role/tier distribution, computed client-side from `listMembers()`/`listWebhookEvents()`, no dedicated backend endpoint (#249) |
 | `NEXT_PUBLIC_FEATURE_GOVERNANCE` | `false` | `false` | Governance module (not yet built) |
 | `NEXT_PUBLIC_FEATURE_PROFILES` | `false` | `false` | Public member profile view at `/members/[address]` — rich profile customization (#254) |
 | `NEXT_PUBLIC_FEATURE_<NAME>_ROLLOUT_PCT` | unset | unset | Optional 0–100 percentage rollout for the matching flag |
@@ -281,6 +281,7 @@ The diagram covers:
 | `app/members/[address]/page.tsx` | Public, read-only member profile view (`NEXT_PUBLIC_FEATURE_PROFILES`) |
 | `components/dashboard/profile-editor.tsx` | Self-service profile editor on the dashboard |
 | `lib/validation/profile.ts` | Profile field validation (`validateProfile`) |
+| `lib/api/analytics.ts` | Client-side analytics aggregation (`computeAnalyticsSummary`, `fetchAllMembers`) — no dedicated backend endpoint |
 
 ### Composable access rules
 
@@ -367,10 +368,13 @@ and troubleshooting.
 - Core member and admin surfaces listed above
 - Basic role assignment and policy editing
 - Gated pages and states
+- Rich profile customization (#254)
+- Basic analytics — membership growth, role/tier distribution, computed client-side (#249)
 
 **Deferred (intentionally)**:
-- Advanced analytics and governance
-- Rich profile customization and contribution history
+- Governance
+- Richer analytics (e.g. per-resource access/denial tracking — the admin event log does not capture resource-access attempts today, only membership-lifecycle and policy-update events, so this isn't derivable from existing data; see [Feature Flags](#feature-flags))
+- Contribution history
 - Social graph and advanced moderation
 - Complex admin workflows, rewards visualization, full event management
 - Complete billing/subscription management UX
