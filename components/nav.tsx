@@ -12,6 +12,7 @@ import { queryKeys } from "@/lib/query";
 import { features } from "@/lib/features";
 import { config } from "@/lib/config";
 import { useState, useRef, useEffect } from "react";
+import { getNavAdminModules } from "@/lib/admin-modules";
 
 const AVAILABLE_COMMUNITIES = [
   { id: 'guildpass-demo', name: 'GuildPass Demo' },
@@ -112,7 +113,7 @@ function CommunitySwitcher({ activeSlug }: { activeSlug: string }) {
   );
 }
 
-function CommunitySwitcher() {
+function DisabledCommunitySwitcher() {
   return (
     <div
       className="relative inline-flex"
@@ -151,26 +152,19 @@ export function Nav() {
   });
 
   const prefix = features.multiCommunity ? `/${communitySlug}` : "";
-  const isAdmin = !!session?.roles?.includes("admin");
+
+  const adminNavItems = getNavAdminModules({
+    roles: session?.roles,
+    prefix,
+    userIdentifier: address,
+  }).map((item) => ({
+    href: item.href as Route,
+    label: item.label,
+  }));
 
   const items = [
     { href: `${prefix}/dashboard` as Route, label: "Dashboard", enabled: true },
-    { href: `${prefix}/admin` as Route, label: "Admin", enabled: isAdmin },
-    {
-      href: `${prefix}/admin/analytics` as Route,
-      label: "Analytics",
-      enabled: isAdmin && features.analytics,
-    },
-    {
-      href: `${prefix}/admin/rewards` as Route,
-      label: "Rewards",
-      enabled: isAdmin && features.rewards,
-    },
-    {
-      href: `${prefix}/admin/settings` as Route,
-      label: "Settings",
-      enabled: isAdmin && features.adminSettings,
-    },
+    ...adminNavItems.map((item) => ({ ...item, enabled: true })),
     {
       href: `${prefix}/resources/alpha` as Route,
       label: "Gated",
@@ -217,7 +211,7 @@ export function Nav() {
               {it.label}
             </Link>
           ))}
-          {features.multiCommunity && <CommunitySwitcher />}
+          {features.multiCommunity && <DisabledCommunitySwitcher />}
           <ConnectButton />
         </nav>
       </div>
