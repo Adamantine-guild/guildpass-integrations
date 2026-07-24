@@ -124,6 +124,7 @@ This threat model evaluates the frontend authentication architecture across thre
 - **Mitigation Controls Implemented:**
   - Mutation route handlers call `validateIntegrationGatewayCsrf(req)` (`lib/csrf.ts`).
   - Rejects cross-origin `Origin` or `Referer` headers for state-changing HTTP methods (`POST`, `PUT`, `DELETE`, `PATCH`).
+  - Rejects state-changing requests without either an `Origin` or `Referer` header.
   - Allowed origin is strictly validated against `INTEGRATION_ALLOWED_ORIGIN` or `NEXT_PUBLIC_SIWE_DOMAIN`.
   - Safe read-only methods (`GET`, `HEAD`, `OPTIONS`) bypass CSRF checks.
 

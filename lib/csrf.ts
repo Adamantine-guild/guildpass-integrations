@@ -60,12 +60,17 @@ export function validateIntegrationGatewayCsrf(req: NextRequest): NextResponse |
 
   const refererHeader = req.headers.get('referer')
   const refererOrigin = refererHeader ? normalizeOrigin(refererHeader) : null
-  if (refererHeader && refererOrigin !== expectedOrigin) {
+  if (refererHeader) {
+    if (refererOrigin === expectedOrigin) return null
+
     return NextResponse.json(
       { error: 'Cross-origin requests are not allowed for integration gateway mutations.' },
       { status: 403 },
     )
   }
 
-  return null
+  return NextResponse.json(
+    { error: 'Origin or Referer header is required for integration gateway mutations.' },
+    { status: 403 },
+  )
 }

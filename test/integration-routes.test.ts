@@ -243,7 +243,20 @@ describe('integration gateway CSRF protection', () => {
     process.env = originalEnv
   })
 
-  it('rejects cross-origin mutation requests with 403', async () => {
+  it('rejects mutation requests without Origin or Referer with 403', async () => {
+    const { validateIntegrationGatewayCsrf } = loadCsrf()
+    const req = mockCsrfRequest('POST', {})
+
+    const res = validateIntegrationGatewayCsrf(req as any)
+
+    assert.ok(res)
+    assert.equal(res.status, 403)
+    assert.deepEqual(await res.json(), {
+      error: 'Origin or Referer header is required for integration gateway mutations.',
+    })
+  })
+
+  it('rejects a mismatched Origin with 403', async () => {
     const { validateIntegrationGatewayCsrf } = loadCsrf()
     const req = mockCsrfRequest('POST', { origin: 'https://evil.example' })
 
@@ -256,13 +269,50 @@ describe('integration gateway CSRF protection', () => {
     })
   })
 
-  it('allows same-origin mutation requests', () => {
+  it('allows a matching Origin', () => {
     const { validateIntegrationGatewayCsrf } = loadCsrf()
     const req = mockCsrfRequest('PUT', { origin: 'https://admin.guildpass.test' })
 
     const res = validateIntegrationGatewayCsrf(req as any)
 
     assert.equal(res, null)
+  })
+
+  it('allows a matching Referer when Origin is absent', () => {
+    const { validateIntegrationGatewayCsrf } = loadCsrf()
+    const req = mockCsrfRequest('POST', {
+      referer: 'https://admin.guildpass.test/admin/settings',
+    })
+
+    const res = validateIntegrationGatewayCsrf(req as any)
+
+    assert.equal(res, null)
+  })
+
+  it('rejects a mismatched Referer when Origin is absent', async () => {
+    const { validateIntegrationGatewayCsrf } = loadCsrf()
+    const req = mockCsrfRequest('POST', { referer: 'https://evil.example/attack' })
+
+    const res = validateIntegrationGatewayCsrf(req as any)
+
+    assert.ok(res)
+    assert.equal(res.status, 403)
+    assert.deepEqual(await res.json(), {
+      error: 'Cross-origin requests are not allowed for integration gateway mutations.',
+    })
+  })
+
+  it('rejects an unparseable Referer when Origin is absent', async () => {
+    const { validateIntegrationGatewayCsrf } = loadCsrf()
+    const req = mockCsrfRequest('POST', { referer: 'not a valid URL' })
+
+    const res = validateIntegrationGatewayCsrf(req as any)
+
+    assert.ok(res)
+    assert.equal(res.status, 403)
+    assert.deepEqual(await res.json(), {
+      error: 'Cross-origin requests are not allowed for integration gateway mutations.',
+    })
   })
 
   it('uses the configurable allowed origin when provided', () => {
@@ -275,12 +325,14 @@ describe('integration gateway CSRF protection', () => {
     assert.equal(res, null)
   })
 
-  it('does not block safe read-only gateway requests', () => {
+  it('allows safe methods without Origin or Referer', () => {
     const { validateIntegrationGatewayCsrf } = loadCsrf()
-    const req = mockCsrfRequest('GET', { origin: 'https://evil.example' })
 
-    const res = validateIntegrationGatewayCsrf(req as any)
+    for (const method of ['GET', 'HEAD', 'OPTIONS']) {
+      const req = mockCsrfRequest(method, {})
+      const res = validateIntegrationGatewayCsrf(req as any)
 
-    assert.equal(res, null)
+      assert.equal(res, null, `${method} should bypass CSRF validation`)
+    }
   })
 })
