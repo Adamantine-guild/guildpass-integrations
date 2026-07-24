@@ -1,4 +1,4 @@
-import { isFeatureEnabledForIdentifier, features as defaultFeatures, type FeatureFlagKey } from '@/lib/features';
+import type { FeatureFlagKey } from '@/lib/features';
 import type { AdminModule, AdminModuleContext, AdminNavItem } from './types';
 
 class AdminModuleRegistry {
@@ -50,6 +50,7 @@ class AdminModuleRegistry {
       return Boolean(context.featureFlags[module.featureFlag]);
     }
 
+    const { isFeatureEnabledForIdentifier } = require('../features');
     return isFeatureEnabledForIdentifier(module.featureFlag, context?.userIdentifier);
   }
 
