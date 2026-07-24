@@ -33,6 +33,13 @@ import {
   AccessPolicySchema,
   WebhookEventLogSchema,
   SiweAuthSessionSchema,
+  Connection,
+  ConnectionSchema,
+  MemberPrivacySettings,
+  MemberPrivacySettingsSchema,
+  ModerationReport,
+  ModerationReportSchema,
+  ModerationState,
 } from './types'
 import {
   mapCommunity,
@@ -1009,6 +1016,86 @@ export class LiveAccessApi implements AccessApi {
       headers: { Authorization: `Bearer ${token}` },
     }).catch(() => {
       // best-effort logout
+    })
+  }
+
+  // ── Social Graph (Connections / Blocks) ──
+  async getConnections(address: string, signal?: AbortSignal): Promise<Connection[]> {
+    const path = `/v1/members/${encodeURIComponent(address)}/connections`
+    return getJson<Connection[]>(path, { signal, headers: this.authHeaders(), schema: z.array(ConnectionSchema) })
+  }
+
+  async getPrivacySettings(address: string, signal?: AbortSignal): Promise<MemberPrivacySettings> {
+    const path = `/v1/members/${encodeURIComponent(address)}/privacy`
+    return getJson<MemberPrivacySettings>(path, { signal, headers: this.authHeaders(), schema: MemberPrivacySettingsSchema })
+  }
+
+  async updatePrivacySettings(address: string, settings: MemberPrivacySettings): Promise<void> {
+    const path = `/v1/members/${encodeURIComponent(address)}/privacy`
+    await getJson<void>(path, {
+      method: 'PUT',
+      body: JSON.stringify(settings),
+      headers: this.authHeaders(),
+    })
+  }
+
+  async blockMember(targetAddress: string): Promise<void> {
+    const path = `/v1/members/${encodeURIComponent(targetAddress)}/block`
+    await getJson<void>(path, {
+      method: 'POST',
+      headers: this.authHeaders(),
+    })
+  }
+
+  async unblockMember(targetAddress: string): Promise<void> {
+    const path = `/v1/members/${encodeURIComponent(targetAddress)}/block`
+    await getJson<void>(path, {
+      method: 'DELETE',
+      headers: this.authHeaders(),
+    })
+  }
+
+  async createConnectionRequest(targetAddress: string): Promise<void> {
+    const path = `/v1/members/${encodeURIComponent(targetAddress)}/connections`
+    await getJson<void>(path, {
+      method: 'POST',
+      headers: this.authHeaders(),
+    })
+  }
+
+  async acceptConnectionRequest(targetAddress: string): Promise<void> {
+    const path = `/v1/members/${encodeURIComponent(targetAddress)}/connections/accept`
+    await getJson<void>(path, {
+      method: 'POST',
+      headers: this.authHeaders(),
+    })
+  }
+
+  async rejectConnectionRequest(targetAddress: string): Promise<void> {
+    const path = `/v1/members/${encodeURIComponent(targetAddress)}/connections/reject`
+    await getJson<void>(path, {
+      method: 'POST',
+      headers: this.authHeaders(),
+    })
+  }
+
+  // ── Moderation Queue ──
+  async listReports(signal?: AbortSignal): Promise<ModerationReport[]> {
+    const path = `/v1/admin/reports`
+    return getJson<ModerationReport[]>(path, { signal, headers: this.authHeaders(), schema: z.array(ModerationReportSchema) })
+  }
+
+  async getReport(id: string, signal?: AbortSignal): Promise<ModerationReport | null> {
+    const path = `/v1/admin/reports/${encodeURIComponent(id)}`
+    return getJson<ModerationReport | null>(path, { signal, headers: this.authHeaders(), schema: ModerationReportSchema.nullable() })
+  }
+
+  async updateReportState(id: string, state: ModerationState, updates?: Partial<ModerationReport>): Promise<void> {
+    const path = `/v1/admin/reports/${encodeURIComponent(id)}/state`
+    await getJson<void>(path, {
+      method: 'PUT',
+      body: JSON.stringify({ state, ...updates }),
+      headers: this.authHeaders(),
     })
   }
 }

@@ -95,4 +95,20 @@ export const queryKeys = {
     invoices: (address: string, community: string = 'guildpass-demo') =>
       ['billing', 'invoices', address, community] as const,
   },
+
+  // Connections
+  connections: {
+    byAddress: (address: string) => ['connections', address] as const,
+  },
+
+  // Privacy Settings
+  privacySettings: {
+    byAddress: (address: string) => ['privacySettings', address] as const,
+  },
+
+  // Moderation Reports
+  moderationReports: {
+    all: ['moderationReports'] as const,
+    detail: (id: string) => ['moderationReport', id] as const,
+  },
 }

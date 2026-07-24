@@ -375,7 +375,8 @@
             "type": "array",
             "items": { "$ref": "#/components/schemas/Role" }
           },
-          "rule": { "$ref": "#/components/schemas/AccessRule" }
+          "rule": { "$ref": "#/components/schemas/AccessRule" },
+          "updatedAt": { "type": "string", "format": "date-time" }
         },
         "required": ["resourceId"]
       },
@@ -477,7 +478,9 @@
           "isAuthenticated": { "type": "boolean", "enum": [true] },
           "token": { "type": "string" },
           "address": { "type": "string" },
-          "expiresAt": { "type": "string", "format": "date-time" }
+          "expiresAt": { "type": "string", "format": "date-time" },
+          "refreshToken": { "type": "string" },
+          "refreshExpiresAt": { "type": "string", "format": "date-time" }
         },
         "required": ["isAuthenticated", "token", "address", "expiresAt"]
       },
@@ -489,6 +492,67 @@
           "checkedAt": { "type": "string", "format": "date-time" }
         },
         "required": ["verified", "checkedAt"]
+      },
+      "ConnectionStatus": {
+        "type": "string",
+        "enum": ["pending", "accepted", "blocked"]
+      },
+      "Connection": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "fromAddress": { "type": "string" },
+          "toAddress": { "type": "string" },
+          "status": { "$ref": "#/components/schemas/ConnectionStatus" },
+          "createdAt": { "type": "string", "format": "date-time" },
+          "updatedAt": { "type": "string", "format": "date-time" }
+        },
+        "required": ["id", "fromAddress", "toAddress", "status", "createdAt", "updatedAt"]
+      },
+      "PrivacySetting": {
+        "type": "string",
+        "enum": ["public", "mutual-only", "private"]
+      },
+      "MemberPrivacySettings": {
+        "type": "object",
+        "properties": {
+          "address": { "type": "string" },
+          "connectionVisibility": { "$ref": "#/components/schemas/PrivacySetting" }
+        },
+        "required": ["address", "connectionVisibility"]
+      },
+      "ModerationState": {
+        "type": "string",
+        "enum": [
+          "report_submitted",
+          "under_review",
+          "action_taken",
+          "dismissed",
+          "appeal_submitted",
+          "appeal_reviewed_reinstated",
+          "appeal_reviewed_upheld"
+        ]
+      },
+      "PenaltyType": {
+        "type": "string",
+        "enum": ["warning", "suspension", "permanent_ban"]
+      },
+      "ModerationReport": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "reporterAddress": { "type": "string" },
+          "reportedAddress": { "type": "string" },
+          "reason": { "type": "string" },
+          "details": { "type": "string" },
+          "state": { "$ref": "#/components/schemas/ModerationState" },
+          "penaltyApplied": { "$ref": "#/components/schemas/PenaltyType" },
+          "appealNotes": { "type": "string" },
+          "adminNotes": { "type": "string" },
+          "createdAt": { "type": "string", "format": "date-time" },
+          "updatedAt": { "type": "string", "format": "date-time" }
+        },
+        "required": ["id", "reporterAddress", "reportedAddress", "reason", "state", "createdAt", "updatedAt"]
       }
     }
   }

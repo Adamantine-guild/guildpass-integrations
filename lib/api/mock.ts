@@ -44,6 +44,13 @@ import {
   WalletVerification,
   WebhookEventLog,
   WebhookEventUnsubscribe,
+  Connection,
+  MemberPrivacySettings,
+  ModerationReport,
+  ModerationState,
+  AdminEventFilterParams,
+  Paginated,
+  WebhookEvent,
 } from './types'
 import { ApiError } from './errors'
 import {
@@ -341,6 +348,40 @@ const MOCK_MEMBER_STORES: Record<string, Record<string, { membership: Membership
     }
   }
 }
+
+export let mockConnections: Connection[] = [
+  {
+    id: 'conn-1',
+    fromAddress: '0x1234567890123456789012345678901234567890',
+    toAddress: '0x3333333333333333333333333333333333333333',
+    status: 'accepted',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  },
+  {
+    id: 'conn-2',
+    fromAddress: '0x1234567890123456789012345678901234567890',
+    toAddress: '0x4444444444444444444444444444444444444444',
+    status: 'pending',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  }
+];
+
+export let mockPrivacySettings: Record<string, MemberPrivacySettings> = {};
+
+export let mockReports: ModerationReport[] = [
+  {
+    id: 'rep-1',
+    reporterAddress: '0x3333333333333333333333333333333333333333',
+    reportedAddress: '0x1234567890123456789012345678901234567890',
+    reason: 'Spamming connection requests',
+    details: 'Received 15 pending requests in 10 minutes.',
+    state: 'report_submitted',
+    createdAt: new Date(Date.now() - 1000 * 60 * 60 * 2).toISOString(),
+    updatedAt: new Date(Date.now() - 1000 * 60 * 60 * 2).toISOString()
+  }
+];
 
 export interface CommunityState {
   community: Community
@@ -1087,7 +1128,7 @@ export class MockAccessApi implements AccessApi {
   }
 
   async listAdminEvents(params?: AdminEventFilterParams): Promise<Paginated<WebhookEvent>> {
-    let events = mockWebhookEvents
+    let events = getCommunityState(this.communityId).webhookEvents as any[]
     
     if (params?.types && params.types.length > 0) {
       events = events.filter((e) => params.types!.includes(e.type))
@@ -1213,6 +1254,158 @@ export class MockAccessApi implements AccessApi {
       verified: true,
       method: 'mock',
       checkedAt: new Date().toISOString(),
+    }
+  }
+
+  // ── Social Graph (Connections / Blocks) ──
+  async getConnections(address: string, _signal?: AbortSignal): Promise<Connection[]> {
+    await initPromise
+    const addr = address.toLowerCase()
+    const viewer = this.address?.toLowerCase()
+
+    // 1. Block check: active block in either direction -> empty/hidden profile
+    const isBlocked = mockConnections.some(c =>
+      c.status === 'blocked' &&
+      ((c.fromAddress.toLowerCase() === viewer && c.toAddress.toLowerCase() === addr) ||
+       (c.toAddress.toLowerCase() === viewer && c.fromAddress.toLowerCase() === addr))
+    )
+    if (isBlocked) {
+      return []
+    }
+
+    // 2. Privacy rules check
+    const targetPrivacy = mockPrivacySettings[addr]?.connectionVisibility || 'public'
+    const isOwner = viewer === addr
+    if (!isOwner) {
+      if (targetPrivacy === 'private') {
+        return []
+      }
+      if (targetPrivacy === 'mutual-only') {
+        const hasMutual = mockConnections.some(c =>
+          c.status === 'accepted' &&
+          ((c.fromAddress.toLowerCase() === viewer && c.toAddress.toLowerCase() === addr) ||
+           (c.toAddress.toLowerCase() === viewer && c.fromAddress.toLowerCase() === addr))
+        )
+        if (!hasMutual) return []
+      }
+    }
+
+    // Return non-blocked connections for this address
+    return mockConnections.filter(c =>
+      c.status !== 'blocked' &&
+      (c.fromAddress.toLowerCase() === addr || c.toAddress.toLowerCase() === addr)
+    )
+  }
+
+  async getPrivacySettings(address: string, _signal?: AbortSignal): Promise<MemberPrivacySettings> {
+    await initPromise
+    const addr = address.toLowerCase()
+    return mockPrivacySettings[addr] || { address, connectionVisibility: 'public' }
+  }
+
+  async updatePrivacySettings(address: string, settings: MemberPrivacySettings): Promise<void> {
+    await initPromise
+    const addr = address.toLowerCase()
+    mockPrivacySettings[addr] = settings
+  }
+
+  async blockMember(targetAddress: string): Promise<void> {
+    await initPromise
+    if (!this.address) throw new Error('Not logged in')
+    const viewer = this.address.toLowerCase()
+    const target = targetAddress.toLowerCase()
+
+    // Remove existing connections between them
+    mockConnections = mockConnections.filter(c =>
+      !((c.fromAddress.toLowerCase() === viewer && c.toAddress.toLowerCase() === target) ||
+        (c.toAddress.toLowerCase() === viewer && c.fromAddress.toLowerCase() === target))
+    )
+
+    // Add block record
+    mockConnections.push({
+      id: `block-${Date.now()}`,
+      fromAddress: this.address,
+      toAddress: targetAddress,
+      status: 'blocked',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    })
+  }
+
+  async unblockMember(targetAddress: string): Promise<void> {
+    await initPromise
+    if (!this.address) throw new Error('Not logged in')
+    const viewer = this.address.toLowerCase()
+    const target = targetAddress.toLowerCase()
+
+    mockConnections = mockConnections.filter(c =>
+      !(c.status === 'blocked' && c.fromAddress.toLowerCase() === viewer && c.toAddress.toLowerCase() === target)
+    )
+  }
+
+  async createConnectionRequest(targetAddress: string): Promise<void> {
+    await initPromise
+    if (!this.address) throw new Error('Not logged in')
+    mockConnections.push({
+      id: `conn-${Date.now()}`,
+      fromAddress: this.address,
+      toAddress: targetAddress,
+      status: 'pending',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    })
+  }
+
+  async acceptConnectionRequest(targetAddress: string): Promise<void> {
+    await initPromise
+    if (!this.address) throw new Error('Not logged in')
+    const viewer = this.address.toLowerCase()
+    const target = targetAddress.toLowerCase()
+
+    const conn = mockConnections.find(c =>
+      c.status === 'pending' &&
+      c.fromAddress.toLowerCase() === target &&
+      c.toAddress.toLowerCase() === viewer
+    )
+    if (conn) {
+      conn.status = 'accepted'
+      conn.updatedAt = new Date().toISOString()
+    }
+  }
+
+  async rejectConnectionRequest(targetAddress: string): Promise<void> {
+    await initPromise
+    if (!this.address) throw new Error('Not logged in')
+    const viewer = this.address.toLowerCase()
+    const target = targetAddress.toLowerCase()
+
+    mockConnections = mockConnections.filter(c =>
+      !(c.status === 'pending' &&
+        c.fromAddress.toLowerCase() === target &&
+        c.toAddress.toLowerCase() === viewer)
+    )
+  }
+
+  // ── Moderation Queue ──
+  async listReports(_signal?: AbortSignal): Promise<ModerationReport[]> {
+    await initPromise
+    return mockReports
+  }
+
+  async getReport(id: string, _signal?: AbortSignal): Promise<ModerationReport | null> {
+    await initPromise
+    return mockReports.find(r => r.id === id) || null
+  }
+
+  async updateReportState(id: string, state: ModerationState, updates?: Partial<ModerationReport>): Promise<void> {
+    await initPromise
+    const report = mockReports.find(r => r.id === id)
+    if (report) {
+      report.state = state
+      if (updates) {
+        Object.assign(report, updates)
+      }
+      report.updatedAt = new Date().toISOString()
     }
   }
 }
