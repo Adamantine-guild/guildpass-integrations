@@ -916,6 +916,19 @@ export class LiveAccessApi implements AccessApi {
     return raw.map(mapWebhookEvent)
   }
 
+  async listAdminEvents(params?: AdminEventFilterParams): Promise<Paginated<WebhookEvent>> {
+    const searchParams = new URLSearchParams()
+    if (params?.types) params.types.forEach(t => searchParams.append('types', t))
+    if (params?.startDate) searchParams.set('startDate', params.startDate)
+    if (params?.endDate) searchParams.set('endDate', params.endDate)
+    if (params?.page) searchParams.set('page', params.page.toString())
+    if (params?.limit) searchParams.set('limit', params.limit.toString())
+    
+    return await getJson<Paginated<WebhookEvent>>(`/v1/admin/events/paginated?${searchParams.toString()}`, {
+      headers: this.authHeaders(),
+    })
+  }
+
   subscribeWebhookEvents(
     onEvent: (event: WebhookEventLog) => void,
     onError?: (error: unknown) => void,
@@ -1159,5 +1172,29 @@ export class LiveAccessApi implements AccessApi {
       body: JSON.stringify({ state, ...updates }),
       headers: this.authHeaders(),
     })
+  }
+  
+  public analytics: import('./types').AnalyticsDataSource = {
+    getMembershipTrend: async (signal?: AbortSignal) => {
+      const summary = await this.getAnalyticsSummary(signal);
+      return summary.memberGrowth;
+    },
+    getRoleDistribution: async (signal?: AbortSignal) => {
+      // NOTE: getAnalyticsSummary currently doesn't provide roleDistribution,
+      // but to satisfy the new interface without breaking the backend contract immediately,
+      // we'll fetch members and compute it like we used to.
+      // In a real live app, the backend would be updated to provide this in getAnalyticsSummary.
+      const members = await this.listMembers({}, signal);
+      const memberArray = Array.isArray(members) ? members : members.members;
+      const ALL_ROLES: import('./types').Role[] = ['member', 'moderator', 'admin'];
+      return ALL_ROLES.map(role => ({
+        role,
+        count: memberArray.filter(m => m.roles.includes(role)).length
+      }));
+    },
+    getAccessAttempts: async (signal?: AbortSignal) => {
+      const summary = await this.getAnalyticsSummary(signal);
+      return summary.resourceAccess;
+    }
   }
 }

@@ -8,9 +8,9 @@
  * - Cancel and manually resolve
  */
 
-import { AccessPolicy, MembershipTier, Role } from "@/lib/api/types";
+import { AccessPolicy } from "@/lib/api/types";
 import { Button } from "./button";
-import { Badge } from "./badge";
+import { JsonDiff } from "./json-diff";
 
 interface PolicyConflictDialogProps {
   /** The policy the user attempted to save */
@@ -25,40 +25,7 @@ interface PolicyConflictDialogProps {
   onCancel: () => void;
 }
 
-function PolicySummary({ 
-  policy, 
-  label 
-}: { 
-  policy: AccessPolicy; 
-  label: string;
-}) {
-  return (
-    <div className="space-y-2 rounded-md border p-3 bg-muted/20">
-      <div className="text-sm font-medium text-muted-foreground">{label}</div>
-      <div className="space-y-1">
-        <div className="flex items-center gap-2 text-sm">
-          <span className="text-muted-foreground">Tier:</span>
-          <Badge variant="outline">{policy.minTier ?? "free"}</Badge>
-        </div>
-        {policy.roles && policy.roles.length > 0 && (
-          <div className="flex items-center gap-2 text-sm">
-            <span className="text-muted-foreground">Roles:</span>
-            {policy.roles.map((r) => (
-              <Badge key={r} variant="default">
-                {r}
-              </Badge>
-            ))}
-          </div>
-        )}
-        {policy.updatedAt && (
-          <div className="text-xs text-muted-foreground">
-            Updated: {new Date(policy.updatedAt).toLocaleString()}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
+
 
 export function PolicyConflictDialog({
   attemptedPolicy,
@@ -87,16 +54,41 @@ export function PolicyConflictDialog({
           </div>
 
           <div className="space-y-3">
-            <PolicySummary 
-              policy={attemptedPolicy} 
-              label="Your Changes" 
-            />
+            {currentPolicy && (
+              <div className="text-sm text-muted-foreground space-y-1">
+                <p>
+                  <strong>Server version updated at:</strong>{" "}
+                  {currentPolicy.updatedAt ? new Date(currentPolicy.updatedAt).toLocaleString() : "Unknown"}
+                </p>
+                <p>
+                  <strong>Your draft created at:</strong>{" "}
+                  {attemptedPolicy.updatedAt ? new Date(attemptedPolicy.updatedAt).toLocaleString() : "Unknown"}
+                </p>
+              </div>
+            )}
             
             {currentPolicy && (
-              <PolicySummary 
-                policy={currentPolicy} 
-                label="Current Version (on server)" 
-              />
+              <div className="rounded-md border p-3 bg-card shadow-sm">
+                <div className="mb-2 text-sm font-medium text-foreground">
+                  Differences (Red = Server Version, Green = Your Attempted Changes)
+                </div>
+                <JsonDiff 
+                  oldObj={{
+                    ...currentPolicy,
+                    updatedAt: undefined
+                  }} 
+                  newObj={{
+                    ...attemptedPolicy,
+                    updatedAt: undefined
+                  }} 
+                />
+              </div>
+            )}
+            
+            {!currentPolicy && (
+              <div className="rounded-md border p-3 bg-card shadow-sm text-sm text-muted-foreground">
+                Unable to load current server policy for comparison.
+              </div>
             )}
           </div>
 

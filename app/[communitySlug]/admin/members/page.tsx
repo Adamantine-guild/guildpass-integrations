@@ -772,7 +772,7 @@ export default function MembersPage() {
                                key={r}
                                type="button"
                                className="inline-flex items-center rounded-md border border-transparent bg-secondary px-2 py-0.5 text-xs font-semibold text-secondary-foreground transition-colors hover:bg-destructive hover:text-destructive-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-                               onClick={() => requestRoleRemoval(m, r)}
+                               onClick={() => requestRoleRemoval(m, r as import('@/lib/api/types').Role)}
                                aria-label={`Remove ${r} role from ${m.address}`}
                                title={`Remove ${r} role`}
                              >
