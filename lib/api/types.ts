@@ -8,6 +8,12 @@
 import { z } from 'zod';
 import { ApiError } from './errors'
 
+/**
+ * The API contract version this frontend build expects the backend to
+ * implement. Generated from test/fixtures/openapi.json info.version.
+ */
+export const EXPECTED_API_VERSION = "1.0.0"
+
 export type ResourceLookupResult =
   | { status: 'found'; data: Resource; source: 'direct' | 'fallback' }
   | { status: 'not_found' }
@@ -311,6 +317,18 @@ export type PenaltyType = 'warning' | 'suspension' | 'permanent_ban'
 
 export const PenaltyTypeSchema = z.enum(['warning', 'suspension', 'permanent_ban'])
 
+export interface MetaResponse {
+  version: string
+  commit?: string
+  uptime?: number
+}
+
+export const MetaResponseSchema = z.object({
+  version: z.string(),
+  commit: z.string().optional(),
+  uptime: z.number().optional(),
+})
+
 export interface ModerationReport {
   id: string
   reporterAddress: string
@@ -590,6 +608,12 @@ export interface MemberAccessApi {
    * not settable through this method.
    */
   updateProfile(profile: MemberProfile): Promise<void>
+
+  /**
+   * Fetch backend metadata including the API contract version.
+   * Used by the startup version-compatibility check.
+   */
+  getMeta(signal?: AbortSignal): Promise<MetaResponse>
 
   // ── Social Graph (Connections / Blocks) ──
   getConnections(address: string, signal?: AbortSignal): Promise<Connection[]>

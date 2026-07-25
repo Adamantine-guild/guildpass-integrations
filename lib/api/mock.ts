@@ -35,6 +35,7 @@ import {
   MemberRow,
   Membership,
   MembershipTier,
+  MetaResponse,
   PaginatedMembers,
   Resource,
   ResourceLookupResult,
@@ -51,6 +52,7 @@ import {
   AdminEventFilterParams,
   Paginated,
   WebhookEvent,
+  EXPECTED_API_VERSION,
 } from './types'
 import { ApiError } from './errors'
 import {
@@ -832,6 +834,22 @@ function throwMockRoleMutationFailure(): never {
   })
 }
 
+/**
+ * Override the mock backend's advertised API contract version.
+ * Set to `null` to restore the default (matches EXPECTED_API_VERSION).
+ * When set, `getMeta()` returns this version, which can be used to
+ * simulate an incompatible backend.
+ */
+export let MOCK_META_VERSION_OVERRIDE: string | null = null
+
+/**
+ * Set the mock backend's advertised API contract version. Pass `null` to
+ * restore the default behaviour (matches the frontend's expected version).
+ */
+export function setMockMetaVersion(version: string | null): void {
+  MOCK_META_VERSION_OVERRIDE = version
+}
+
 export class MockAccessApi implements AccessApi {
   /** In-memory nonce store keyed by nonce value → creation timestamp. */
   readonly #nonceStore = new Map<string, number>()
@@ -845,6 +863,15 @@ export class MockAccessApi implements AccessApi {
   ) {
     this.address = address
     this.communityId = communityId ?? 'guildpass-demo'
+  }
+
+  async getMeta(_signal?: AbortSignal): Promise<MetaResponse> {
+    await initPromise
+    return {
+      version: MOCK_META_VERSION_OVERRIDE ?? EXPECTED_API_VERSION,
+      commit: 'mock-commit-sha',
+      uptime: (typeof process !== 'undefined' && typeof process.uptime === 'function') ? Math.floor(process.uptime()) : 0,
+    }
   }
 
   // ── Read-only ──────────────────────────────────────────────────────────────

@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 const SCHEMA_PATH = path.join(__dirname, '../test/fixtures/openapi.json');
 const TARGET_PATH = path.join(__dirname, '../lib/api/types.ts');
@@ -257,6 +258,12 @@ export interface MemberAccessApi {
    */
   updateProfile(profile: MemberProfile): Promise<void>
 
+  /**
+   * Fetch backend metadata including the API contract version.
+   * Used by the startup version-compatibility check.
+   */
+  getMeta(signal?: AbortSignal): Promise<MetaResponse>
+
   // ── Social Graph (Connections / Blocks) ──
   getConnections(address: string, signal?: AbortSignal): Promise<Connection[]>
   getPrivacySettings(address: string, signal?: AbortSignal): Promise<MemberPrivacySettings>
@@ -439,12 +446,29 @@ const STATIC_SCHEMA_NAMES = new Set([
   'WebhookPayloadSummary',
 ]);
 
+/**
+ * Compute a deterministic SHA-256 hash over the structural parts of the
+ * schema (paths and components.schemas) that represent the actual API
+ * contract shape. Metadata fields (info, x-*) are excluded so that only
+ * meaningful schema changes affect the hash.
+ */
+function computeSchemaHash(schema) {
+  const structural = {
+    paths: schema.paths,
+    schemas: schema.components?.schemas,
+  }
+  const normalized = JSON.stringify(structural, Object.keys(structural).sort())
+  return crypto.createHash('sha256').update(normalized).digest('hex').slice(0, 16)
+}
+
 function generateTypes(schema) {
   if (!schema) {
     const rawSchema = fs.readFileSync(SCHEMA_PATH, 'utf8');
     schema = JSON.parse(rawSchema);
   }
   const schemasObj = schema.components.schemas;
+
+  const contractVersion = (schema.info && schema.info.version) ? schema.info.version : '0.0.0-unknown'
 
   let output = `/**
  * This file was auto-generated from the OpenAPI schema.
@@ -455,6 +479,12 @@ function generateTypes(schema) {
 
 import { z } from 'zod';
 import { ApiError } from './errors'
+
+/**
+ * The API contract version this frontend build expects the backend to
+ * implement. Generated from test/fixtures/openapi.json info.version.
+ */
+export const EXPECTED_API_VERSION = "${contractVersion}"
 
 export type ResourceLookupResult =
   | { status: 'found'; data: Resource; source: 'direct' | 'fallback' }
@@ -527,7 +557,44 @@ function main() {
     process.exit(1);
   }
 
-  const generated = generateTypes();
+  const rawSchema = fs.readFileSync(SCHEMA_PATH, 'utf8');
+  const schema = JSON.parse(rawSchema);
+
+  const currentHash = computeSchemaHash(schema);
+  const storedHash = schema['x-schema-hash'];
+  const version = schema.info?.version;
+
+  if (!version) {
+    console.error('FAIL: openapi.json is missing info.version. Please add a semver version (e.g. "1.0.0").');
+    process.exit(1);
+  }
+
+  // Schema hash enforcement: if the hash changed but the stored hash
+  // hasn't been updated in the file yet, the developer must also bump
+  // the version. This only applies during --check, not --write (since
+  // --write updates both the hash and the types file).
+  if (isCheck && storedHash) {
+    if (currentHash !== storedHash) {
+      console.error(
+        'FAIL: Schema hash changed but version was not bumped!\n' +
+        `  Stored hash:  ${storedHash}\n` +
+        `  Current hash: ${currentHash}\n` +
+        `  Current version: ${version}\n` +
+        '  Action: Bump the version in test/fixtures/openapi.json (info.version), then run:\n' +
+        '    npm run sync-types'
+      );
+      process.exit(1);
+    }
+  }
+
+  // When writing, always update the stored hash in openapi.json
+  if (isWrite) {
+    schema['x-schema-hash'] = currentHash;
+    fs.writeFileSync(SCHEMA_PATH, JSON.stringify(schema, null, 2) + '\n', 'utf8');
+    console.log(`Schema hash updated: ${currentHash}`);
+  }
+
+  const generated = generateTypes(schema);
 
   if (isCheck) {
     if (!fs.existsSync(TARGET_PATH)) {
