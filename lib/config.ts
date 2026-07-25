@@ -16,6 +16,7 @@ export type ApiMode = 'mock' | 'live'
 export interface SiweConfig {
   domain: string
   statement: string
+  warningThresholdSeconds: number
 }
 
 export type FeatureFlagKey =
@@ -149,11 +150,20 @@ const apiUrl: string = (() => {
   return env('NEXT_PUBLIC_CORE_API_URL') || 'http://localhost:4000'
 })()
 
+const warningMinutesEnv = env('NEXT_PUBLIC_SIWE_WARNING_MINUTES')
+const warningSecondsEnv = env('NEXT_PUBLIC_SIWE_WARNING_SECONDS')
+const warningThresholdSeconds = warningSecondsEnv
+  ? Number(warningSecondsEnv)
+  : warningMinutesEnv
+    ? Number(warningMinutesEnv) * 60
+    : 120
+
 const siwe: SiweConfig = {
   domain: env('NEXT_PUBLIC_SIWE_DOMAIN') ?? 'localhost:3000',
   statement: validateSiweStatement(
     env('NEXT_PUBLIC_SIWE_STATEMENT') ?? 'Sign in to GuildPass Admin',
   ),
+  warningThresholdSeconds: Number.isNaN(warningThresholdSeconds) ? 120 : warningThresholdSeconds,
 }
 
 const isMock = apiMode === 'mock'

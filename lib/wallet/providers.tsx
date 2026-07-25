@@ -84,6 +84,7 @@ import {
   initialSiweSessionState,
   siweSessionReducer,
 } from "@/lib/wallet/siwe-session";
+import { SiweAuthContext } from "@/lib/wallet/siwe-context";
 import { useContext } from "react";
 
 // ── Wagmi config ──────────────────────────────────────────────────────────────
@@ -126,6 +127,10 @@ export interface SiweAuthContextValue {
    * 0 when no active session.
    */
   timeLeft: number;
+  /** True when active session will expire within warningThresholdSeconds. */
+  isExpiring: boolean;
+  /** Warning threshold in seconds before access token expiry (default 120s / 2m). */
+  warningThresholdSeconds: number;
   /** True while a signature request is in-flight. */
   isSigningIn: boolean;
   /** Human-readable error from the most recent signIn attempt, if any. */
@@ -142,10 +147,6 @@ export interface SiweAuthContextValue {
   /** Mark the current session as expired (e.g. after a 401 from the backend). */
   markExpired: () => void;
 }
-
-const SiweAuthContext = createContext<SiweAuthContextValue | undefined>(
-  undefined,
-);
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -538,15 +539,19 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
   // ── Derived values ──────────────────────────────────────────────────────────
 
   const sessionStatus = deriveSessionStatus(state, isConnected);
+  const warningThresholdSeconds = config.siwe.warningThresholdSeconds ?? 120;
+  const isExpiring =
+    sessionStatus === "authenticated" &&
+    timeLeft > 0 &&
+    timeLeft <= warningThresholdSeconds;
 
-  const legacyStatus: SiweAuthContextValue["status"] =
-    sessionStatus === "authenticated" && timeLeft > 0 && timeLeft <= 60
-      ? "expiring"
-      : sessionStatus === "authenticated"
-        ? "authenticated"
-        : isConnected
-          ? "unauthenticated"
-          : "disconnected";
+  const legacyStatus: SiweAuthContextValue["status"] = isExpiring
+    ? "expiring"
+    : sessionStatus === "authenticated"
+      ? "authenticated"
+      : isConnected
+        ? "unauthenticated"
+        : "disconnected";
 
   const value = useMemo<SiweAuthContextValue>(
     () => ({
@@ -555,6 +560,8 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
       sessionStatus,
       status: legacyStatus,
       timeLeft,
+      isExpiring,
+      warningThresholdSeconds,
       isSigningIn: state.isSigningIn,
       error: state.error,
       signIn,
@@ -569,6 +576,8 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
       sessionStatus,
       legacyStatus,
       timeLeft,
+      isExpiring,
+      warningThresholdSeconds,
       signIn,
       logout,
       markExpired,
@@ -576,7 +585,7 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
   );
 
   return (
-    <SiweAuthContext.Provider value={value}>
+    <SiweAuthContext.Provider value={value as any}>
       {children}
     </SiweAuthContext.Provider>
   );
@@ -617,7 +626,7 @@ export function useSiweAuth(): SiweAuthContextValue {
   const context = useContext(SiweAuthContext);
   if (!context)
     throw new Error("useSiweAuth must be used within SiweAuthProvider");
-  return context;
+  return context as unknown as SiweAuthContextValue;
 }
 
 // ── Root providers ────────────────────────────────────────────────────────────

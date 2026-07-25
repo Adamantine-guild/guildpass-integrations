@@ -11,6 +11,8 @@ export interface SiweAuthContextType {
   session: SiweAuthSession | null;
   status: 'disconnected' | 'unauthenticated' | 'authenticated' | 'expiring';
   timeLeft: number;
+  isExpiring?: boolean;
+  warningThresholdSeconds?: number;
   login: () => Promise<void>;
   logout: () => void;
 }

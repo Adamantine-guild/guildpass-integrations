@@ -181,3 +181,45 @@ export function msUntilRenewal(
 ): number {
   return new Date(session.expiresAt).getTime() - Date.now() - renewalLeadMs
 }
+
+// ── Proactive Session Expiry Warning Helpers ───────────────────────────────
+
+/** Default proactive warning threshold in seconds before access token expiry (2 minutes / 120 seconds). */
+export const DEFAULT_WARNING_THRESHOLD_SECONDS = 120
+
+/**
+ * Returns the number of seconds remaining until the access token expires.
+ * Returns 0 if session is null or already expired.
+ */
+export function getRemainingSessionSeconds(
+  session: Pick<SiweAuthSession, 'expiresAt'> | null | undefined,
+): number {
+  if (!session?.expiresAt) return 0
+  const diff = new Date(session.expiresAt).getTime() - Date.now()
+  return Math.max(0, Math.floor(diff / 1000))
+}
+
+/**
+ * Returns `true` if the access token will expire within `thresholdSeconds`
+ * (and has not already expired).
+ */
+export function isSessionExpiringSoon(
+  session: Pick<SiweAuthSession, 'expiresAt'> | null | undefined,
+  thresholdSeconds = DEFAULT_WARNING_THRESHOLD_SECONDS,
+): boolean {
+  if (!session?.expiresAt) return false
+  const remaining = getRemainingSessionSeconds(session)
+  return remaining > 0 && remaining <= thresholdSeconds
+}
+
+/**
+ * Format remaining seconds as human readable string (e.g. "1m 45s" or "45s").
+ */
+export function formatTimeRemaining(seconds: number): string {
+  if (seconds <= 0) return '0s'
+  const mins = Math.floor(seconds / 60)
+  const secs = seconds % 60
+  if (mins === 0) return `${secs}s`
+  return `${mins}m ${secs}s`
+}
+
