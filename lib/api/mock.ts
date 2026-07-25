@@ -1435,5 +1435,26 @@ export class MockAccessApi implements AccessApi {
       report.updatedAt = new Date().toISOString()
     }
   }
+
+  public analytics: import('./types').AnalyticsDataSource = {
+    getMembershipTrend: async (_signal?: AbortSignal) => {
+      await initPromise;
+      return MOCK_ANALYTICS_SUMMARY.memberGrowth;
+    },
+    getRoleDistribution: async (_signal?: AbortSignal) => {
+      await initPromise;
+      const state = getCommunityState(this.communityId);
+      const members = Object.values(state.memberStore);
+      const ALL_ROLES: import('./types').Role[] = ['member', 'moderator', 'admin'];
+      return ALL_ROLES.map(role => ({
+        role,
+        count: members.filter(m => m.roles.includes(role)).length
+      }));
+    },
+    getAccessAttempts: async (_signal?: AbortSignal) => {
+      await initPromise;
+      return MOCK_ANALYTICS_SUMMARY.resourceAccess;
+    }
+  }
 }
 

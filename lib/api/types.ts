@@ -226,6 +226,17 @@ export const ResourceAccessCountSchema = z.object({
   deniedCount: z.number(),
 })
 
+export interface RoleDistributionEntry {
+  role: Role
+  count: number
+}
+
+export interface AnalyticsDataSource {
+  getMembershipTrend(signal?: AbortSignal): Promise<MemberGrowthDataPoint[]>
+  getRoleDistribution(signal?: AbortSignal): Promise<RoleDistributionEntry[]>
+  getAccessAttempts(signal?: AbortSignal): Promise<ResourceAccessCount[]>
+}
+
 export interface AnalyticsSummary {
   totalMembers: number
   activeMembers: number
@@ -632,6 +643,7 @@ export interface MemberAccessApi {
  */
 export interface AdminAccessApi {
   // ── Admin queries & mutations (require a valid SIWE token context) ────────
+  listAdminEvents(params?: AdminEventFilterParams): Promise<Paginated<WebhookEvent>>
   listWebhookEvents(signal?: AbortSignal): Promise<WebhookEventLog[]>
   /**
    * Subscribe to the admin webhook event stream.
@@ -659,6 +671,9 @@ export interface AdminAccessApi {
   listReports(signal?: AbortSignal): Promise<ModerationReport[]>
   getReport(id: string, signal?: AbortSignal): Promise<ModerationReport | null>
   updateReportState(id: string, state: ModerationState, updates?: Partial<ModerationReport>): Promise<void>
+  
+  // Analytics
+  analytics: AnalyticsDataSource
 }
 
 /**
