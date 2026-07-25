@@ -10,6 +10,8 @@ import {
   MemberRow,
   Membership,
   MembershipTier,
+  MetaResponse,
+  MetaResponseSchema,
   PaginatedMembers,
   Resource,
   ResourceLookupResult,
@@ -41,6 +43,7 @@ import {
   ModerationReportSchema,
   ModerationState,
 } from './types'
+import { checkVersionCompatibility, type VersionCompatibility } from './version'
 import {
   mapCommunity,
   mapMembership,
@@ -602,11 +605,70 @@ function parseJsonResponse<T>(text: string, path?: string): T {
 // ── LiveAccessApi ─────────────────────────────────────────────────────────────
 
 export class LiveAccessApi implements AccessApi {
+  /** Resolved after the first successful version-compatibility check. */
+  #versionCheckResult: VersionCompatibility | null = null
+  #versionCheckPromise: Promise<VersionCompatibility> | null = null
+
   constructor(
     private readonly address?: string,
     private readonly token?: string,
     private readonly communityId?: string,
   ) { }
+
+  /**
+   * Returns the result of the startup version-compatibility check, or
+   * `null` if the check has not yet completed.
+   */
+  get versionCompatibility(): VersionCompatibility | null {
+    return this.#versionCheckResult
+  }
+
+  /**
+   * Perform a one-time version-compatibility check against the backend's
+   * `/v1/meta` endpoint. Resolves with the compatibility result. Subsequent
+   * calls return the cached result.
+   */
+  async checkVersion(): Promise<VersionCompatibility> {
+    if (this.#versionCheckResult) {
+      return this.#versionCheckResult
+    }
+    if (this.#versionCheckPromise) {
+      return this.#versionCheckPromise
+    }
+
+    this.#versionCheckPromise = this.#performVersionCheck()
+    try {
+      this.#versionCheckResult = await this.#versionCheckPromise
+    } finally {
+      this.#versionCheckPromise = null
+    }
+    return this.#versionCheckResult!
+  }
+
+  async #performVersionCheck(): Promise<VersionCompatibility> {
+    try {
+      const meta = await this.getMeta()
+      return checkVersionCompatibility(meta.version)
+    } catch (err) {
+      return {
+        compatible: false,
+        expectedVersion: '',
+        backendVersion: '',
+        reason:
+          err instanceof Error
+            ? `Could not reach backend /v1/meta endpoint: ${err.message}`
+            : 'Could not reach backend /v1/meta endpoint.',
+      }
+    }
+  }
+
+  async getMeta(signal?: AbortSignal): Promise<MetaResponse> {
+    return getJson<MetaResponse>('/v1/meta', {
+      schema: MetaResponseSchema,
+      headers: this.authHeaders(),
+      signal,
+    })
+  }
 
   private authHeaders(extra?: HeadersInit): HeadersInit {
     const headers: Record<string, string> = {
