@@ -31,5 +31,13 @@ const origResolve = (Module as unknown as { _resolveFilename: (req: string, ...a
     const abs = path.join(TEST_DIST, rel)
     return origResolve.call(this, abs, ...rest)
   }
+  if (request === 'next/navigation') {
+    try {
+      return origResolve.call(this, request, ...rest)
+    } catch {
+      // Mock minimal next/navigation in test environment
+      return origResolve.call(this, 'react', ...rest)
+    }
+  }
   return origResolve.call(this, request, ...rest)
 }

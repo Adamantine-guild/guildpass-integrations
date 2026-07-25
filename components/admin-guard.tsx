@@ -10,7 +10,15 @@ import { Button } from '@/components/ui/button';
 import { useParams } from 'next/navigation';
 
 export function AdminGuard({ children }: { children: React.ReactNode }) {
-  const { sessionStatus, authSession, signIn, isSigningIn } = useSiweAuth();
+  const {
+    sessionStatus,
+    authSession,
+    signIn,
+    isSigningIn,
+    status: siweStatus,
+    timeLeft: contextTimeLeft,
+    warningThresholdSeconds = 120,
+  } = useSiweAuth();
   const { address } = useAccount();
   const params = useParams();
   const communitySlug = (params?.communitySlug as string) || 'guildpass-demo';
@@ -23,10 +31,12 @@ export function AdminGuard({ children }: { children: React.ReactNode }) {
     retry: 1,
   });
   const [timeLeft, setTimeLeft] = useState<number | null>(null);
+  const [isDismissed, setIsDismissed] = useState<boolean>(false);
 
   useEffect(() => {
     if (!authSession) {
       setTimeLeft(null);
+      setIsDismissed(false);
       return;
     }
 
@@ -38,7 +48,14 @@ export function AdminGuard({ children }: { children: React.ReactNode }) {
     tick();
     const interval = setInterval(tick, 1000);
     return () => clearInterval(interval);
-  }, [authSession]);
+  }, [authSession?.expiresAt, authSession]);
+
+  // Reset dismissal state when session is renewed/extended
+  useEffect(() => {
+    if (timeLeft !== null && timeLeft > warningThresholdSeconds) {
+      setIsDismissed(false);
+    }
+  }, [timeLeft, warningThresholdSeconds]);
 
   if (sessionStatus === 'disconnected') {
     return (
@@ -80,6 +97,7 @@ export function AdminGuard({ children }: { children: React.ReactNode }) {
           onClick={signIn}
           disabled={isSigningIn}
           aria-busy={isSigningIn}
+          aria-label="Sign in with Ethereum"
         >
           {isSigningIn ? 'Signing…' : 'Sign In With Ethereum'}
         </Button>
@@ -96,24 +114,47 @@ export function AdminGuard({ children }: { children: React.ReactNode }) {
     );
   }
 
-  const isExpiring = timeLeft !== null && timeLeft > 0 && timeLeft <= 60;
+  const currentSeconds = timeLeft ?? contextTimeLeft;
+  const isExpiring =
+    !isDismissed &&
+    currentSeconds !== null &&
+    currentSeconds > 0 &&
+    (siweStatus === 'expiring' || currentSeconds <= warningThresholdSeconds);
 
   return (
     <div className="space-y-4">
       {isExpiring && (
-        <div className="flex items-center justify-between p-4 bg-amber-50 border border-amber-200 dark:bg-amber-950/30 dark:border-amber-900/50 rounded-lg text-amber-900 dark:text-amber-200">
+        <div
+          role="status"
+          aria-live="polite"
+          aria-label="Session expiry warning banner"
+          className="flex items-center justify-between p-4 bg-amber-50 border border-amber-200 dark:bg-amber-950/30 dark:border-amber-900/50 rounded-lg text-amber-900 dark:text-amber-200"
+        >
           <div className="flex items-center gap-2 text-sm">
             <span aria-hidden="true">⚠️</span>
-            <span>Your security session will expire in <strong>{timeLeft}s</strong>. Action requests made after expiration will fail.</span>
+            <span>
+              Your security session will expire in <strong>{currentSeconds}s</strong>. Action requests made after expiration will fail.
+            </span>
           </div>
-          <Button
-            onClick={signIn}
-            disabled={isSigningIn}
-            aria-busy={isSigningIn}
-            size="sm"
-          >
-            {isSigningIn ? 'Signing…' : 'Extend Session'}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              onClick={signIn}
+              disabled={isSigningIn}
+              aria-busy={isSigningIn}
+              aria-label="Extend your signed-in session"
+              size="sm"
+            >
+              {isSigningIn ? 'Signing…' : 'Extend Session'}
+            </Button>
+            <button
+              type="button"
+              onClick={() => setIsDismissed(true)}
+              aria-label="Dismiss session warning"
+              className="text-xs text-amber-700 dark:text-amber-400 hover:text-amber-900 dark:hover:text-amber-100 underline ml-2"
+            >
+              Dismiss
+            </button>
+          </div>
         </div>
       )}
       {children}

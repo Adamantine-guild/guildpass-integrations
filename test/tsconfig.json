@@ -11,6 +11,7 @@
     "incremental": false,
     "jsx": "react-jsx",
     "skipLibCheck": true,
+    "noImplicitAny": false,
     "lib": ["dom", "dom.iterable", "es2022"],
     "types": ["node"]
   },

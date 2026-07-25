@@ -21,7 +21,7 @@ export function roleRemovalConfirmationMessage(
 ): string | null {
   if (!roleRemovalNeedsConfirmation(role, currentRoles)) return null
 
-  const reasons = []
+  const reasons: string[] = []
   if (role === 'admin') reasons.push('the admin role')
   if (currentRoles.length <= 1) reasons.push("the member's last remaining role")
 
