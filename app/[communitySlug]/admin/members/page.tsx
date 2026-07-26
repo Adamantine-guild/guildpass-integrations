@@ -44,6 +44,16 @@ type AssignRoleRollback = {
   previousMembers?: MemberRow[];
 };
 
+type AuditLogEntry = {
+  id: string;
+  address: string;
+  role: Role;
+  action: "assign" | "remove";
+  status: "pending" | "success" | "error";
+  timestamp: Date;
+  error?: string;
+};
+
 function SessionExpiredBanner() {
   const { signIn, isSigningIn } = useSiweAuth();
   return (
@@ -225,6 +235,7 @@ export default function MembersPage() {
     useState<AssignRoleInput | null>(null);
   const [rollbackMessage, setRollbackMessage] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
+  const [auditLog, setAuditLog] = useState<AuditLogEntry[]>([]);
   // ── Bulk selection state ──────────────────────────────────────────
   const [selectedAddresses, setSelectedAddresses] = useState<Set<string>>(
     new Set(),
@@ -286,10 +297,30 @@ export default function MembersPage() {
     isError: mutateError,
     error: mutateErrorValue,
     reset: resetMutation,
-  } = useMutation<void, unknown, AssignRoleInput, { previousQueries?: [any, any][] }>({
+  } = useMutation<void, unknown, AssignRoleInput, { previousQueries?: [any, any][]; auditId: string }>({
     mutationFn: (input) =>
       getApi(address, authSession?.token, communitySlug).assignRole(input.address, input.role),
+    retry: (failureCount, error) => {
+      if (error instanceof AuthError && error.code === "unauthorized" && failureCount < 1) {
+        return true;
+      }
+      return false;
+    },
+    retryDelay: 1000,
     onMutate: async (input) => {
+      const auditId = Date.now().toString() + Math.random().toString();
+      setAuditLog((prev) => [
+        {
+          id: auditId,
+          address: input.address,
+          role: input.role,
+          action: "assign",
+          status: "pending",
+          timestamp: new Date(),
+        },
+        ...prev,
+      ]);
+
       await qc.cancelQueries({ queryKey: queryKeys.members.all(communitySlug) });
       const previousQueries = qc.getQueriesData({ queryKey: queryKeys.members.all(communitySlug) });
 
@@ -314,9 +345,14 @@ export default function MembersPage() {
         return old;
       });
 
-      return { previousQueries };
+      return { previousQueries, auditId };
     },
-    onSuccess: (_data, input) => {
+    onSuccess: (_data, input, context) => {
+      setAuditLog((prev) =>
+        prev.map((entry) =>
+          entry.id === context?.auditId ? { ...entry, status: "success" } : entry
+        )
+      );
       reconcileMemberRoleCache(qc, {
         address: input.address,
         role: input.role,
@@ -343,6 +379,16 @@ export default function MembersPage() {
         ? "Session expired. Use the re-authentication banner to sign in again."
         : safeErrorMessage(err);
 
+      if (context?.auditId) {
+        setAuditLog((prev) =>
+          prev.map((entry) =>
+            entry.id === context.auditId
+              ? { ...entry, status: "error", error: message }
+              : entry
+          )
+        );
+      }
+
       setRollbackMessage(`Change reverted: ${message}`);
       addToast({
         tone: isExpiredSession ? "warning" : "error",
@@ -365,11 +411,31 @@ export default function MembersPage() {
     void,
     unknown,
     AssignRoleInput,
-    { previousQueries?: [any, any][] }
+    { previousQueries?: [any, any][]; auditId: string }
   >({
     mutationFn: (input) =>
       getApi(address, authSession?.token, communitySlug).removeRole(input.address, input.role),
+    retry: (failureCount, error) => {
+      if (error instanceof AuthError && error.code === "unauthorized" && failureCount < 1) {
+        return true;
+      }
+      return false;
+    },
+    retryDelay: 1000,
     onMutate: async (input) => {
+      const auditId = Date.now().toString() + Math.random().toString();
+      setAuditLog((prev) => [
+        {
+          id: auditId,
+          address: input.address,
+          role: input.role,
+          action: "remove",
+          status: "pending",
+          timestamp: new Date(),
+        },
+        ...prev,
+      ]);
+
       await qc.cancelQueries({ queryKey: queryKeys.members.all(communitySlug) });
       const previousQueries = qc.getQueriesData({ queryKey: queryKeys.members.all(communitySlug) });
       setPendingAssignment(input);
@@ -391,9 +457,14 @@ export default function MembersPage() {
         }
         return old;
       });
-      return { previousQueries };
+      return { previousQueries, auditId };
     },
-    onSuccess: (_data, input) => {
+    onSuccess: (_data, input, context) => {
+      setAuditLog((prev) =>
+        prev.map((entry) =>
+          entry.id === context?.auditId ? { ...entry, status: "success" } : entry
+        )
+      );
       reconcileMemberRoleCache(qc, {
         address: input.address,
         role: input.role,
@@ -418,6 +489,16 @@ export default function MembersPage() {
       const message = isExpiredSession
         ? "Session expired. Use the re-authentication banner to sign in again."
         : safeErrorMessage(err);
+
+      if (context?.auditId) {
+        setAuditLog((prev) =>
+          prev.map((entry) =>
+            entry.id === context.auditId
+              ? { ...entry, status: "error", error: message }
+              : entry
+          )
+        );
+      }
 
       setRollbackMessage(`Change reverted: ${message}`);
       addToast({
@@ -676,6 +757,39 @@ export default function MembersPage() {
             )}
           </CardContent>
         </Card>
+
+        {auditLog.length > 0 && (
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-lg">Recent Role Changes (This Session)</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-3">
+                {auditLog.map((log) => (
+                  <div key={log.id} className="flex items-center justify-between text-sm border-b pb-2 last:border-0 last:pb-0">
+                    <div>
+                      <span className="font-medium"><AddressText address={log.address} /></span>
+                      <span className="text-muted-foreground mx-2">
+                        {log.action === 'assign' ? 'assigned' : 'removed'} role
+                      </span>
+                      <Badge variant="outline">{log.role}</Badge>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-muted-foreground">
+                        {log.timestamp.toLocaleTimeString()}
+                      </span>
+                      {log.status === 'pending' && <Badge variant="secondary">Pending</Badge>}
+                      {log.status === 'success' && <Badge className="bg-green-600 hover:bg-green-700">Success</Badge>}
+                      {log.status === 'error' && (
+                        <Badge variant="destructive" title={log.error}>Failed</Badge>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         <Card>
           <CardContent>
