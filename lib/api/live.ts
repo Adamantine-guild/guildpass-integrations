@@ -34,6 +34,8 @@ import {
   ResourceSchema,
   AccessPolicySchema,
   WebhookEventLogSchema,
+  WebhookEventSchema,
+  PaginatedSchema,
   SiweAuthSessionSchema,
   Connection,
   ConnectionSchema,
@@ -926,6 +928,7 @@ export class LiveAccessApi implements AccessApi {
     
     return await getJson<Paginated<WebhookEvent>>(`/v1/admin/events/paginated?${searchParams.toString()}`, {
       headers: this.authHeaders(),
+      schema: PaginatedSchema(WebhookEventSchema),
     })
   }
 
