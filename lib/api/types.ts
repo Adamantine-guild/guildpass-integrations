@@ -484,11 +484,28 @@ export interface WebhookEvent {
   status?: string
 }
 
+export const WebhookEventSchema = z.object({
+  id: z.string(),
+  type: z.string(),
+  payload: z.any(),
+  createdAt: z.string(),
+  status: z.string().optional(),
+})
+
 export interface Paginated<T> {
   data: T[]
   total: number
   page: number
   limit: number
+}
+
+export function PaginatedSchema<T extends z.ZodTypeAny>(itemSchema: T) {
+  return z.object({
+    data: z.array(itemSchema),
+    total: z.number(),
+    page: z.number(),
+    limit: z.number(),
+  })
 }
 
 export interface AdminEventFilterParams {
