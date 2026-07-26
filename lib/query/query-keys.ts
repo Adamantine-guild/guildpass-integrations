@@ -111,4 +111,12 @@ export const queryKeys = {
     all: ['moderationReports'] as const,
     detail: (id: string) => ['moderationReport', id] as const,
   },
+
+  // Pending Actions
+  pendingActions: {
+    all: (community: string = 'guildpass-demo') =>
+      features.multiCommunity
+        ? ['pendingActions', community] as const
+        : ['pendingActions'] as const,
+  },
 }
