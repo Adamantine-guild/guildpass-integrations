@@ -1,5 +1,11 @@
 import { describe, it, mock, beforeEach, after } from 'node:test'
 import * as assert from 'node:assert/strict'
+import { isWalletAddress } from '../lib/wallet/address'
+import {
+  GatewayConfigurationError,
+  GatewayDependencyError,
+  GatewayMethodError,
+} from '../lib/integration-client'
 
 // ---------------------------------------------------------------------------
 // Mock helpers: mimic NextRequest / NextResponse contracts
@@ -22,9 +28,35 @@ interface MockResponse {
   status: number
 }
 
+const VALID_ADDRESS = '0x1234567890abcdef1234567890abcdef12345678'
+
 // ---------------------------------------------------------------------------
-// Handler logic extracted from app/api/integration/membership/route.ts
+// Handler logic mirrors app/api/integration/membership/route.ts and
+// app/api/integration/verify/route.ts (minus the rate-limit/CSRF gates,
+// which have their own dedicated test files). Reuses the real validator and
+// error classes rather than re-deriving the branching by hand, so this
+// suite can't silently drift out of sync with the route handlers the way it
+// previously did (the 503 branches below were never exercised until now).
 // ---------------------------------------------------------------------------
+
+function mapGatewayError(error: unknown, fallbackMessage: string): MockResponse {
+  if (error instanceof GatewayConfigurationError) {
+    return { body: { error: 'Integration gateway misconfigured.' }, status: 503 }
+  }
+  if (error instanceof GatewayDependencyError) {
+    return {
+      body: { error: 'Integration gateway unavailable: missing optional dependency.' },
+      status: 503,
+    }
+  }
+  if (error instanceof GatewayMethodError) {
+    return {
+      body: { error: 'Integration gateway unavailable: unsupported client method.' },
+      status: 503,
+    }
+  }
+  return { body: { error: fallbackMessage }, status: 502 }
+}
 
 async function handleMembershipGet(
   req: ReturnType<typeof mockNextRequest>,
@@ -36,19 +68,18 @@ async function handleMembershipGet(
     return { body: { error: 'Missing required query parameter: address' }, status: 400 }
   }
 
+  if (!isWalletAddress(address)) {
+    return { body: { error: 'Invalid address format.' }, status: 400 }
+  }
+
   try {
     const membership = await fetchMembership(address)
     return { body: membership, status: 200 }
   } catch (error) {
-    return {
-      body: {
-        error:
-          error instanceof Error
-            ? error.message
-            : 'Unable to fetch membership information',
-      },
-      status: 502,
-    }
+    return mapGatewayError(
+      error,
+      'Unable to fetch membership information due to an internal error.',
+    )
   }
 }
 
@@ -66,19 +97,15 @@ async function handleVerifyGet(
     return { body: { error: 'Missing required query parameter: address' }, status: 400 }
   }
 
+  if (!isWalletAddress(address)) {
+    return { body: { error: 'Invalid address format.' }, status: 400 }
+  }
+
   try {
     const verification = await verify(address)
     return { body: verification, status: 200 }
   } catch (error) {
-    return {
-      body: {
-        error:
-          error instanceof Error
-            ? error.message
-            : 'Unable to verify wallet',
-      },
-      status: 502,
-    }
+    return mapGatewayError(error, 'Unable to verify wallet due to an internal error.')
   }
 }
 
@@ -124,11 +151,13 @@ describe('GET /api/integration/membership', () => {
       throw new Error('Upstream service unavailable')
     })
 
-    const req = mockNextRequest({ address: '0xabc' })
+    const req = mockNextRequest({ address: VALID_ADDRESS })
     const res = await handleMembershipGet(req, fetchMembership)
 
     assert.equal(res.status, 502)
-    assert.deepEqual(res.body, { error: 'Upstream service unavailable' })
+    assert.deepEqual(res.body, {
+      error: 'Unable to fetch membership information due to an internal error.',
+    })
   })
 
   it('returns 502 with safe fallback for non-Error throws', async () => {
@@ -136,11 +165,74 @@ describe('GET /api/integration/membership', () => {
       throw 'something broke'
     })
 
-    const req = mockNextRequest({ address: '0xabc' })
+    const req = mockNextRequest({ address: VALID_ADDRESS })
     const res = await handleMembershipGet(req, fetchMembership)
 
     assert.equal(res.status, 502)
-    assert.deepEqual(res.body, { error: 'Unable to fetch membership information' })
+    assert.deepEqual(res.body, {
+      error: 'Unable to fetch membership information due to an internal error.',
+    })
+  })
+
+  it('returns 400 for a malformed address and never calls the gateway', async () => {
+    const fetchMembership = mock.fn<(address: string) => Promise<unknown>>()
+
+    for (const bad of [
+      '0xabc',
+      'not-an-address',
+      '0x' + 'g'.repeat(40),
+      '0x' + '1'.repeat(41),
+      "0x1234567890abcdef1234567890abcdef12345678'; DROP TABLE members;--",
+      '0x' + '1'.repeat(2_000_000), // oversized: format check doubles as a size bound
+    ]) {
+      const req = mockNextRequest({ address: bad })
+      const res = await handleMembershipGet(req, fetchMembership)
+
+      assert.equal(res.status, 400, `expected 400 for ${bad.slice(0, 20)}...`)
+      assert.deepEqual(res.body, { error: 'Invalid address format.' })
+    }
+
+    assert.equal(fetchMembership.mock.callCount(), 0)
+  })
+
+  it('returns 503 when the gateway is misconfigured (missing API key)', async () => {
+    const fetchMembership = mock.fn(async (_addr: string) => {
+      throw new GatewayConfigurationError('INTEGRATION_API_KEY is required.')
+    })
+
+    const req = mockNextRequest({ address: VALID_ADDRESS })
+    const res = await handleMembershipGet(req, fetchMembership)
+
+    assert.equal(res.status, 503)
+    assert.deepEqual(res.body, { error: 'Integration gateway misconfigured.' })
+  })
+
+  it('returns 503 when the optional client dependency is missing', async () => {
+    const fetchMembership = mock.fn(async (_addr: string) => {
+      throw new GatewayDependencyError('Optional dependency not installed.')
+    })
+
+    const req = mockNextRequest({ address: VALID_ADDRESS })
+    const res = await handleMembershipGet(req, fetchMembership)
+
+    assert.equal(res.status, 503)
+    assert.deepEqual(res.body, {
+      error: 'Integration gateway unavailable: missing optional dependency.',
+    })
+  })
+
+  it('returns 503 when the client does not expose the expected method', async () => {
+    const fetchMembership = mock.fn(async (_addr: string) => {
+      throw new GatewayMethodError('Method not found.')
+    })
+
+    const req = mockNextRequest({ address: VALID_ADDRESS })
+    const res = await handleMembershipGet(req, fetchMembership)
+
+    assert.equal(res.status, 503)
+    assert.deepEqual(res.body, {
+      error: 'Integration gateway unavailable: unsupported client method.',
+    })
   })
 })
 
@@ -168,13 +260,13 @@ describe('GET /api/integration/verify', () => {
     }
     const verify = mock.fn(async (_addr: string) => verificationData)
 
-    const req = mockNextRequest({ address: '0xabcdef' })
+    const req = mockNextRequest({ address: VALID_ADDRESS })
     const res = await handleVerifyGet(req, verify)
 
     assert.equal(res.status, 200)
     assert.deepEqual(res.body, verificationData)
     assert.equal(verify.mock.callCount(), 1)
-    assert.equal(verify.mock.calls[0].arguments[0], '0xabcdef')
+    assert.equal(verify.mock.calls[0].arguments[0], VALID_ADDRESS)
   })
 
   it('returns 502 with safe error when verifyWallet throws', async () => {
@@ -182,11 +274,13 @@ describe('GET /api/integration/verify', () => {
       throw new Error('Verification service error')
     })
 
-    const req = mockNextRequest({ address: '0xabc' })
+    const req = mockNextRequest({ address: VALID_ADDRESS })
     const res = await handleVerifyGet(req, verify)
 
     assert.equal(res.status, 502)
-    assert.deepEqual(res.body, { error: 'Verification service error' })
+    assert.deepEqual(res.body, {
+      error: 'Unable to verify wallet due to an internal error.',
+    })
   })
 
   it('returns 502 with safe fallback for non-Error throws', async () => {
@@ -194,11 +288,74 @@ describe('GET /api/integration/verify', () => {
       throw null
     })
 
-    const req = mockNextRequest({ address: '0xabc' })
+    const req = mockNextRequest({ address: VALID_ADDRESS })
     const res = await handleVerifyGet(req, verify)
 
     assert.equal(res.status, 502)
-    assert.deepEqual(res.body, { error: 'Unable to verify wallet' })
+    assert.deepEqual(res.body, {
+      error: 'Unable to verify wallet due to an internal error.',
+    })
+  })
+
+  it('returns 400 for a malformed address and never calls the gateway', async () => {
+    const verify = mock.fn<(address: string) => Promise<unknown>>()
+
+    for (const bad of [
+      '0xabc',
+      'not-an-address',
+      '0x' + 'g'.repeat(40),
+      '0x' + '1'.repeat(41),
+      "0x1234567890abcdef1234567890abcdef12345678'; DROP TABLE members;--",
+      '0x' + '1'.repeat(2_000_000), // oversized: format check doubles as a size bound
+    ]) {
+      const req = mockNextRequest({ address: bad })
+      const res = await handleVerifyGet(req, verify)
+
+      assert.equal(res.status, 400, `expected 400 for ${bad.slice(0, 20)}...`)
+      assert.deepEqual(res.body, { error: 'Invalid address format.' })
+    }
+
+    assert.equal(verify.mock.callCount(), 0)
+  })
+
+  it('returns 503 when the gateway is misconfigured (missing API key)', async () => {
+    const verify = mock.fn(async (_addr: string) => {
+      throw new GatewayConfigurationError('INTEGRATION_API_KEY is required.')
+    })
+
+    const req = mockNextRequest({ address: VALID_ADDRESS })
+    const res = await handleVerifyGet(req, verify)
+
+    assert.equal(res.status, 503)
+    assert.deepEqual(res.body, { error: 'Integration gateway misconfigured.' })
+  })
+
+  it('returns 503 when the optional client dependency is missing', async () => {
+    const verify = mock.fn(async (_addr: string) => {
+      throw new GatewayDependencyError('Optional dependency not installed.')
+    })
+
+    const req = mockNextRequest({ address: VALID_ADDRESS })
+    const res = await handleVerifyGet(req, verify)
+
+    assert.equal(res.status, 503)
+    assert.deepEqual(res.body, {
+      error: 'Integration gateway unavailable: missing optional dependency.',
+    })
+  })
+
+  it('returns 503 when the client does not expose the expected method', async () => {
+    const verify = mock.fn(async (_addr: string) => {
+      throw new GatewayMethodError('Method not found.')
+    })
+
+    const req = mockNextRequest({ address: VALID_ADDRESS })
+    const res = await handleVerifyGet(req, verify)
+
+    assert.equal(res.status, 503)
+    assert.deepEqual(res.body, {
+      error: 'Integration gateway unavailable: unsupported client method.',
+    })
   })
 })
 // ===========================================================================

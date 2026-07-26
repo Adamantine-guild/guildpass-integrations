@@ -7,6 +7,7 @@ import {
 } from '@/lib/integration-client'
 import { rateLimitRequest } from '@/lib/rate-limit'
 import { validateIntegrationGatewayCsrf } from '@/lib/csrf'
+import { isWalletAddress } from '@/lib/wallet/address'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -35,6 +36,16 @@ export async function GET(req: NextRequest) {
   if (!address) {
     return NextResponse.json(
       { error: 'Missing required query parameter: address' },
+      { status: 400 },
+    )
+  }
+
+  // Reject malformed addresses before they ever reach
+  // @guildpass/integration-client - this route proxies a privileged
+  // server-only key, so it must not forward arbitrary/oversized input.
+  if (!isWalletAddress(address)) {
+    return NextResponse.json(
+      { error: 'Invalid address format.' },
       { status: 400 },
     )
   }
