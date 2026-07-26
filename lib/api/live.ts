@@ -42,6 +42,8 @@ import {
   ModerationReport,
   ModerationReportSchema,
   ModerationState,
+  PendingAction,
+  ApprovalConfig,
 } from './types'
 import { checkVersionCompatibility, type VersionCompatibility } from './version'
 import {
@@ -1004,15 +1006,32 @@ export class LiveAccessApi implements AccessApi {
     })
   }
 
-  async assignRole(address: string, role: Role): Promise<void> {
+  async getPendingActions(): Promise<PendingAction[]> {
+    throw new Error("Pending actions are not yet supported by guildpass-core.")
+  }
+
+  async approveAction(id: string): Promise<void> {
+    throw new Error("Pending actions are not yet supported by guildpass-core.")
+  }
+
+  async rejectAction(id: string): Promise<void> {
+    throw new Error("Pending actions are not yet supported by guildpass-core.")
+  }
+
+  async updateApprovalConfig(config: ApprovalConfig): Promise<void> {
+    throw new Error("Pending actions are not yet supported by guildpass-core.")
+  }
+
+  async assignRole(address: string, role: Role): Promise<{ status: 'executed' | 'pending'; pendingActionId?: string }> {
     await getJson<void>(`/v1/members/${encodeURIComponent(address)}/roles`, {
       method: 'POST',
       headers: this.authHeaders(),
       body: JSON.stringify({ role }),
     })
+    return { status: 'executed' }
   }
 
-  async removeRole(address: string, role: Role): Promise<void> {
+  async removeRole(address: string, role: Role): Promise<{ status: 'executed' | 'pending'; pendingActionId?: string }> {
     await getJson<void>(
       `/v1/members/${encodeURIComponent(address)}/roles/${encodeURIComponent(role)}`,
       {
@@ -1020,9 +1039,10 @@ export class LiveAccessApi implements AccessApi {
         headers: this.authHeaders(),
       },
     )
+    return { status: 'executed' }
   }
 
-  async updatePolicy(policy: AccessPolicy): Promise<void> {
+  async updatePolicy(policy: AccessPolicy): Promise<{ status: 'executed' | 'pending'; pendingActionId?: string }> {
     const result = validatePolicy(policy)
 
     if (!result.valid) {
@@ -1039,6 +1059,7 @@ export class LiveAccessApi implements AccessApi {
         updated_at: result.value.updatedAt,
       }),
     })
+    return { status: 'executed' }
   }
 
   async getNonce(address: string): Promise<string> {

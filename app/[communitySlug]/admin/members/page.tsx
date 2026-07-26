@@ -297,7 +297,7 @@ export default function MembersPage() {
     isError: mutateError,
     error: mutateErrorValue,
     reset: resetMutation,
-  } = useMutation<void, unknown, AssignRoleInput, { previousQueries?: [any, any][]; auditId: string }>({
+  } = useMutation<{ status: 'executed' | 'pending'; pendingActionId?: string }, unknown, AssignRoleInput, { previousQueries?: [any, any][]; auditId: string }>({
     mutationFn: (input) =>
       getApi(address, authSession?.token, communitySlug).assignRole(input.address, input.role),
     retry: (failureCount, error) => {
@@ -347,7 +347,25 @@ export default function MembersPage() {
 
       return { previousQueries, auditId };
     },
-    onSuccess: (_data, input, context) => {
+    onSuccess: (data, input, context) => {
+      if (data.status === 'pending') {
+        // Rollback optimistic update
+        if (context?.previousQueries) {
+          for (const [key, qData] of context.previousQueries) {
+            qc.setQueryData(key, qData);
+          }
+        }
+        setPendingAssignment(null);
+        addToast({
+          tone: "default",
+          title: "Approval Required",
+          description: `Assignment of ${input.role} to ${input.address.slice(0, 6)}…${input.address.slice(-4)} has been proposed for approval.`,
+        });
+        setAddr("");
+        resetMutation();
+        return;
+      }
+
       setAuditLog((prev) =>
         prev.map((entry) =>
           entry.id === context?.auditId ? { ...entry, status: "success" } : entry
@@ -408,7 +426,7 @@ export default function MembersPage() {
     mutateErrorValue instanceof AuthError && mutateErrorValue.code === "unauthorized";
 
   const removeRoleMutation = useMutation<
-    void,
+    { status: 'executed' | 'pending'; pendingActionId?: string },
     unknown,
     AssignRoleInput,
     { previousQueries?: [any, any][]; auditId: string }
@@ -459,7 +477,24 @@ export default function MembersPage() {
       });
       return { previousQueries, auditId };
     },
-    onSuccess: (_data, input, context) => {
+    onSuccess: (data, input, context) => {
+      if (data.status === 'pending') {
+        // Rollback optimistic update
+        if (context?.previousQueries) {
+          for (const [key, qData] of context.previousQueries) {
+            qc.setQueryData(key, qData);
+          }
+        }
+        setPendingAssignment(null);
+        addToast({
+          tone: "default",
+          title: "Approval Required",
+          description: `Removal of ${input.role} from ${input.address.slice(0, 6)}…${input.address.slice(-4)} has been proposed for approval.`,
+        });
+        resetMutation();
+        return;
+      }
+
       setAuditLog((prev) =>
         prev.map((entry) =>
           entry.id === context?.auditId ? { ...entry, status: "success" } : entry

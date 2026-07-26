@@ -337,7 +337,7 @@ export default function PoliciesPage() {
     isError: mutateError,
     error: mutateErrorValue,
     reset: resetMutation,
-  } = useMutation<void, unknown, AccessPolicy, PolicyRollback>({
+  } = useMutation<{ status: 'executed' | 'pending'; pendingActionId?: string }, unknown, AccessPolicy, PolicyRollback>({
     mutationFn: (policy: AccessPolicy) =>
       getApi(address, authSession?.token, communitySlug).updatePolicy(policy),
 
@@ -359,7 +359,18 @@ export default function PoliciesPage() {
       return { previousPolicies };
     },
 
-    onSuccess: (_data, policy) => {
+    onSuccess: (data, policy, context) => {
+      if (data.status === 'pending') {
+        qc.setQueryData(queryKeys.policies.all(communitySlug), context?.previousPolicies);
+        setSuccessMessage(`Policy update for "${policy.resourceId}" proposed for approval.`);
+        clearPolicyDraft(policy.resourceId);
+        clearPolicyDraft("");
+        setEditingResourceId(null);
+        setShowCreateForm(false);
+        resetMutation();
+        return;
+      }
+
       setSuccessMessage(`Policy saved for ${policy.resourceId}.`);
       setFormErrors((current) => ({
         ...current,

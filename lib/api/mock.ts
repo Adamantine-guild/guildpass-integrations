@@ -53,6 +53,10 @@ import {
   Paginated,
   WebhookEvent,
   EXPECTED_API_VERSION,
+  PendingAction,
+  ApprovalConfig,
+  PendingActionType,
+  PendingActionPayload,
 } from './types'
 import { ApiError } from './errors'
 import {
@@ -391,6 +395,7 @@ export interface CommunityState {
   policies: AccessPolicy[]
   webhookEvents: WebhookEventLog[]
   memberStore: Record<string, { membership: Membership; roles: Role[]; profile: MemberProfile }>
+  pendingActions: PendingAction[]
 }
 
 export let communityStates: Record<string, CommunityState> = {}
@@ -403,7 +408,8 @@ export function getCommunityState(communityId: string = 'guildpass-demo'): Commu
       resources: [...(MOCK_RESOURCES[normalizedId] ?? [])],
       policies: [...(MOCK_POLICIES[normalizedId] ?? [])],
       webhookEvents: [...DEFAULT_WEBHOOK_EVENTS],
-      memberStore: { ...(MOCK_MEMBER_STORES[normalizedId] ?? {}) }
+      memberStore: { ...(MOCK_MEMBER_STORES[normalizedId] ?? {}) },
+      pendingActions: [],
     }
   }
   return communityStates[normalizedId]
@@ -1093,28 +1099,114 @@ export class MockAccessApi implements AccessApi {
     )
   }
 
-  async assignRole(address: string, role: Role): Promise<void> {
+  async getPendingActions(): Promise<PendingAction[]> {
+    await initPromise
+    return getCommunityState(this.communityId).pendingActions
+  }
+
+  async approveAction(id: string): Promise<void> {
+    await initPromise
+    const state = getCommunityState(this.communityId)
+    const action = state.pendingActions.find(a => a.id === id)
+    if (!action || action.status !== 'pending') return
+    
+    if (!action.currentApprovals.includes(MOCK_ADMIN_ADDRESS)) {
+      action.currentApprovals.push(MOCK_ADMIN_ADDRESS)
+    }
+    
+    if (action.currentApprovals.length >= action.requiredApprovals) {
+      if (action.type === 'assignRole') {
+        const data = ensureAddress(action.payload.address!, this.communityId)
+        if (data && !data.roles.includes(action.payload.role! as Role)) data.roles.push(action.payload.role! as Role)
+      } else if (action.type === 'removeRole') {
+        const data = state.memberStore[action.payload.address!]
+        if (data) data.roles = data.roles.filter(r => r !== action.payload.role!)
+      } else if (action.type === 'updatePolicy') {
+        const result = validatePolicy(action.payload.policy!)
+        if (result.valid) {
+           const idx = state.policies.findIndex(p => p.resourceId === result.value.resourceId)
+           const updatedPolicy = { ...result.value, updatedAt: new Date().toISOString() }
+           if (idx >= 0) state.policies[idx] = updatedPolicy
+           else state.policies.push(updatedPolicy)
+        }
+      }
+      action.status = 'executed'
+    }
+    schedulePersist()
+  }
+
+  async rejectAction(id: string): Promise<void> {
+    await initPromise
+    const state = getCommunityState(this.communityId)
+    const action = state.pendingActions.find(a => a.id === id)
+    if (action && action.status === 'pending') {
+      action.status = 'rejected'
+      schedulePersist()
+    }
+  }
+
+  async updateApprovalConfig(config: ApprovalConfig): Promise<void> {
+    await initPromise
+    const state = getCommunityState(this.communityId)
+    state.community.approvalConfig = config
+    schedulePersist()
+  }
+
+  private _checkApproval(type: PendingActionType, payload: PendingActionPayload): { status: 'executed' | 'pending'; pendingActionId?: string } {
+    const state = getCommunityState(this.communityId)
+    const config = state.community.approvalConfig
+    const required = config ? config[type] || 1 : 1
+    
+    if (required > 1) {
+      const pendingActionId = `pa_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`
+      state.pendingActions.push({
+        id: pendingActionId,
+        type,
+        payload,
+        proposer: MOCK_ADMIN_ADDRESS,
+        requiredApprovals: required,
+        currentApprovals: [MOCK_ADMIN_ADDRESS],
+        status: 'pending',
+        createdAt: new Date().toISOString()
+      })
+      schedulePersist()
+      return { status: 'pending', pendingActionId }
+    }
+    return { status: 'executed' }
+  }
+
+  async assignRole(address: string, role: Role): Promise<{ status: 'executed' | 'pending'; pendingActionId?: string }> {
     await initPromise
     if (MOCK_SESSION_STATE === 'expired') throwMockUnauthorized()
     if (mockRoleMutationShouldFail) throwMockRoleMutationFailure()
+    
+    const check = this._checkApproval('assignRole', { address, role })
+    if (check.status === 'pending') return check
+
     const data = ensureAddress(address, this.communityId)
-    if (!data) return
+    if (!data) return { status: 'executed' }
     if (!data.roles.includes(role)) data.roles.push(role)
     schedulePersist()
+    return { status: 'executed' }
   }
 
-  async removeRole(address: string, role: Role): Promise<void> {
+  async removeRole(address: string, role: Role): Promise<{ status: 'executed' | 'pending'; pendingActionId?: string }> {
     await initPromise
     if (MOCK_SESSION_STATE === 'expired') throwMockUnauthorized()
     if (mockRoleMutationShouldFail) throwMockRoleMutationFailure()
+    
+    const check = this._checkApproval('removeRole', { address, role })
+    if (check.status === 'pending') return check
+
     const state = getCommunityState(this.communityId)
     const data = state.memberStore[address]
-    if (!data) return
+    if (!data) return { status: 'executed' }
     data.roles = data.roles.filter((r) => r !== role)
     schedulePersist()
+    return { status: 'executed' }
   }
 
-  async updatePolicy(policy: AccessPolicy): Promise<void> {
+  async updatePolicy(policy: AccessPolicy): Promise<{ status: 'executed' | 'pending'; pendingActionId?: string }> {
     await initPromise
     if (MOCK_SESSION_STATE === 'expired') throwMockUnauthorized()
     const result = validatePolicy(policy)
@@ -1130,7 +1222,6 @@ export class MockAccessApi implements AccessApi {
     if (idx >= 0 && policy.updatedAt) {
       const existingPolicy = state.policies[idx]
       if (existingPolicy.updatedAt && existingPolicy.updatedAt !== policy.updatedAt) {
-        // Policy has been modified by another admin - return 409 Conflict
         throw new ApiError({
           status: 409,
           code: 'conflict',
@@ -1143,6 +1234,9 @@ export class MockAccessApi implements AccessApi {
       }
     }
     
+    const check = this._checkApproval('updatePolicy', { policy })
+    if (check.status === 'pending') return check
+
     // Update policy with new timestamp
     const updatedPolicy = {
       ...result.value,
@@ -1152,6 +1246,7 @@ export class MockAccessApi implements AccessApi {
     if (idx >= 0) state.policies[idx] = updatedPolicy
     else state.policies.push(updatedPolicy)
     schedulePersist()
+    return { status: 'executed' }
   }
 
   async listAdminEvents(params?: AdminEventFilterParams): Promise<Paginated<WebhookEvent>> {
