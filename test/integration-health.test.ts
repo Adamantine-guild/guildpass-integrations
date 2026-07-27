@@ -1,5 +1,8 @@
+import './setup-env'
+import './setup-alias'
 import { describe, it, beforeEach, after } from 'node:test'
 import * as assert from 'node:assert/strict'
+import { GET as healthGet } from '../app/api/integration/health/route'
 
 // Loaded via require so each test can bust the module cache (the node:test
 // equivalent of vitest's vi.resetModules()).
@@ -56,5 +59,38 @@ describe('Integration gateway health checks (#84)', () => {
     const { isGatewayDependencyAvailable } = loadIntegrationClient()
     // @guildpass/integration-client is not installed in this repo
     assert.equal(isGatewayDependencyAvailable(), false)
+  })
+})
+
+describe('GET /api/integration/health structured logging', () => {
+  it('logs exactly one structured line with no address field, and echoes requestId in the body', async (t) => {
+    const logSpy = t.mock.method(console, 'log', () => {})
+
+    const res = await healthGet()
+    const body: any = await res.json()
+
+    assert.ok(res.status === 200 || res.status === 503)
+    assert.equal(typeof body.requestId, 'string')
+
+    assert.equal(logSpy.mock.callCount(), 1)
+    const parsed = JSON.parse(logSpy.mock.calls[0].arguments[0] as string)
+    assert.equal(parsed.correlationId, body.requestId)
+    assert.equal(parsed.method, 'GET')
+    assert.equal(parsed.path, '/api/integration/health')
+    assert.equal(parsed.status, res.status)
+    assert.equal(parsed.rateLimit, 'not_applicable')
+    // health never receives a wallet address — the field must be entirely
+    // absent from the log line, not merely empty.
+    assert.equal('address' in parsed, false)
+    assert.equal('errorMessage' in parsed, false)
+  })
+
+  it('produces a different correlationId on each call', async (t) => {
+    t.mock.method(console, 'log', () => {})
+
+    const body1: any = await (await healthGet()).json()
+    const body2: any = await (await healthGet()).json()
+
+    assert.notEqual(body1.requestId, body2.requestId)
   })
 })
