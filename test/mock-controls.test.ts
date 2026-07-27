@@ -1,7 +1,13 @@
 import './setup-env'
 import { describe, it, beforeEach } from 'node:test'
 import assert from 'node:assert'
-import { resetMockData, applyMockScenario, setMockRoleMutationFailure } from '../lib/api/mock'
+import {
+  resetMockData,
+  applyMockScenario,
+  setMockRoleMutationFailure,
+  setMockResourceFetchFailure,
+  setMockResourceFetchDelay,
+} from '../lib/api/mock'
 import { getApi } from '../lib/api'
 import { isApiError } from '../lib/api/errors'
 
@@ -100,5 +106,72 @@ describe('Simulated role mutation failure (#243)', () => {
     await resetMockData()
     const api = getApi(TEST_ADDRESS)
     await assert.doesNotReject(api.assignRole(TEST_ADDRESS, 'moderator'))
+  })
+})
+
+describe('Simulated resource fetch failure/delay injection', () => {
+  const TEST_ADDRESS = '0x1234567890123456789012345678901234567890'
+
+  beforeEach(async () => {
+    await resetMockData()
+    setMockResourceFetchFailure(false)
+    setMockResourceFetchDelay(0)
+  })
+
+  it('getResource/getPolicy succeed normally while the toggle is off', async () => {
+    const api = getApi(TEST_ADDRESS)
+    const result = await api.getResource('alpha')
+    assert.strictEqual(result.status, 'found')
+    await assert.doesNotReject(api.getPolicy('alpha'))
+  })
+
+  it("setMockResourceFetchFailure('network') makes getResource resolve to a structured error result", async () => {
+    setMockResourceFetchFailure('network')
+    const api = getApi(TEST_ADDRESS)
+    const result = await api.getResource('alpha')
+    assert.strictEqual(result.status, 'error')
+    assert.ok(result.status === 'error' && isApiError(result.error) && result.error.code === 'network_error' && result.error.retryable)
+  })
+
+  it("setMockResourceFetchFailure('server') makes getResource resolve to a structured 500 error result", async () => {
+    setMockResourceFetchFailure('server')
+    const api = getApi(TEST_ADDRESS)
+    const result = await api.getResource('alpha')
+    assert.strictEqual(result.status, 'error')
+    assert.ok(
+      result.status === 'error' &&
+        isApiError(result.error) &&
+        result.error.status === 500 &&
+        result.error.code === 'server_error' &&
+        result.error.retryable,
+    )
+  })
+
+  it("setMockResourceFetchFailure('network') makes getPolicy throw (matching LiveAccessApi's throwing contract)", async () => {
+    setMockResourceFetchFailure('network')
+    const api = getApi(TEST_ADDRESS)
+    await assert.rejects(
+      api.getPolicy('alpha'),
+      (err: unknown) => isApiError(err) && err.code === 'network_error' && err.retryable,
+    )
+  })
+
+  it('setMockResourceFetchDelay() delays resolution by at least the configured amount', async () => {
+    setMockResourceFetchDelay(40)
+    const api = getApi(TEST_ADDRESS)
+    const start = Date.now()
+    await api.getResource('alpha')
+    assert.ok(Date.now() - start >= 40)
+  })
+
+  it('resetMockData() clears both the failure mode and the delay', async () => {
+    setMockResourceFetchFailure('server')
+    setMockResourceFetchDelay(500)
+    await resetMockData()
+    const api = getApi(TEST_ADDRESS)
+    const start = Date.now()
+    const result = await api.getResource('alpha')
+    assert.strictEqual(result.status, 'found')
+    assert.ok(Date.now() - start < 500)
   })
 })

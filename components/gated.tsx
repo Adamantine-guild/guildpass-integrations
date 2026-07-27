@@ -8,6 +8,7 @@ import { computeAccessDecision } from '@/lib/api/access-decision'
 import {
   accessKeys,
   queryKeys,
+  retryOnApiError,
   ACCESS_DECISION_STALE_TIME,
   ACCESS_DECISION_GC_TIME,
 } from '@/lib/query'
@@ -36,34 +37,46 @@ export function Gated({
   const env = String(chain?.id ?? 1)
   const hasExplicitRequirements = minTier !== undefined || roles !== undefined || rule !== undefined
 
-  const { data: session, isLoading: sessionLoading, isError, error, refetch } = useQuery({
+  const {
+    data: session,
+    isLoading: sessionLoading,
+    isError,
+    error,
+    isFetching: sessionFetching,
+    refetch,
+  } = useQuery({
     queryKey: queryKeys.session.byAddress(address ?? '', communitySlug),
     queryFn: ({ signal }) => getApi(address, undefined, communitySlug).getSession(signal),
     enabled: !!address,
-    retry: (failureCount, err) => {
-      if (isApiError(err) && err.code === 'aborted') return false
-      return failureCount < 1
-    },
+    retry: retryOnApiError(),
   })
 
-  const { data: policies, isLoading: policiesLoading } = useQuery({
+  const {
+    data: policies,
+    isLoading: policiesLoading,
+    isError: policiesIsError,
+    error: policiesError,
+    isFetching: policiesFetching,
+    refetch: refetchPolicies,
+  } = useQuery({
     queryKey: queryKeys.policies.all(communitySlug),
     queryFn: ({ signal }) => getApi(address, undefined, communitySlug).listPolicies(signal),
     enabled: !!address && !hasExplicitRequirements && !!resourceId,
-    retry: (failureCount, err) => {
-      if (isApiError(err) && err.code === 'aborted') return false
-      return failureCount < 1
-    },
+    retry: retryOnApiError(),
   })
 
-  const { data: resources, isLoading: resourcesLoading } = useQuery({
+  const {
+    data: resources,
+    isLoading: resourcesLoading,
+    isError: resourcesIsError,
+    error: resourcesError,
+    isFetching: resourcesFetching,
+    refetch: refetchResources,
+  } = useQuery({
     queryKey: queryKeys.resources.all(communitySlug),
     queryFn: ({ signal }) => getApi(address, undefined, communitySlug).listResources(signal),
     enabled: !!address && !hasExplicitRequirements && !!resourceId,
-    retry: (failureCount, err) => {
-      if (isApiError(err) && err.code === 'aborted') return false
-      return failureCount < 1
-    },
+    retry: retryOnApiError(),
   })
 
   const dynamicPolicy = useMemo(() => {
@@ -129,6 +142,23 @@ export function Gated({
         title="Could not verify access"
         message={safeErrorMessage(error)}
         onRetry={() => refetch()}
+        retrying={sessionFetching}
+      />
+    )
+  }
+
+  const policiesGenuineError = policiesIsError && !(isApiError(policiesError) && policiesError.code === 'aborted')
+  const resourcesGenuineError = resourcesIsError && !(isApiError(resourcesError) && resourcesError.code === 'aborted')
+  if (policiesGenuineError || resourcesGenuineError) {
+    return (
+      <ErrorState
+        title="Could not load access requirements"
+        message={safeErrorMessage(policiesGenuineError ? policiesError : resourcesError)}
+        onRetry={() => {
+          refetchPolicies()
+          refetchResources()
+        }}
+        retrying={policiesFetching || resourcesFetching}
       />
     )
   }

@@ -12,7 +12,7 @@ test('skeleton uses theme tokens and stays hidden from assistive technology', ()
   )
 
   assert.match(html, /aria-hidden="true"/)
-  assert.match(html, /animate-pulse/)
+  assert.match(html, /motion-safe:animate-pulse/)
   assert.match(html, /bg-muted/)
   assert.match(html, /h-5/)
   assert.match(html, /w-16/)
