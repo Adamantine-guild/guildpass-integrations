@@ -11,6 +11,18 @@ import {
 } from '../lib/integration-client'
 import { GET as membershipGet } from '../app/api/integration/membership/route'
 import { GET as verifyGet } from '../app/api/integration/verify/route'
+import { resetIntegrationResilienceState } from '../lib/integration/resilientCall'
+
+// Routes now call the gateway through resilientCall(), which retries transient
+// (non-Gateway*Error) failures and trips a circuit breaker per `key` after
+// repeated failures. Disable retries so error-path tests fail on the first
+// attempt (matches callCount assertions) and reset the breaker before every
+// test so one test's failures can't open the circuit for the next.
+process.env.INTEGRATION_RETRY_MAX_ATTEMPTS = '0'
+
+beforeEach(() => {
+  resetIntegrationResilienceState()
+})
 
 // ---------------------------------------------------------------------------
 // Mock helpers
