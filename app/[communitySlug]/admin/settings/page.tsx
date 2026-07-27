@@ -71,6 +71,7 @@ export default function SettingsPage() {
               </span>
             </div>
           </CardContent>
+        </Card>
         <Card>
           <CardHeader>
             <CardTitle>Workflow & Approvals</CardTitle>

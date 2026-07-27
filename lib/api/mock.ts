@@ -408,7 +408,12 @@ export function getCommunityState(communityId: string = 'guildpass-demo'): Commu
       resources: [...(MOCK_RESOURCES[normalizedId] ?? [])],
       policies: [...(MOCK_POLICIES[normalizedId] ?? [])],
       webhookEvents: [...DEFAULT_WEBHOOK_EVENTS],
-      memberStore: { ...(MOCK_MEMBER_STORES[normalizedId] ?? {}) },
+      memberStore: Object.fromEntries(
+        Object.entries(MOCK_MEMBER_STORES[normalizedId] ?? {}).map(([k, v]) => [
+          k,
+          { ...v, roles: [...v.roles], membership: { ...v.membership }, profile: { ...v.profile } }
+        ])
+      ),
       pendingActions: [],
     }
   }
@@ -464,6 +469,7 @@ const initPromise = loadPersistedState().then((persisted) => {
       policies: (persisted as any).policies || [...DEFAULT_POLICIES],
       webhookEvents: (persisted as any).webhookEvents || [...DEFAULT_WEBHOOK_EVENTS],
       memberStore: (persisted as any).memberStore || { ...DEFAULT_MEMBER_STORE },
+      pendingActions: (persisted as any).pendingActions || [],
     }
   }
   for (const cid of Object.keys(MOCK_COMMUNITIES)) {
@@ -1110,8 +1116,9 @@ export class MockAccessApi implements AccessApi {
     const action = state.pendingActions.find(a => a.id === id)
     if (!action || action.status !== 'pending') return
     
-    if (!action.currentApprovals.includes(MOCK_ADMIN_ADDRESS)) {
-      action.currentApprovals.push(MOCK_ADMIN_ADDRESS)
+    const adminAddr = this.address || '0x0000000000000000000000000000000000000001'
+    if (!action.currentApprovals.includes(adminAddr)) {
+      action.currentApprovals.push(adminAddr)
     }
     
     if (action.currentApprovals.length >= action.requiredApprovals) {
@@ -1147,25 +1154,26 @@ export class MockAccessApi implements AccessApi {
 
   async updateApprovalConfig(config: ApprovalConfig): Promise<void> {
     await initPromise
-    const state = getCommunityState(this.communityId)
-    state.community.approvalConfig = config
+    const state = getCommunityState(this.communityId);
+    (state.community as any).approvalConfig = config
     schedulePersist()
   }
 
   private _checkApproval(type: PendingActionType, payload: PendingActionPayload): { status: 'executed' | 'pending'; pendingActionId?: string } {
     const state = getCommunityState(this.communityId)
-    const config = state.community.approvalConfig
+    const config = (state.community as any).approvalConfig
     const required = config ? config[type] || 1 : 1
     
     if (required > 1) {
       const pendingActionId = `pa_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`
+      const adminAddr = this.address || '0x0000000000000000000000000000000000000001'
       state.pendingActions.push({
         id: pendingActionId,
         type,
         payload,
-        proposer: MOCK_ADMIN_ADDRESS,
+        proposer: adminAddr,
         requiredApprovals: required,
-        currentApprovals: [MOCK_ADMIN_ADDRESS],
+        currentApprovals: [adminAddr],
         status: 'pending',
         createdAt: new Date().toISOString()
       })
@@ -1531,7 +1539,7 @@ export class MockAccessApi implements AccessApi {
     }
   }
 
-  public analytics: import('./types').AnalyticsDataSource = {
+  public analytics: any = {
     getMembershipTrend: async (_signal?: AbortSignal) => {
       await initPromise;
       return MOCK_ANALYTICS_SUMMARY.memberGrowth;

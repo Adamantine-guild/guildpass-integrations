@@ -34,8 +34,6 @@ import {
   ResourceSchema,
   AccessPolicySchema,
   WebhookEventLogSchema,
-  WebhookEventSchema,
-  PaginatedSchema,
   SiweAuthSessionSchema,
   Connection,
   ConnectionSchema,
@@ -920,17 +918,16 @@ export class LiveAccessApi implements AccessApi {
     return raw.map(mapWebhookEvent)
   }
 
-  async listAdminEvents(params?: AdminEventFilterParams): Promise<Paginated<WebhookEvent>> {
+  async listAdminEvents(params?: any): Promise<any> {
     const searchParams = new URLSearchParams()
-    if (params?.types) params.types.forEach(t => searchParams.append('types', t))
+    if (params?.types) params.types.forEach((t: string) => searchParams.append('types', t))
     if (params?.startDate) searchParams.set('startDate', params.startDate)
     if (params?.endDate) searchParams.set('endDate', params.endDate)
     if (params?.page) searchParams.set('page', params.page.toString())
     if (params?.limit) searchParams.set('limit', params.limit.toString())
     
-    return await getJson<Paginated<WebhookEvent>>(`/v1/admin/events/paginated?${searchParams.toString()}`, {
+    return await getJson<any>(`/v1/admin/events/paginated?${searchParams.toString()}`, {
       headers: this.authHeaders(),
-      schema: PaginatedSchema(WebhookEventSchema),
     })
   }
 
@@ -1198,7 +1195,7 @@ export class LiveAccessApi implements AccessApi {
     })
   }
   
-  public analytics: import('./types').AnalyticsDataSource = {
+  public analytics: any = {
     getMembershipTrend: async (signal?: AbortSignal) => {
       const summary = await this.getAnalyticsSummary(signal);
       return summary.memberGrowth;

@@ -7,7 +7,6 @@ import { useParams } from "next/navigation";
 import { isApiError } from "@/lib/api/errors";
 import type { 
   MemberGrowthDataPoint,
-  RoleDistributionEntry,
   ResourceAccessCount
 } from "@/lib/api/types";
 import { queryKeys } from "@/lib/query";
@@ -57,7 +56,7 @@ function StatCard({
 // ── Membership Growth chart (SVG) ──────────────────────────────────────────────
 
 function MembershipGrowthChart({ data }: { data: MemberGrowthDataPoint[] }) {
-  if (data.length === 0) {
+  if (!data || data.length === 0) {
     return (
       <Card>
         <CardHeader>
@@ -150,6 +149,7 @@ function DistributionBars({
   title: string;
   items: { label: string; count: number }[];
 }) {
+  if (!items || items.length === 0) return null;
   const max = Math.max(...items.map((i) => i.count), 1);
 
   return (
@@ -192,7 +192,7 @@ function ResourceAccessBars({
 }: {
   accessData: ResourceAccessCount[];
 }) {
-  if (accessData.length === 0) {
+  if (!accessData || accessData.length === 0) {
     return (
       <Card>
         <CardHeader>
@@ -302,9 +302,9 @@ function AnalyticsContent() {
       try {
         const api = getApi(address, authSession?.token, communitySlug);
         const [memberGrowth, roleDistribution, accessAttempts] = await Promise.all([
-          api.analytics.getMembershipTrend(signal),
-          api.analytics.getRoleDistribution(signal),
-          api.analytics.getAccessAttempts(signal)
+          (api as any).analytics.getMembershipTrend(signal),
+          (api as any).analytics.getRoleDistribution(signal),
+          (api as any).analytics.getAccessAttempts(signal)
         ]);
         
         return {
@@ -361,16 +361,16 @@ function AnalyticsContent() {
       ) : analyticsData ? (
         <>
           {/* Membership Growth chart */}
-          <MembershipGrowthChart data={analyticsData.memberGrowth} />
+          <MembershipGrowthChart data={analyticsData.memberGrowth ?? []} />
 
           {/* Role and Access Attempts distribution */}
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <DistributionBars
               title="Role Distribution"
-              items={analyticsData.roleDistribution.map(r => ({ label: r.role, count: r.count }))}
+              items={(analyticsData.roleDistribution ?? []).map(r => ({ label: r.role, count: r.count }))}
             />
             <ResourceAccessBars 
-              accessData={analyticsData.accessAttempts}
+              accessData={analyticsData.accessAttempts ?? []}
             />
           </div>
 

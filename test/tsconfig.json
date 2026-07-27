@@ -16,6 +16,10 @@
     "types": ["node"]
   },
   "include": [
+    "../lib/utils.ts",
+    "../components/ui/skeleton.tsx",
+    "../components/ui/card.tsx",
+    "../components/dashboard/membership-card-skeleton.tsx",
     "../lib/api/mappers.ts",
     "../lib/api/optimistic.ts",
     "../lib/api/types.ts",
@@ -32,7 +36,11 @@
     "../components/wallet/address-text.tsx",
     "../components/nav.tsx",
     "../app/[communitySlug]/admin/analytics/page.tsx",
+    "../app/[communitySlug]/admin/members/page.tsx",
     "../components/admin-guard.tsx",
+    "../components/ui/bulk-action-toolbar.tsx",
+    "../components/developer/scenario-selector.tsx",
+    "../components/developer/siwe-debug-panel.tsx",
     "../components/wallet/address-text.tsx",
     "../lib/wallet/siwe-context.ts",
     "../lib/query/*.ts",
