@@ -12,8 +12,7 @@ import {
   ACCESS_DECISION_GC_TIME,
 } from '@/lib/query'
 import Link from 'next/link'
-import { Button, buttonVariants } from './ui/button'
-import { DisabledTooltip } from './ui/tooltip'
+import { buttonVariants } from './ui/button'
 import { LoadingState, ErrorState, DeniedState, safeErrorMessage } from './ui/api-states'
 import { useParams } from 'next/navigation'
 
@@ -117,7 +116,7 @@ export function Gated({
   const isLoading = resourceId ? (sessionLoading || decisionLoading || isRequirementsLoading) : sessionLoading
 
   if (!address) {
-    return <AccessDenied reason="Please connect your wallet to continue." />
+    return <AccessDenied reason="Connect your wallet to check access." resourceId={resourceId} />
   }
 
   if (isLoading) {
@@ -135,15 +134,23 @@ export function Gated({
   }
 
   if (!decision?.allowed) {
-    return <AccessDenied reason={decision?.reason ?? 'Your current membership does not grant access.'} />
+    return (
+      <AccessDenied
+        reason={decision?.reason ?? 'Your current membership does not grant access.'}
+        resourceId={resourceId}
+      />
+    )
   }
 
   return <>{children}</>
 }
 
-export function AccessDenied({ reason }: { reason: string }) {
+export function AccessDenied({ reason, resourceId }: { reason: string; resourceId?: string }) {
   const params = useParams()
   const communitySlug = (params?.communitySlug as string) || 'guildpass-demo'
+  const upgradeHref = resourceId
+    ? `/${communitySlug}/upgrade?resourceId=${encodeURIComponent(resourceId)}`
+    : `/${communitySlug}/upgrade`
   return (
     <DeniedState
       title="Access denied"
@@ -151,16 +158,7 @@ export function AccessDenied({ reason }: { reason: string }) {
       actions={
         <>
           <Link href={`/${communitySlug}/dashboard`} className={buttonVariants()}>Back to Dashboard</Link>
-          <DisabledTooltip content="Coming soon">
-            <Button
-              variant="outline"
-              disabled
-              aria-disabled="true"
-              className="cursor-not-allowed opacity-60"
-            >
-              Upgrade or Renew
-            </Button>
-          </DisabledTooltip>
+          <Link href={upgradeHref} className={buttonVariants({ variant: 'outline' })}>Upgrade or Renew</Link>
         </>
       }
     />
