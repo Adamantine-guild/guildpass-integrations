@@ -39,6 +39,7 @@
     "../types/**/*.d.ts",
     "../scripts/sync-api-types.js",
     "./*.test.ts",
+    "./*.test.tsx",
     "../lib/api/live.ts",
     "../lib/api/errors.ts",
     "../lib/api/validators.ts",
