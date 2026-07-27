@@ -75,7 +75,7 @@ async function assignRoleOptimistically(
 
   try {
     await mutationFn()
-    reconcileMemberRoleCache(qc, { address: input.address, role: input.role, action: 'assign' })
+    reconcileMemberRoleCache(qc, { address: input.address, role: input.role, action: 'assign' }, 'guildpass-demo')
     return { outcome: 'success' }
   } catch (error) {
     for (const [key, data] of previousQueries) {
@@ -102,7 +102,7 @@ describe('Optimistic role assignment integration (#243)', () => {
       { address: ADDRESS, roles: ['member'], tier: 'standard', active: true },
     ]))
     const api = new MockAccessApi(ADDRESS)
-    const slowMutation = () => delay(50).then(() => api.assignRole(ADDRESS, 'moderator'))
+    const slowMutation = async () => { await delay(50); await api.assignRole(ADDRESS, 'moderator') }
 
     const pending = assignRoleOptimistically(qc, slowMutation, { address: ADDRESS, role: 'moderator' })
 
@@ -132,7 +132,7 @@ describe('Optimistic role assignment integration (#243)', () => {
     setMockRoleMutationFailure(true)
     const result = await assignRoleOptimistically(
       qc,
-      () => api.assignRole(ADDRESS, 'moderator'),
+      async () => { await api.assignRole(ADDRESS, 'moderator') },
       { address: ADDRESS, role: 'moderator' },
     )
 
@@ -154,7 +154,7 @@ describe('Optimistic role assignment integration (#243)', () => {
       { address: ADDRESS, roles: ['member'], tier: 'standard', active: true },
     ]))
     const api = new MockAccessApi(ADDRESS)
-    const slowMutation = () => delay(50).then(() => api.assignRole(ADDRESS, 'moderator'))
+    const slowMutation = async () => { await delay(50); await api.assignRole(ADDRESS, 'moderator') }
 
     const result = await assignRoleOptimistically(qc, slowMutation, {
       address: ADDRESS,

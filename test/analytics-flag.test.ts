@@ -58,6 +58,8 @@ const mockReactQuery = {
       roles: ['admin'],
       totalMembers: 100,
       activeMembers: 50,
+      memberGrowth: [{ date: '2026-01-01', newMembers: 3, totalMembers: 100 }],
+      accessAttempts: [{ resourceId: 'r1', resourceTitle: 'Res 1', accessCount: 10, deniedCount: 2 }],
       roleDistribution: [
         { role: 'member', count: 80 },
         { role: 'moderator', count: 15 },
@@ -302,10 +304,10 @@ describe('Analytics feature flag', () => {
       /Analytics is not available/,
       'analytics content must render when the flag is true and the session is authenticated',
     )
-    assert.match(html, /Total Members/)
+    assert.match(html, /Total members shown/)
     assert.match(html, /Role Distribution/)
-    assert.match(html, /Tier Distribution/)
-    assert.match(html, /New Members Over Time/)
+    assert.match(html, /Gated Resource Access/)
+    assert.match(html, /Membership Growth Over Time/)
     // No mention of the retired provisional-endpoint / mock-data caveat.
     assert.doesNotMatch(html, /pending backend confirmation/)
   })
