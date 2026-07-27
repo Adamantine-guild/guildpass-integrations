@@ -8,6 +8,10 @@ import {
 import { rateLimitRequest } from '@/lib/rate-limit'
 import { validateIntegrationGatewayCsrf } from '@/lib/csrf'
 import { isWalletAddress } from '@/lib/wallet/address'
+import {
+  resilientCall,
+  CircuitOpenError,
+} from '@/lib/integration/resilientCall'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -51,11 +55,20 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const membership = await fetchMembershipByWallet(address)
+    const membership = await resilientCall(
+      () => fetchMembershipByWallet(address),
+      { key: 'membership' },
+    )
     return NextResponse.json(membership)
   } catch (error) {
     console.error('[Integration Gateway Error]:', error)
 
+    if (error instanceof CircuitOpenError) {
+      return NextResponse.json(
+        { error: 'Integration gateway temporarily unavailable (circuit open).' },
+        { status: 503 },
+      )
+    }
     if (error instanceof GatewayConfigurationError) {
       return NextResponse.json(
         { error: 'Integration gateway misconfigured.' },
