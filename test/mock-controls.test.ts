@@ -1,6 +1,8 @@
 import './setup-env'
 import { describe, it, beforeEach } from 'node:test'
 import assert from 'node:assert'
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import {
   resetMockData,
   applyMockScenario,
@@ -10,6 +12,7 @@ import {
 } from '../lib/api/mock'
 import { getApi } from '../lib/api'
 import { isApiError } from '../lib/api/errors'
+import { adminRegistry, getAdminModule, getNavAdminModules } from '../lib/admin-modules'
 
 describe('Mock Controls', () => {
   const TEST_ADDRESS = '0x1234567890123456789012345678901234567890'
@@ -57,6 +60,97 @@ describe('Mock Controls', () => {
     const policies = await api.listPolicies()
     const alphaPolicy = policies.find(p => p.resourceId === 'alpha')
     assert.strictEqual(alphaPolicy?.minTier, 'standard')
+  })
+})
+
+describe('Multiple Roles scenario preset', () => {
+  const TEST_ADDRESS = '0x1234567890123456789012345678901234567890'
+
+  beforeEach(async () => {
+    await resetMockData()
+  })
+
+  it('appears in the Developer Controls preset list alongside the existing five', () => {
+    const source = readFileSync(
+      path.resolve(__dirname, '..', '..', 'app', '[communitySlug]', 'developer', 'page.tsx'),
+      'utf8',
+    )
+    assert.match(source, /id: 'multiple-roles'/)
+    assert.match(source, /label: 'Multiple Roles'/)
+    for (const id of [
+      'active-member',
+      'expired-member',
+      'denied-resource',
+      'admin-session-expired',
+      'no-roles',
+    ]) {
+      assert.match(source, new RegExp(`id: '${id}'`))
+    }
+  })
+
+  it('seeds at least two distinct roles', async () => {
+    await applyMockScenario('multiple-roles', TEST_ADDRESS)
+    const session = await getApi(TEST_ADDRESS).getSession()
+    assert.ok(new Set(session.roles).size >= 2)
+  })
+
+  it('seeds the exact expected role set (admin, moderator, member)', async () => {
+    await applyMockScenario('multiple-roles', TEST_ADDRESS)
+    const session = await getApi(TEST_ADDRESS).getSession()
+    assert.deepStrictEqual([...session.roles].sort(), ['admin', 'member', 'moderator'])
+  })
+
+  it('contains no duplicate roles', async () => {
+    await applyMockScenario('multiple-roles', TEST_ADDRESS)
+    const session = await getApi(TEST_ADDRESS).getSession()
+    assert.strictEqual(session.roles.length, new Set(session.roles).size)
+  })
+
+  it('preserves an active pro-tier membership so role-aware UI renders normally', async () => {
+    await applyMockScenario('multiple-roles', TEST_ADDRESS)
+    const session = await getApi(TEST_ADDRESS).getSession()
+    assert.strictEqual(session.membership?.tier, 'pro')
+    assert.strictEqual(session.membership?.active, true)
+  })
+
+  it('switching from No Roles to Multiple Roles replaces the empty role set', async () => {
+    await applyMockScenario('no-roles', TEST_ADDRESS)
+    assert.deepStrictEqual((await getApi(TEST_ADDRESS).getSession()).roles, [])
+
+    await applyMockScenario('multiple-roles', TEST_ADDRESS)
+    const session = await getApi(TEST_ADDRESS).getSession()
+    assert.deepStrictEqual([...session.roles].sort(), ['admin', 'member', 'moderator'])
+  })
+
+  it('switching away from Multiple Roles clears the extra roles', async () => {
+    await applyMockScenario('multiple-roles', TEST_ADDRESS)
+    await applyMockScenario('active-member', TEST_ADDRESS)
+    const session = await getApi(TEST_ADDRESS).getSession()
+    assert.deepStrictEqual(session.roles, ['member'])
+  })
+
+  it('leaves the other five presets behaving exactly as before', async () => {
+    await applyMockScenario('admin-session-expired', TEST_ADDRESS)
+    assert.deepStrictEqual((await getApi(TEST_ADDRESS).getSession()).roles, ['admin', 'member'])
+
+    await applyMockScenario('no-roles', TEST_ADDRESS)
+    assert.deepStrictEqual((await getApi(TEST_ADDRESS).getSession()).roles, [])
+
+    await applyMockScenario('active-member', TEST_ADDRESS)
+    assert.deepStrictEqual((await getApi(TEST_ADDRESS).getSession()).roles, ['member'])
+  })
+
+  it('role-aware nav logic receives the combined role list and unlocks admin nav items', async () => {
+    await applyMockScenario('multiple-roles', TEST_ADDRESS)
+    const session = await getApi(TEST_ADDRESS).getSession()
+
+    const navItems = getNavAdminModules({ roles: session.roles, prefix: '' })
+    assert.ok(navItems.length > 0)
+    assert.ok(navItems.some((item) => item.id === 'overview'))
+
+    const membersModule = getAdminModule('members')
+    assert.ok(membersModule)
+    assert.strictEqual(adminRegistry.hasRequiredRole(membersModule!, session.roles), true)
   })
 })
 

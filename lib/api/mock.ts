@@ -513,6 +513,7 @@ type MockScenario =
   | 'denied-resource'
   | 'admin-session-expired'
   | 'no-roles'
+  | 'multiple-roles'
   | 'multiple-communities'
   | 'concurrent-policy-edit'
   | 'customized-profile'
@@ -697,6 +698,29 @@ export async function applyMockScenario(scenario: MockScenario, address: string 
           address,
           displayName: 'No Roles User',
           badges: ['New User'],
+        },
+      }
+      break
+
+    case 'multiple-roles':
+      // 'admin' is included deliberately: it's the only role that changes
+      // nav/admin-console visibility in this codebase (every first-party
+      // module in lib/admin-modules/modules/*.ts requires it), so leaving it
+      // out would make role-aware nav unverifiable. It does not bypass
+      // tier-gated resource access (lib/api/access-decision.ts evaluates
+      // tier independently of role), so alpha/pro-reports stay genuinely
+      // tier-gated for this member.
+      demoState.memberStore[address] = {
+        membership: {
+          address,
+          tier: 'pro',
+          active: true,
+        },
+        roles: ['admin', 'moderator', 'member'],
+        profile: {
+          address,
+          displayName: 'Multi-Role Member',
+          badges: ['Admin', 'Moderator'],
         },
       }
       break
