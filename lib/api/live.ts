@@ -56,7 +56,7 @@ import {
   mapSession,
   mapWebhookEvent,
 } from './mappers'
-import { ApiError } from './errors'
+import { ApiError, AuthError, NetworkError } from './errors'
 import {
   validateCommunityResponse,
   validateMemberProfileResponse,
@@ -70,8 +70,19 @@ import {
   validateWebhookEventsResponse,
 } from './validators'
 
-/** Alias for ApiError — re-exported so admin pages can import AuthError from this module. */
-export { ApiError as AuthError } from './errors'
+/**
+ * Re-exported so admin pages can import these from this module.
+ * AuthError, NetworkError, isAuthError, isNetworkError, and categorizeError
+ * are now dedicated implementations in ./errors.
+ */
+export {
+  AuthError,
+  NetworkError,
+  isAuthError,
+  isNetworkError,
+  categorizeError,
+  type ErrorCategory,
+} from './errors'
 
 import { PolicyValidationError, validatePolicy } from '../validation/policy'
 import { ProfileValidationError, validateProfile } from '../validation/profile'
@@ -228,7 +239,7 @@ function createApiError(status: number, body?: ApiErrorBody, path?: string): Api
   }
 
   if (status === 401) {
-    return new ApiError({
+    return new AuthError({
       status,
       code: 'unauthorized',
       safeMessage: 'Session expired. Please sign in again.',
@@ -237,7 +248,7 @@ function createApiError(status: number, body?: ApiErrorBody, path?: string): Api
   }
 
   if (status === 403) {
-    return new ApiError({
+    return new AuthError({
       status,
       code: 'forbidden',
       safeMessage: 'You do not have permission to perform this action.',
@@ -531,10 +542,9 @@ async function getJson<T>(path: string, options: RequestOptions = {}): Promise<T
 
       // Wrap raw network errors (fetch throwing, not an HTTP error response)
       if (!(err instanceof ApiError)) {
-        const networkErr = new ApiError({
-          code: 'network_error',
+        const networkErr = new NetworkError({
           safeMessage: networkErrorMessage,
-          retryable: true,
+          path,
           cause: err,
         })
         if (retriesEnabled) {

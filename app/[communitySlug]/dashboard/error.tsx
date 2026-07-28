@@ -8,7 +8,7 @@ import {
   type ErrorCategory,
 } from '@/lib/api/errors'
 
-interface AdminErrorPageProps {
+interface DashboardErrorPageProps {
   error: Error & { digest?: string }
   reset: () => void
 }
@@ -16,36 +16,37 @@ interface AdminErrorPageProps {
 const categoryMeta: Record<ErrorCategory, { title: string; message: string; retryable: boolean }> =
   {
     network: {
-      title: 'Network issue',
+      title: 'Connection lost',
       message:
-        'Could not reach the admin server. Please check your connection and try again.',
+        'Unable to load your dashboard. Please check your internet connection and try again.',
       retryable: true,
     },
     auth: {
-      title: 'Admin session expired',
+      title: 'Session issue',
       message:
-        'Your admin session has expired or you do not have permission. Please re-authenticate with your wallet.',
+        'Your session could not be verified. Please reconnect your wallet.',
       retryable: false,
     },
     validation: {
-      title: 'Invalid response',
+      title: 'Data error',
       message:
-        'The server returned an unexpected response. This may be a temporary issue.',
+        'We received an unexpected response while loading your dashboard. This may be a temporary issue.',
       retryable: true,
     },
     unknown: {
       title: 'Something went wrong',
-      message: 'An unexpected error occurred in the admin area. Please try again.',
+      message:
+        'An unexpected error occurred while loading your dashboard. Please try again.',
       retryable: true,
     },
   }
 
-export default function AdminErrorPage({ error, reset }: AdminErrorPageProps) {
+export default function DashboardErrorPage({ error, reset }: DashboardErrorPageProps) {
   const category = categorizeError(error)
   const meta = categoryMeta[category]
 
   useEffect(() => {
-    console.error('[Admin Error]', {
+    console.error('[Dashboard Error]', {
       category,
       digest: error.digest,
       message: error.message,
@@ -75,11 +76,9 @@ export default function AdminErrorPage({ error, reset }: AdminErrorPageProps) {
           <Button
             size="sm"
             variant="outline"
-            onClick={() => {
-              window.location.href = `/${window.location.pathname.split('/')[1]}/admin`
-            }}
+            onClick={() => window.location.reload()}
           >
-            Return to admin home
+            Reconnect wallet
           </Button>
         )}
 

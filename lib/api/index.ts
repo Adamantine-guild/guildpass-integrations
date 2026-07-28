@@ -44,3 +44,16 @@ export {
   setMockResourceFetchFailure,
   setMockResourceFetchDelay,
 } from './mock'
+export {
+  ApiError,
+  AuthError,
+  NetworkError,
+  OfflineError,
+  isApiError,
+  isAuthError,
+  isNetworkError,
+  categorizeError,
+  type ErrorCategory,
+  type ApiErrorCode,
+  type ApiErrorOptions,
+} from './errors'
