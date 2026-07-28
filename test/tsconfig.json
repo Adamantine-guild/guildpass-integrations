@@ -46,6 +46,8 @@
     "../lib/api/role-removal.ts",
     "../lib/validation/policy.ts",
     "../lib/validation/profile.ts",
-    "../lib/api/analytics.ts"
+    "../lib/api/analytics.ts",
+    "../components/analytics/*.tsx",
+    "../app/analytics/*.tsx"
   ]
 }
