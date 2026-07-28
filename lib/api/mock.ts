@@ -409,6 +409,12 @@ export function getCommunityState(communityId: string = 'guildpass-demo'): Commu
       policies: [...(MOCK_POLICIES[normalizedId] ?? [])],
       webhookEvents: [...DEFAULT_WEBHOOK_EVENTS],
       memberStore: { ...(MOCK_MEMBER_STORES[normalizedId] ?? {}) },
+      memberStore: Object.fromEntries(
+        Object.entries(MOCK_MEMBER_STORES[normalizedId] ?? {}).map(([k, v]) => [
+          k,
+          { ...v, roles: [...v.roles], membership: { ...v.membership }, profile: { ...v.profile } }
+        ])
+      ),
       pendingActions: [],
     }
   }
@@ -464,6 +470,7 @@ const initPromise = loadPersistedState().then((persisted) => {
       policies: (persisted as any).policies || [...DEFAULT_POLICIES],
       webhookEvents: (persisted as any).webhookEvents || [...DEFAULT_WEBHOOK_EVENTS],
       memberStore: (persisted as any).memberStore || { ...DEFAULT_MEMBER_STORE },
+      pendingActions: (persisted as any).pendingActions || [],
     }
   }
   for (const cid of Object.keys(MOCK_COMMUNITIES)) {
@@ -507,6 +514,7 @@ type MockScenario =
   | 'denied-resource'
   | 'admin-session-expired'
   | 'no-roles'
+  | 'multiple-roles'
   | 'multiple-communities'
   | 'concurrent-policy-edit'
   | 'customized-profile'
@@ -594,6 +602,8 @@ export async function resetMockData() {
     getCommunityState(cid)
   }
   mockRoleMutationShouldFail = false
+  mockResourceFetchFailure = false
+  mockResourceFetchDelayMs = 0
   await clearPersistedState()
 }
 
@@ -689,6 +699,29 @@ export async function applyMockScenario(scenario: MockScenario, address: string 
           address,
           displayName: 'No Roles User',
           badges: ['New User'],
+        },
+      }
+      break
+
+    case 'multiple-roles':
+      // 'admin' is included deliberately: it's the only role that changes
+      // nav/admin-console visibility in this codebase (every first-party
+      // module in lib/admin-modules/modules/*.ts requires it), so leaving it
+      // out would make role-aware nav unverifiable. It does not bypass
+      // tier-gated resource access (lib/api/access-decision.ts evaluates
+      // tier independently of role), so alpha/pro-reports stay genuinely
+      // tier-gated for this member.
+      demoState.memberStore[address] = {
+        membership: {
+          address,
+          tier: 'pro',
+          active: true,
+        },
+        roles: ['admin', 'moderator', 'member'],
+        profile: {
+          address,
+          displayName: 'Multi-Role Member',
+          badges: ['Admin', 'Moderator'],
         },
       }
       break
@@ -828,6 +861,47 @@ let mockRoleMutationShouldFail = false
  */
 export function setMockRoleMutationFailure(shouldFail: boolean): void {
   mockRoleMutationShouldFail = shouldFail
+}
+
+/**
+ * When set, the next getResource()/getPolicy() call(s) simulate an
+ * operational failure instead of succeeding — used to verify loading and
+ * error-boundary behaviour in mock mode without a real backend.
+ * 'network' simulates a transport-level failure (fetch rejection);
+ * 'server' simulates an HTTP 5xx. Reset by resetMockData().
+ */
+let mockResourceFetchFailure: 'network' | 'server' | false = false
+
+/** Optional artificial delay (ms) applied before getResource()/getPolicy() resolve or fail. */
+let mockResourceFetchDelayMs = 0
+
+/**
+ * Toggle a simulated operational failure for getResource()/getPolicy().
+ * Mock-only — LiveAccessApi has no equivalent. Intended for tests and the
+ * /developer page, never application code.
+ */
+export function setMockResourceFetchFailure(mode: 'network' | 'server' | false): void {
+  mockResourceFetchFailure = mode
+}
+
+/** Set an artificial delay (ms) before getResource()/getPolicy() settle. Pass 0 to disable. */
+export function setMockResourceFetchDelay(ms: number): void {
+  mockResourceFetchDelayMs = ms
+}
+
+function mockResourceFetchError(): ApiError {
+  return mockResourceFetchFailure === 'network'
+    ? new ApiError({
+        code: 'network_error',
+        safeMessage: 'Unable to connect. Please check your connection and try again.',
+        retryable: true,
+      })
+    : new ApiError({
+        status: 500,
+        code: 'server_error',
+        safeMessage: 'The server could not complete the request. Please try again.',
+        retryable: true,
+      })
 }
 
 /** Throw a mock 500 ApiError — simulates an ordinary (non-auth) server failure. */
@@ -1010,6 +1084,10 @@ export class MockAccessApi implements AccessApi {
 
   async getResource(id: string, _signal?: AbortSignal): Promise<ResourceLookupResult> {
     await initPromise
+    if (mockResourceFetchDelayMs > 0) await new Promise((r) => setTimeout(r, mockResourceFetchDelayMs))
+    if (mockResourceFetchFailure) {
+      return { status: 'error', error: mockResourceFetchError() }
+    }
     const state = getCommunityState(this.communityId)
     const r = state.resources.find((x) => x.id === id)
     return r
@@ -1019,6 +1097,10 @@ export class MockAccessApi implements AccessApi {
 
   async getPolicy(resourceId: string, _signal?: AbortSignal): Promise<AccessPolicy | null> {
     await initPromise
+    if (mockResourceFetchDelayMs > 0) await new Promise((r) => setTimeout(r, mockResourceFetchDelayMs))
+    if (mockResourceFetchFailure) {
+      throw mockResourceFetchError()
+    }
     const state = getCommunityState(this.communityId)
     const p = state.policies.find((x) => x.resourceId === resourceId)
     return p ? { ...p, roles: p.roles ?? [] } : null
@@ -1112,6 +1194,9 @@ export class MockAccessApi implements AccessApi {
     
     if (!action.currentApprovals.includes(MOCK_ADMIN_ADDRESS)) {
       action.currentApprovals.push(MOCK_ADMIN_ADDRESS)
+    const adminAddr = this.address || '0x0000000000000000000000000000000000000001'
+    if (!action.currentApprovals.includes(adminAddr)) {
+      action.currentApprovals.push(adminAddr)
     }
     
     if (action.currentApprovals.length >= action.requiredApprovals) {
@@ -1149,16 +1234,20 @@ export class MockAccessApi implements AccessApi {
     await initPromise
     const state = getCommunityState(this.communityId)
     state.community.approvalConfig = config
+    const state = getCommunityState(this.communityId);
+    (state.community as any).approvalConfig = config
     schedulePersist()
   }
 
   private _checkApproval(type: PendingActionType, payload: PendingActionPayload): { status: 'executed' | 'pending'; pendingActionId?: string } {
     const state = getCommunityState(this.communityId)
     const config = state.community.approvalConfig
+    const config = (state.community as any).approvalConfig
     const required = config ? config[type] || 1 : 1
     
     if (required > 1) {
       const pendingActionId = `pa_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`
+      const adminAddr = this.address || '0x0000000000000000000000000000000000000001'
       state.pendingActions.push({
         id: pendingActionId,
         type,
@@ -1166,6 +1255,9 @@ export class MockAccessApi implements AccessApi {
         proposer: MOCK_ADMIN_ADDRESS,
         requiredApprovals: required,
         currentApprovals: [MOCK_ADMIN_ADDRESS],
+        proposer: adminAddr,
+        requiredApprovals: required,
+        currentApprovals: [adminAddr],
         status: 'pending',
         createdAt: new Date().toISOString()
       })
@@ -1531,7 +1623,7 @@ export class MockAccessApi implements AccessApi {
     }
   }
 
-  public analytics: import('./types').AnalyticsDataSource = {
+  public analytics: any = {
     getMembershipTrend: async (_signal?: AbortSignal) => {
       await initPromise;
       return MOCK_ANALYTICS_SUMMARY.memberGrowth;

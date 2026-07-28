@@ -35,6 +35,31 @@ export interface WebhookEventLog {
   isReplay?: boolean;
 }
 
+export interface ApprovalConfig {
+  assignRole: number
+  removeRole: number
+  updatePolicy: number
+}
+
+export type PendingActionType = 'assignRole' | 'removeRole' | 'updatePolicy'
+
+export interface PendingActionPayload {
+  address?: string
+  role?: string
+  policy?: AccessPolicy
+}
+
+export interface PendingAction {
+  id: string
+  type: PendingActionType
+  payload: PendingActionPayload
+  proposer: string
+  requiredApprovals: number
+  currentApprovals: string[]
+  status: 'pending' | 'approved' | 'rejected' | 'executed'
+  createdAt: string
+}
+
 export interface WalletVerification {
   verified: boolean
   method?: string
@@ -299,10 +324,14 @@ export interface AdminAccessApi {
    * @provisional Calls \`GET /v1/admin/analytics\` — endpoint not yet live in
    * guildpass-core. Contract tracked in issue #157; pending backend confirmation.
    */
-  getAnalyticsSummary(signal?: AbortSignal): Promise<AnalyticsSummary>
-  assignRole(address: string, role: Role): Promise<void>
-  removeRole(address: string, role: Role): Promise<void>
-  updatePolicy(policy: AccessPolicy): Promise<void>
+  getPendingActions(): Promise<PendingAction[]>
+  approveAction(id: string): Promise<void>
+  rejectAction(id: string): Promise<void>
+  updateApprovalConfig(config: ApprovalConfig): Promise<void>
+  
+  assignRole(address: string, role: Role): Promise<{ status: 'executed' | 'pending'; pendingActionId?: string }>
+  removeRole(address: string, role: Role): Promise<{ status: 'executed' | 'pending'; pendingActionId?: string }>
+  updatePolicy(policy: AccessPolicy): Promise<{ status: 'executed' | 'pending'; pendingActionId?: string }>
 
   // ── Moderation Queue ──
   listReports(signal?: AbortSignal): Promise<ModerationReport[]>

@@ -7,7 +7,7 @@
 
 "use client";
 
-import { useState } from "react";
+import { useState, useId } from "react";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/select";
 import { applyMockScenario, resetMockData } from "@/lib/api/mock";
@@ -38,6 +38,7 @@ export function ScenarioSelector() {
   const [selectedScenario, setSelectedScenario] = useState<MockScenario>('active-member');
   const [isApplying, setIsApplying] = useState(false);
   const [message, setMessage] = useState("");
+  const selectId = useId();
 
   // Only show in mock mode
   if (config.apiMode !== 'mock') {
@@ -84,16 +85,25 @@ export function ScenarioSelector() {
   };
 
   return (
-    <div className="rounded-lg border border-blue-500/50 bg-blue-500/10 p-4 space-y-3">
+    <div
+      role="region"
+      aria-label="Mock Scenario Tester"
+      className="rounded-lg border border-blue-500/50 bg-blue-500/10 p-4 space-y-3"
+    >
       <div className="flex items-center gap-2">
-        <span className="text-sm font-medium">🧪 Mock Scenario Tester</span>
+        <label htmlFor={selectId} className="text-sm font-medium cursor-pointer">
+          🧪 Mock Scenario Tester
+        </label>
       </div>
       
       <div className="space-y-2">
         <Select
+          id={selectId}
+          aria-label="Select mock scenario"
           value={selectedScenario}
           onChange={(e) => setSelectedScenario(e.target.value as MockScenario)}
           disabled={isApplying}
+          aria-disabled={isApplying}
           className="w-full"
         >
           {Object.entries(SCENARIOS).map(([key, label]) => (
@@ -109,6 +119,8 @@ export function ScenarioSelector() {
             size="sm"
             onClick={handleApply}
             disabled={isApplying}
+            aria-disabled={isApplying}
+            aria-busy={isApplying}
             className="flex-1"
           >
             {isApplying ? "Applying..." : "Apply Scenario"}
@@ -119,18 +131,19 @@ export function ScenarioSelector() {
             variant="outline"
             onClick={handleReset}
             disabled={isApplying}
+            aria-disabled={isApplying}
           >
             Reset
           </Button>
         </div>
         
         {message && (
-          <p className="text-xs text-muted-foreground">{message}</p>
+          <p role="status" aria-live="polite" className="text-xs text-muted-foreground">{message}</p>
         )}
       </div>
       
       <div className="text-xs text-muted-foreground">
-        <strong>Concurrent Policy Edit:</strong> Sets the "alpha" policy as recently modified
+        <strong>Concurrent Policy Edit:</strong> Sets the &quot;alpha&quot; policy as recently modified
         by another admin, triggering a conflict when you try to save.
       </div>
     </div>

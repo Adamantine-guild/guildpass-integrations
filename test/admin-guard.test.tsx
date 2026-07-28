@@ -19,35 +19,47 @@ const futureExpiry = new Date(Date.now() + 60 * 60 * 1000).toISOString()
 let mockAuthState: MockAuthState
 let mockSession: Session | undefined
 
-const providers = require('../lib/wallet/providers') as ProvidersModule
-const wagmi = require('wagmi') as WagmiModule
-const reactQuery = require('@tanstack/react-query') as ReactQueryModule
+const providersPath = require.resolve('../lib/wallet/providers')
+const wagmiPath = require.resolve('wagmi')
+const reactQueryPath = require.resolve('@tanstack/react-query')
 
-const originalUseSiweAuth = providers.useSiweAuth
-const originalUseAccount = wagmi.useAccount
-const originalUseQuery = reactQuery.useQuery
+const mockProviders = {
+  useSiweAuth: () => ({
+    authSession: null,
+    isAuthenticated: false,
+    sessionStatus: 'disconnected',
+    status: 'disconnected',
+    timeLeft: 0,
+    isSigningIn: false,
+    error: null,
+    signIn: async () => {},
+    login: async () => {},
+    logout: async () => {},
+    markExpired: () => {},
+    ...mockAuthState,
+  }),
+}
 
-;(providers as unknown as { useSiweAuth: ProvidersModule['useSiweAuth'] }).useSiweAuth = (() => ({
-  authSession: null,
-  isAuthenticated: false,
-  sessionStatus: 'disconnected',
-  status: 'disconnected',
-  timeLeft: 0,
-  isSigningIn: false,
-  error: null,
-  signIn: async () => {},
-  login: async () => {},
-  logout: async () => {},
-  markExpired: () => {},
-  ...mockAuthState,
-})) as ProvidersModule['useSiweAuth']
+const mockWagmi = {
+  useAccount: () => ({
+    address: mockAuthState?.sessionStatus === 'disconnected' ? undefined : ADDRESS,
+    isConnected: mockAuthState?.sessionStatus !== 'disconnected',
+  }),
+}
 
-(wagmi as unknown as { useAccount: WagmiModule['useAccount'] }).useAccount = (() => ({
-  address: mockAuthState?.sessionStatus === 'disconnected' ? undefined : ADDRESS,
-  isConnected: mockAuthState?.sessionStatus !== 'disconnected',
-})) as WagmiModule['useAccount']
+const mockReactQuery = {
+  useQuery: () => ({
+    data: mockSession !== undefined ? mockSession : { roles: ['admin'] },
+    isLoading: false,
+    isError: false,
+    error: null,
+  }),
+  queryKeys: { session: { byAddress: () => ['session'] } },
+}
 
-(reactQuery as unknown as { useQuery: ReactQueryModule['useQuery'] }).useQuery = ((() => ({ data: mockSession })) as unknown) as ReactQueryModule['useQuery']
+require.cache[providersPath] = { id: providersPath, loaded: true, exports: mockProviders } as any
+require.cache[wagmiPath] = { id: wagmiPath, loaded: true, exports: mockWagmi } as any
+require.cache[reactQueryPath] = { id: reactQueryPath, loaded: true, exports: mockReactQuery } as any
 
 const { AdminGuard } = require('../components/admin-guard') as AdminGuardModule
 
@@ -138,10 +150,4 @@ describe('AdminGuard layered access checks', () => {
     assert.doesNotMatch(html, /SIWE Authentication Required/)
     assert.doesNotMatch(html, /Admin Role Required/)
   })
-})
-
-after(() => {
-  (providers as unknown as { useSiweAuth: ProvidersModule['useSiweAuth'] }).useSiweAuth = originalUseSiweAuth
-  (wagmi as unknown as { useAccount: WagmiModule['useAccount'] }).useAccount = originalUseAccount
-  (reactQuery as unknown as { useQuery: ReactQueryModule['useQuery'] }).useQuery = originalUseQuery
 })

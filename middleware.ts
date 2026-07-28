@@ -19,7 +19,7 @@ export function middleware(request: NextRequest) {
 
   const pathSegments = pathname.split('/').filter(Boolean)
   const firstSegment = pathSegments[0]
-  const communityRoutes = ['dashboard', 'admin', 'developer', 'events', 'resources']
+  const communityRoutes = ['dashboard', 'admin', 'developer', 'events', 'resources', 'upgrade']
 
   if (!isMultiCommunity) {
     // ── MULTI-COMMUNITY DISABLED ─────────────────────────────────────────────

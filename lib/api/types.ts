@@ -252,17 +252,6 @@ export const ResourceAccessCountSchema = z.object({
   deniedCount: z.number(),
 })
 
-export interface RoleDistributionEntry {
-  role: Role
-  count: number
-}
-
-export interface AnalyticsDataSource {
-  getMembershipTrend(signal?: AbortSignal): Promise<MemberGrowthDataPoint[]>
-  getRoleDistribution(signal?: AbortSignal): Promise<RoleDistributionEntry[]>
-  getAccessAttempts(signal?: AbortSignal): Promise<ResourceAccessCount[]>
-}
-
 export interface AnalyticsSummary {
   totalMembers: number
   activeMembers: number
@@ -421,6 +410,31 @@ export interface WebhookEventLog {
   fullPayload?: Record<string, unknown>;
   /** True when this entry was injected via the replay/debug tool rather than ingested from a real webhook. */
   isReplay?: boolean;
+}
+
+export interface ApprovalConfig {
+  assignRole: number
+  removeRole: number
+  updatePolicy: number
+}
+
+export type PendingActionType = 'assignRole' | 'removeRole' | 'updatePolicy'
+
+export interface PendingActionPayload {
+  address?: string
+  role?: string
+  policy?: AccessPolicy
+}
+
+export interface PendingAction {
+  id: string
+  type: PendingActionType
+  payload: PendingActionPayload
+  proposer: string
+  requiredApprovals: number
+  currentApprovals: string[]
+  status: 'pending' | 'approved' | 'rejected' | 'executed'
+  createdAt: string
 }
 
 export interface WalletVerification {
@@ -669,7 +683,6 @@ export interface MemberAccessApi {
  */
 export interface AdminAccessApi {
   // ── Admin queries & mutations (require a valid SIWE token context) ────────
-  listAdminEvents(params?: AdminEventFilterParams): Promise<Paginated<WebhookEvent>>
   listWebhookEvents(signal?: AbortSignal): Promise<WebhookEventLog[]>
   /**
    * Subscribe to the admin webhook event stream.
@@ -702,9 +715,6 @@ export interface AdminAccessApi {
   listReports(signal?: AbortSignal): Promise<ModerationReport[]>
   getReport(id: string, signal?: AbortSignal): Promise<ModerationReport | null>
   updateReportState(id: string, state: ModerationState, updates?: Partial<ModerationReport>): Promise<void>
-  
-  // Analytics
-  analytics: AnalyticsDataSource
 }
 
 /**

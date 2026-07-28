@@ -4,11 +4,13 @@ import { useParams } from 'next/navigation';
 import { useAccount } from 'wagmi';
 import { useQuery } from '@tanstack/react-query';
 import { getApi } from '@/lib/api';
-import { queryKeys } from '@/lib/query';
+import { queryKeys, retryOnApiError } from '@/lib/query';
 import { Gated, AccessDenied } from '@/components/gated';
 import { FeatureGate } from '@/components/feature-gate';
-import { LoadingState, ErrorState, safeErrorMessage } from '@/components/ui/api-states';
+import { ErrorState, safeErrorMessage } from '@/components/ui/api-states';
 import { ResourceContentRenderer } from '@/components/resources/resource-content-renderer';
+import { ResourcePageSkeleton } from '@/components/resources/resource-page-skeleton';
+import { Card, CardHeader, CardContent } from '@/components/ui/card';
 import { features } from '@/lib/features';
 import { EmptyState } from "@/components/ui/api-states";
 
@@ -21,21 +23,29 @@ export default function DynamicResourceDocs() {
   const {
     data: resourceResult,
     isLoading: resourceLoading,
+    isFetching: resourceFetching,
     refetch,
   } = useQuery({
     queryKey: queryKeys.resources.detail(resourceId, communitySlug),
     queryFn: () => getApi(address, undefined, communitySlug).getResource(resourceId),
     enabled: !!resourceId && !!address,
-    retry: 1,
+    retry: retryOnApiError(),
   });
 
   const resource = resourceResult?.status === 'found' ? resourceResult.data : undefined;
 
-  const { data: policy, isLoading: policyLoading } = useQuery({
+  const {
+    data: policy,
+    isLoading: policyLoading,
+    isError: policyIsError,
+    error: policyError,
+    isFetching: policyFetching,
+    refetch: refetchPolicy,
+  } = useQuery({
     queryKey: queryKeys.policies.byResource(resourceId, communitySlug),
     queryFn: () => getApi(address, undefined, communitySlug).getPolicy(resourceId),
     enabled: !!resourceId && !!address && resourceResult?.status === 'found',
-    retry: 1,
+    retry: retryOnApiError(),
   });
 
   const effectiveMinTier = useMemo(() => {
@@ -53,7 +63,7 @@ export default function DynamicResourceDocs() {
   if (resourceLoading || policyLoading) {
     return (
       <FeatureGate enabled={features.resources} name="Resources">
-        <LoadingState message="Loading resource…" />
+        <ResourcePageSkeleton />
       </FeatureGate>
     );
   }
@@ -65,12 +75,26 @@ export default function DynamicResourceDocs() {
           title="Could not load resource"
           message={safeErrorMessage(resourceResult.error)}
           onRetry={() => refetch()}
+          retrying={resourceFetching}
         />
       </FeatureGate>
     );
   }
 
-  if (!resource) {
+  if (policyIsError) {
+    return (
+      <FeatureGate enabled={features.resources} name="Resources">
+        <ErrorState
+          title="Could not load access requirements"
+          message={safeErrorMessage(policyError)}
+          onRetry={() => refetchPolicy()}
+          retrying={policyFetching}
+        />
+      </FeatureGate>
+    );
+  }
+
+  if (resourceResult?.status === 'not_found' || !resource) {
     return (
       <FeatureGate enabled={features.resources} name="Resources">
         <EmptyState
@@ -89,19 +113,23 @@ export default function DynamicResourceDocs() {
         rule={policy?.rule}
         resourceId={resourceId}
       >
-        <div className="space-y-2">
-          <h1 className="text-2xl font-semibold">{resource.title}</h1>
-          <p className="text-muted-foreground">
-            {resource.description ? `${resource.description}. ` : ''}
-            This page is gated at{' '}
-            {effectiveMinTier
-              ? `${effectiveMinTier.charAt(0).toUpperCase()}${effectiveMinTier.slice(1)}`
-              : 'Standard'}{' '}
-            tier and above.
-          </p>
+        <Card>
+          <CardHeader>
+            <h1 className="text-2xl font-semibold">{resource.title}</h1>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            <p className="text-muted-foreground">
+              {resource.description ? `${resource.description}. ` : ''}
+              This page is gated at{' '}
+              {effectiveMinTier
+                ? `${effectiveMinTier.charAt(0).toUpperCase()}${effectiveMinTier.slice(1)}`
+                : 'Standard'}{' '}
+              tier and above.
+            </p>
 
-          <ResourceContentRenderer content={resource.content} />
-        </div>
+            <ResourceContentRenderer content={resource.content} />
+          </CardContent>
+        </Card>
       </Gated>
     </FeatureGate>
   );

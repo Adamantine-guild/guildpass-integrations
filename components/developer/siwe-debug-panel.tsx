@@ -72,6 +72,8 @@ export function SiweDebugPanel() {
             variant="outline"
             onClick={() => setOpen((v) => !v)}
             aria-expanded={open}
+            aria-controls="siwe-debug-content"
+            aria-label={open ? 'Hide SIWE debug panel' : 'Show SIWE debug panel'}
           >
             {open ? 'Hide' : 'Show'}
           </Button>
@@ -79,7 +81,7 @@ export function SiweDebugPanel() {
       </CardHeader>
 
       {open && (
-        <CardContent className="grid gap-4">
+        <CardContent id="siwe-debug-content" role="status" aria-live="polite" className="grid gap-4">
           {entry === null ? (
             <p className="text-sm text-muted-foreground">
               No sign-in captured yet. Trigger a SIWE sign-in to populate this
@@ -92,7 +94,11 @@ export function SiweDebugPanel() {
                   <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                     Raw message
                   </div>
-                  <Button variant="outline" onClick={handleCopy}>
+                  <Button
+                    variant="outline"
+                    onClick={handleCopy}
+                    aria-label="Copy SIWE message to clipboard"
+                  >
                     {copied ? 'Copied' : 'Copy message'}
                   </Button>
                 </div>
