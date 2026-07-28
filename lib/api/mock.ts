@@ -600,6 +600,8 @@ export async function resetMockData() {
     getCommunityState(cid)
   }
   mockRoleMutationShouldFail = false
+  mockResourceFetchFailure = false
+  mockResourceFetchDelayMs = 0
   await clearPersistedState()
 }
 
@@ -836,6 +838,47 @@ export function setMockRoleMutationFailure(shouldFail: boolean): void {
   mockRoleMutationShouldFail = shouldFail
 }
 
+/**
+ * When set, the next getResource()/getPolicy() call(s) simulate an
+ * operational failure instead of succeeding — used to verify loading and
+ * error-boundary behaviour in mock mode without a real backend.
+ * 'network' simulates a transport-level failure (fetch rejection);
+ * 'server' simulates an HTTP 5xx. Reset by resetMockData().
+ */
+let mockResourceFetchFailure: 'network' | 'server' | false = false
+
+/** Optional artificial delay (ms) applied before getResource()/getPolicy() resolve or fail. */
+let mockResourceFetchDelayMs = 0
+
+/**
+ * Toggle a simulated operational failure for getResource()/getPolicy().
+ * Mock-only — LiveAccessApi has no equivalent. Intended for tests and the
+ * /developer page, never application code.
+ */
+export function setMockResourceFetchFailure(mode: 'network' | 'server' | false): void {
+  mockResourceFetchFailure = mode
+}
+
+/** Set an artificial delay (ms) before getResource()/getPolicy() settle. Pass 0 to disable. */
+export function setMockResourceFetchDelay(ms: number): void {
+  mockResourceFetchDelayMs = ms
+}
+
+function mockResourceFetchError(): ApiError {
+  return mockResourceFetchFailure === 'network'
+    ? new ApiError({
+        code: 'network_error',
+        safeMessage: 'Unable to connect. Please check your connection and try again.',
+        retryable: true,
+      })
+    : new ApiError({
+        status: 500,
+        code: 'server_error',
+        safeMessage: 'The server could not complete the request. Please try again.',
+        retryable: true,
+      })
+}
+
 /** Throw a mock 500 ApiError — simulates an ordinary (non-auth) server failure. */
 function throwMockRoleMutationFailure(): never {
   throw new ApiError({
@@ -1016,6 +1059,10 @@ export class MockAccessApi implements AccessApi {
 
   async getResource(id: string, _signal?: AbortSignal): Promise<ResourceLookupResult> {
     await initPromise
+    if (mockResourceFetchDelayMs > 0) await new Promise((r) => setTimeout(r, mockResourceFetchDelayMs))
+    if (mockResourceFetchFailure) {
+      return { status: 'error', error: mockResourceFetchError() }
+    }
     const state = getCommunityState(this.communityId)
     const r = state.resources.find((x) => x.id === id)
     return r
@@ -1025,6 +1072,10 @@ export class MockAccessApi implements AccessApi {
 
   async getPolicy(resourceId: string, _signal?: AbortSignal): Promise<AccessPolicy | null> {
     await initPromise
+    if (mockResourceFetchDelayMs > 0) await new Promise((r) => setTimeout(r, mockResourceFetchDelayMs))
+    if (mockResourceFetchFailure) {
+      throw mockResourceFetchError()
+    }
     const state = getCommunityState(this.communityId)
     const p = state.policies.find((x) => x.resourceId === resourceId)
     return p ? { ...p, roles: p.roles ?? [] } : null
