@@ -30,6 +30,8 @@
     "../lib/wallet/chains.ts",
     "../lib/wallet/config.ts",
     "../lib/wallet/connectors.ts",
+    "../lib/config-validation.js",
+    "../lib/wallet/validation.js",
     "../lib/wallet/siwe-session.ts",
     "../lib/config.ts",
     "../lib/features.ts",

@@ -11,6 +11,12 @@
  *   if (config.apiMode === 'live') { ... }
  */
 
+import {
+  ConfigError,
+  buildAppConfig as buildValidatedAppConfig,
+  type EnvSource,
+} from './config-validation.js'
+
 export type ApiMode = 'mock' | 'live'
 
 export interface SiweConfig {
@@ -56,155 +62,12 @@ export interface AppConfig {
   apiValidationLogOnly: boolean
 }
 
-// ── Error type ────────────────────────────────────────────────────────────────
-
-export class ConfigError extends Error {
-  constructor(message: string) {
-    super(message)
-    this.name = 'ConfigError'
-  }
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-function env(name: string): string | undefined {
-  return process.env[name]
-}
-
-function isDev(): boolean {
-  return process.env.NODE_ENV === 'development'
-}
-
-function requireEnv(name: string, message: string): string {
-  const value = env(name)
-  if (!value) {
-    throw new ConfigError(message)
-  }
-  return value
-}
-
-function validateUrl(value: string, name: string): string {
-  try {
-    new URL(value)
-    return value
-  } catch {
-    throw new ConfigError(`${name} must be a valid URL, got "${value}"`)
-  }
-}
-
-/**
- * The EIP-4361 statement field is a single line embedded in the message the
- * user signs. Newlines/control characters would break the message format, and
- * an excessively long statement is unreadable in wallet UIs.
- */
-const SIWE_STATEMENT_MAX_LENGTH = 200
-// eslint-disable-next-line no-control-regex
-const CONTROL_CHARS = /[\u0000-\u001f\u007f]/
-
-function validateSiweStatement(value: string): string {
-  if (CONTROL_CHARS.test(value)) {
-    throw new ConfigError(
-      'NEXT_PUBLIC_SIWE_STATEMENT must be a single line without control ' +
-        'characters (no \\n, \\r, tabs, etc.) — the EIP-4361 statement field ' +
-        'is single-line.',
-    )
-  }
-  if (value.length > SIWE_STATEMENT_MAX_LENGTH) {
-    throw new ConfigError(
-      `NEXT_PUBLIC_SIWE_STATEMENT must be at most ${SIWE_STATEMENT_MAX_LENGTH} ` +
-        `characters (got ${value.length}) so the signing message stays ` +
-        'readable in wallet UIs.',
-    )
-  }
-  return value
-}
-
-// ── Mode ──────────────────────────────────────────────────────────────────────
-
-function parseApiMode(): ApiMode {
-  const mock = env('NEXT_PUBLIC_MOCK_MODE')
-  const demo = env('NEXT_PUBLIC_DEMO_MODE')
-  return mock === 'true' || demo === 'true' ? 'mock' : 'live'
-}
+export { ConfigError }
 
 // ── Build config ──────────────────────────────────────────────────────────────
 
-const apiMode = parseApiMode()
-
-const apiUrl: string = (() => {
-  if (apiMode === 'live') {
-    const url = requireEnv(
-      'NEXT_PUBLIC_CORE_API_URL',
-      [
-        'NEXT_PUBLIC_CORE_API_URL is required when API mode is "live".',
-        '',
-        '  Either set NEXT_PUBLIC_CORE_API_URL to the base URL of your',
-        '  guildpass-core instance (e.g. http://localhost:4000), or set',
-        '  NEXT_PUBLIC_MOCK_MODE=true for local development without a backend.',
-        '',
-        '  See .env.example for details.',
-      ].join('\n'),
-    )
-    return validateUrl(url, 'NEXT_PUBLIC_CORE_API_URL')
-  }
-  return env('NEXT_PUBLIC_CORE_API_URL') || 'http://localhost:4000'
-})()
-
-const warningMinutesEnv = env('NEXT_PUBLIC_SIWE_WARNING_MINUTES')
-const warningSecondsEnv = env('NEXT_PUBLIC_SIWE_WARNING_SECONDS')
-const warningThresholdSeconds = warningSecondsEnv
-  ? Number(warningSecondsEnv)
-  : warningMinutesEnv
-    ? Number(warningMinutesEnv) * 60
-    : 120
-
-const siwe: SiweConfig = {
-  domain: env('NEXT_PUBLIC_SIWE_DOMAIN') ?? 'localhost:3000',
-  statement: validateSiweStatement(
-    env('NEXT_PUBLIC_SIWE_STATEMENT') ?? 'Sign in to GuildPass Admin',
-  ),
-  warningThresholdSeconds: Number.isNaN(warningThresholdSeconds) ? 120 : warningThresholdSeconds,
+export function buildAppConfig(source: EnvSource = process.env): AppConfig {
+  return buildValidatedAppConfig(source) as AppConfig
 }
 
-const isMock = apiMode === 'mock'
-
-function flag(varName: string, defaultVal: boolean): boolean {
-  const val = env(varName)
-  if (val === undefined || val === '') return defaultVal
-  return val === 'true'
-}
-
-const integrationGateway: IntegrationGatewayConfig = {
-  allowedOrigin: env('INTEGRATION_ALLOWED_ORIGIN'),
-}
-
-const features: FeatureFlags = {
-  adminPolicies: flag('NEXT_PUBLIC_FEATURE_ADMIN_POLICIES', true),
-  // Advanced admin tooling (community settings). Persistence is deferred for the
-  // MVP, so this defaults on only in mock/demo mode and stays off in live until
-  // the settings backend ships.
-  adminSettings: flag('NEXT_PUBLIC_FEATURE_ADMIN_SETTINGS', isMock),
-  events: flag('NEXT_PUBLIC_FEATURE_EVENTS', isMock),
-  analytics: flag('NEXT_PUBLIC_FEATURE_ANALYTICS', false),
-  resources: flag('NEXT_PUBLIC_FEATURE_RESOURCES', true),
-  governance: flag('NEXT_PUBLIC_FEATURE_GOVERNANCE', false),
-  rewards: flag('NEXT_PUBLIC_FEATURE_REWARDS', false),
-  // Multi-community support is not implemented — this only reserves nav
-  // space with a disabled switcher stub. Keep false in every environment
-  // until real multi-community logic ships.
-  multiCommunity: flag('NEXT_PUBLIC_FEATURE_MULTI_COMMUNITY', false),
-  // Rich profile customization / public profile view (#254) — deferred module,
-  // off in every environment (including mock) until explicitly enabled.
-  profiles: flag('NEXT_PUBLIC_FEATURE_PROFILES', false),
-}
-
-export const config: AppConfig = Object.freeze({
-  apiMode,
-  apiUrl,
-  siwe: Object.freeze(siwe),
-  features: Object.freeze(features),
-  integrationGateway: Object.freeze(integrationGateway),
-  get apiValidationLogOnly() {
-    return flag('NEXT_PUBLIC_API_VALIDATION_LOG_ONLY', false)
-  },
-})
+export const config: AppConfig = buildAppConfig()
