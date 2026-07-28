@@ -47,37 +47,11 @@ export const WebhookEventLogSchema = z.object({
   payloadSummary: WebhookPayloadSummarySchema,
 })
 
-export interface ApprovalConfig {
-  assignRole: number
-  removeRole: number
-  updatePolicy: number
-}
-
-export type PendingActionType = 'assignRole' | 'removeRole' | 'updatePolicy'
-
-export interface PendingActionPayload {
-  address?: string
-  role?: string
-  policy?: AccessPolicy
-}
-
-export interface PendingAction {
-  id: string
-  type: PendingActionType
-  payload: PendingActionPayload
-  proposer: string
-  requiredApprovals: number
-  currentApprovals: string[] // List of admin addresses who approved
-  status: 'pending' | 'approved' | 'rejected' | 'executed'
-  createdAt: string
-}
-
 export interface Community {
   id: string
   name: string
   description?: string
   tiers: MembershipTier[]
-  approvalConfig?: ApprovalConfig
 }
 
 export const CommunitySchema = z.object({
@@ -217,6 +191,7 @@ export interface MemberRow {
   roles: Role[]
   tier: MembershipTier
   active: boolean
+  displayName?: string
 }
 
 export const MemberRowSchema = z.object({
@@ -224,6 +199,7 @@ export const MemberRowSchema = z.object({
   roles: z.array(RoleSchema),
   tier: MembershipTierSchema,
   active: z.boolean(),
+  displayName: z.string().optional(),
 })
 
 export interface MemberGrowthDataPoint {
@@ -701,7 +677,6 @@ export interface AdminAccessApi {
    * @provisional Calls `GET /v1/admin/analytics` — endpoint not yet live in
    * guildpass-core. Contract tracked in issue #157; pending backend confirmation.
    */
-  getAnalyticsSummary(signal?: AbortSignal): Promise<AnalyticsSummary>
   getPendingActions(): Promise<PendingAction[]>
   approveAction(id: string): Promise<void>
   rejectAction(id: string): Promise<void>
