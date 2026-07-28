@@ -27,6 +27,7 @@
     "../lib/rate-limit.ts",
     "../lib/api/mock.ts",
     "../lib/wallet/address.ts",
+    "../lib/wallet/chains.ts",
     "../lib/wallet/config.ts",
     "../lib/wallet/connectors.ts",
     "../lib/wallet/siwe-session.ts",
