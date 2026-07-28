@@ -3,16 +3,19 @@ import { ReactNode, useMemo } from 'react'
 import { useAccount } from 'wagmi'
 import { useQuery } from '@tanstack/react-query'
 import { getApi, type AccessRule, type MembershipTier, type Role } from '@/lib/api'
+import { isApiError } from '@/lib/api/errors'
 import { computeAccessDecision } from '@/lib/api/access-decision'
 import {
   accessKeys,
   queryKeys,
+  retryOnApiError,
   ACCESS_DECISION_STALE_TIME,
   ACCESS_DECISION_GC_TIME,
 } from '@/lib/query'
 import Link from 'next/link'
 import { buttonVariants } from './ui/button'
 import { LoadingState, ErrorState, DeniedState, safeErrorMessage } from './ui/api-states'
+import { useParams } from 'next/navigation'
 
 export function Gated({
   children,
@@ -29,28 +32,51 @@ export function Gated({
   resourceId?: string
 }) {
   const { address, chain } = useAccount()
+  const params = useParams()
+  const communitySlug = (params?.communitySlug as string) || 'guildpass-demo'
   const env = String(chain?.id ?? 1)
   const hasExplicitRequirements = minTier !== undefined || roles !== undefined || rule !== undefined
 
-  const { data: session, isLoading: sessionLoading, isError, error, refetch } = useQuery({
-    queryKey: queryKeys.session.byAddress(address ?? ''),
-    queryFn: () => getApi(address).getSession(),
+  const {
+    data: session,
+    isLoading: sessionLoading,
+    isError,
+    error,
+    isFetching: sessionFetching,
+    refetch,
+  } = useQuery({
+    queryKey: queryKeys.session.byAddress(address ?? '', communitySlug),
+    queryFn: ({ signal }) => getApi(address, undefined, communitySlug).getSession(signal),
     enabled: !!address,
-    retry: 1,
+    retry: retryOnApiError(),
   })
 
-  const { data: policies, isLoading: policiesLoading } = useQuery({
-    queryKey: queryKeys.policies.all,
-    queryFn: () => getApi(address).listPolicies(),
+  const {
+    data: policies,
+    isLoading: policiesLoading,
+    isError: policiesIsError,
+    error: policiesError,
+    isFetching: policiesFetching,
+    refetch: refetchPolicies,
+  } = useQuery({
+    queryKey: queryKeys.policies.all(communitySlug),
+    queryFn: ({ signal }) => getApi(address, undefined, communitySlug).listPolicies(signal),
     enabled: !!address && !hasExplicitRequirements && !!resourceId,
-    retry: 1,
+    retry: retryOnApiError(),
   })
 
-  const { data: resources, isLoading: resourcesLoading } = useQuery({
-    queryKey: queryKeys.resources.all,
-    queryFn: () => getApi(address).listResources(),
+  const {
+    data: resources,
+    isLoading: resourcesLoading,
+    isError: resourcesIsError,
+    error: resourcesError,
+    isFetching: resourcesFetching,
+    refetch: refetchResources,
+  } = useQuery({
+    queryKey: queryKeys.resources.all(communitySlug),
+    queryFn: ({ signal }) => getApi(address, undefined, communitySlug).listResources(signal),
     enabled: !!address && !hasExplicitRequirements && !!resourceId,
-    retry: 1,
+    retry: retryOnApiError(),
   })
 
   const dynamicPolicy = useMemo(() => {
@@ -103,39 +129,66 @@ export function Gated({
   const isLoading = resourceId ? (sessionLoading || decisionLoading || isRequirementsLoading) : sessionLoading
 
   if (!address) {
-    return <AccessDenied reason="Please connect your wallet to continue." />
+    return <AccessDenied reason="Connect your wallet to check access." resourceId={resourceId} />
   }
 
   if (isLoading) {
     return <LoadingState message="Checking access…" />
   }
 
-  if (isError) {
+  if (isError && !(isApiError(error) && error.code === 'aborted')) {
     return (
       <ErrorState
         title="Could not verify access"
         message={safeErrorMessage(error)}
         onRetry={() => refetch()}
+        retrying={sessionFetching}
+      />
+    )
+  }
+
+  const policiesGenuineError = policiesIsError && !(isApiError(policiesError) && policiesError.code === 'aborted')
+  const resourcesGenuineError = resourcesIsError && !(isApiError(resourcesError) && resourcesError.code === 'aborted')
+  if (policiesGenuineError || resourcesGenuineError) {
+    return (
+      <ErrorState
+        title="Could not load access requirements"
+        message={safeErrorMessage(policiesGenuineError ? policiesError : resourcesError)}
+        onRetry={() => {
+          refetchPolicies()
+          refetchResources()
+        }}
+        retrying={policiesFetching || resourcesFetching}
       />
     )
   }
 
   if (!decision?.allowed) {
-    return <AccessDenied reason={decision?.reason ?? 'Your current membership does not grant access.'} />
+    return (
+      <AccessDenied
+        reason={decision?.reason ?? 'Your current membership does not grant access.'}
+        resourceId={resourceId}
+      />
+    )
   }
 
   return <>{children}</>
 }
 
-export function AccessDenied({ reason }: { reason: string }) {
+export function AccessDenied({ reason, resourceId }: { reason: string; resourceId?: string }) {
+  const params = useParams()
+  const communitySlug = (params?.communitySlug as string) || 'guildpass-demo'
+  const upgradeHref = resourceId
+    ? `/${communitySlug}/upgrade?resourceId=${encodeURIComponent(resourceId)}`
+    : `/${communitySlug}/upgrade`
   return (
     <DeniedState
       title="Access denied"
       message={reason}
       actions={
         <>
-        <Link href="/dashboard" className={buttonVariants()}>Back to Dashboard</Link>
-        <Link href="/dashboard" className={buttonVariants({ variant: 'outline' })}>Upgrade or Renew</Link>
+          <Link href={`/${communitySlug}/dashboard`} className={buttonVariants()}>Back to Dashboard</Link>
+          <Link href={upgradeHref} className={buttonVariants({ variant: 'outline' })}>Upgrade or Renew</Link>
         </>
       }
     />

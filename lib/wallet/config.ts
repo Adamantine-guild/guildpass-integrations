@@ -22,7 +22,7 @@ type SupportedWalletChain = (typeof supportedWalletChains)[SupportedWalletChainN
 export interface WalletRuntimeConfig {
   chains: readonly [SupportedWalletChain, ...SupportedWalletChain[]]
   transports: Record<SupportedWalletChain['id'], Transport>
-  connectors: CreateConnectorFn[]
+  connectors: readonly CreateConnectorFn[]
   connectorNames: readonly WalletConnectorName[]
 }
 

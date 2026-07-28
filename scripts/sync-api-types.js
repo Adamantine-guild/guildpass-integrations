@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 const SCHEMA_PATH = path.join(__dirname, '../test/fixtures/openapi.json');
 const TARGET_PATH = path.join(__dirname, '../lib/api/types.ts');
@@ -14,6 +15,8 @@ export type WebhookEventType =
   | 'tier.upgraded' 
   | 'policy.updated';
 
+export type WebhookEventUnsubscribe = () => void
+
 export interface WebhookEventLog {
   id: string;
   eventType: WebhookEventType;
@@ -26,6 +29,35 @@ export interface WebhookEventLog {
     tier?: string;
     reason?: string;
   };
+  /** Raw event payload for detail inspection (optional — added by the replay/debug tool). */
+  fullPayload?: Record<string, unknown>;
+  /** True when this entry was injected via the replay/debug tool rather than ingested from a real webhook. */
+  isReplay?: boolean;
+}
+
+export interface ApprovalConfig {
+  assignRole: number
+  removeRole: number
+  updatePolicy: number
+}
+
+export type PendingActionType = 'assignRole' | 'removeRole' | 'updatePolicy'
+
+export interface PendingActionPayload {
+  address?: string
+  role?: string
+  policy?: AccessPolicy
+}
+
+export interface PendingAction {
+  id: string
+  type: PendingActionType
+  payload: PendingActionPayload
+  proposer: string
+  requiredApprovals: number
+  currentApprovals: string[]
+  status: 'pending' | 'approved' | 'rejected' | 'executed'
+  createdAt: string
 }
 
 export interface WalletVerification {
@@ -39,6 +71,56 @@ export interface ApiErrorBody {
   error?: string
   message?: string
   details?: Record<string, unknown>
+}
+
+// ── Analytics Types ──────────────────────────────────────────────────────────
+// NOTE: The analytics endpoint is PROVISIONAL. The path /v1/admin/analytics
+// has not yet been confirmed by guildpass-core. This contract is documented
+// here so the frontend and backend can align. Tracked in issue #157.
+
+/**
+ * A single data point in the member growth time series.
+ */
+export interface MemberGrowthDataPoint {
+  /** ISO 8601 date (YYYY-MM-DD) representing the start of the interval. */
+  date: string
+  /** Number of new members who joined during this interval. */
+  newMembers: number
+  /** Cumulative total member count at end of interval. */
+  totalMembers: number
+}
+
+/**
+ * Access attempt counts for a single gated resource.
+ */
+export interface ResourceAccessCount {
+  resourceId: string
+  resourceTitle: string
+  /** Total number of access attempts for this resource. */
+  accessCount: number
+  /** Number of denied access attempts (insufficient tier/role). */
+  deniedCount: number
+}
+
+/**
+ * Top-level analytics summary for the admin dashboard.
+ *
+ * @provisional Endpoint \`/v1/admin/analytics\` is not yet implemented in
+ * guildpass-core. This type definition captures the proposed contract so
+ * frontend and backend can align. The mock implementation uses seeded data;
+ * the live implementation will use this schema once the backend ships.
+ */
+export interface AnalyticsSummary {
+  /** Total community member count. */
+  totalMembers: number
+  /** Count of members with an active membership. */
+  activeMembers: number
+  /** Member growth time series (most recent 30 days, daily intervals). */
+  memberGrowth: MemberGrowthDataPoint[]
+  /** Per-resource access and denial counts. */
+  resourceAccess: ResourceAccessCount[]
+  /** ISO timestamp when this summary was generated. */
+  generatedAt: string
 }
 
 // ── Access Decision (cached per wallet + resource) ───────────────────────────
@@ -55,6 +137,29 @@ export interface AccessDecision {
   reason: string
   /** ISO timestamp of when the check was performed */
   checkedAt: string
+}
+
+export interface WebhookEvent {
+  id: string
+  type: string
+  payload: any
+  createdAt: string
+  status?: string
+}
+
+export interface Paginated<T> {
+  data: T[]
+  total: number
+  page: number
+  limit: number
+}
+
+export interface AdminEventFilterParams {
+  types?: string[]
+  startDate?: string
+  endDate?: string
+  page?: number
+  limit?: number
 }
 
 // ── Client-side State Types ──────────────────────────────────────────────────
@@ -103,6 +208,9 @@ export interface BackendMember {
   display_name?: string
   username?: string
   bio?: string
+  avatar?: string
+  socialLinks?: SocialLink[]
+  social_links?: SocialLink[]
   badges?: string[]
 }
 
@@ -124,6 +232,8 @@ export interface BackendPolicy {
   min_tier?: MembershipTier
   roles?: Role[]
   rule?: AccessRule
+  updatedAt?: string
+  updated_at?: string
 }
 
 export interface BackendSession {
@@ -145,18 +255,49 @@ export interface BackendSession {
  * Read-only member and resource queries.
  * No SIWE token is required for these operations.
  */
+export interface PaginatedMembers {
+  members: MemberRow[]
+  nextCursor?: string
+}
+
 export interface MemberAccessApi {
   // ── Read-only (no auth token required) ──────────────────────────────────
-  getSession(): Promise<Session>
-  getCommunity(): Promise<Community>
-  getMembership(address: string): Promise<Membership | null>
-  verifyWallet(address: string): Promise<WalletVerification>
-  getProfile(address: string): Promise<MemberProfile | null>
-  listMembers(): Promise<MemberRow[]>
-  listResources(): Promise<Resource[]>
-  listPolicies(): Promise<AccessPolicy[]>
-  getResource(id: string): Promise<Resource | null>
-  getPolicy(resourceId: string): Promise<AccessPolicy | null>
+  getSession(signal?: AbortSignal): Promise<Session>
+  getCommunity(signal?: AbortSignal): Promise<Community>
+  getMembership(address: string, signal?: AbortSignal): Promise<Membership | null>
+  verifyWallet(address: string, signal?: AbortSignal): Promise<WalletVerification>
+  getProfile(address: string, signal?: AbortSignal): Promise<MemberProfile | null>
+  listMembers(params?: { cursor?: string; limit?: number; filter?: string }, signal?: AbortSignal): Promise<MemberRow[] | PaginatedMembers>
+  listResources(signal?: AbortSignal): Promise<Resource[]>
+  listPolicies(signal?: AbortSignal): Promise<AccessPolicy[]>
+  getResource(id: string, signal?: AbortSignal): Promise<ResourceLookupResult>
+  getPolicy(resourceId: string, signal?: AbortSignal): Promise<AccessPolicy | null>
+  /**
+   * Updates the caller's own profile (display name, bio, avatar, social
+   * links). The one mutation on this interface: unlike the rest of
+   * {@link MemberAccessApi} it requires a SIWE bearer token, but reuses the
+   * existing member/admin SIWE session rather than a separate auth
+   * mechanism — the backend must reject the request unless the token's
+   * address matches \`profile.address\`. \`badges\` is system-assigned and is
+   * not settable through this method.
+   */
+  updateProfile(profile: MemberProfile): Promise<void>
+
+  /**
+   * Fetch backend metadata including the API contract version.
+   * Used by the startup version-compatibility check.
+   */
+  getMeta(signal?: AbortSignal): Promise<MetaResponse>
+
+  // ── Social Graph (Connections / Blocks) ──
+  getConnections(address: string, signal?: AbortSignal): Promise<Connection[]>
+  getPrivacySettings(address: string, signal?: AbortSignal): Promise<MemberPrivacySettings>
+  updatePrivacySettings(address: string, settings: MemberPrivacySettings): Promise<void>
+  blockMember(targetAddress: string): Promise<void>
+  unblockMember(targetAddress: string): Promise<void>
+  createConnectionRequest(targetAddress: string): Promise<void>
+  acceptConnectionRequest(targetAddress: string): Promise<void>
+  rejectConnectionRequest(targetAddress: string): Promise<void>
 }
 
 /**
@@ -165,10 +306,37 @@ export interface MemberAccessApi {
  */
 export interface AdminAccessApi {
   // ── Admin queries & mutations (require a valid SIWE token context) ────────
-  listWebhookEvents(): Promise<WebhookEventLog[]>
-  assignRole(address: string, role: Role): Promise<void>
-  removeRole(address: string, role: Role): Promise<void>
-  updatePolicy(policy: AccessPolicy): Promise<void>
+  listWebhookEvents(signal?: AbortSignal): Promise<WebhookEventLog[]>
+  /**
+   * Subscribe to the admin webhook event stream.
+   *
+   * @provisional Live mode attempts \`GET /v1/admin/events/stream\` as an
+   * SSE-compatible stream. If setup fails, the caller should fall back to
+   * \`listWebhookEvents()\` polling.
+   */
+  subscribeWebhookEvents(
+    onEvent: (event: WebhookEventLog) => void,
+    onError?: (error: unknown) => void,
+  ): WebhookEventUnsubscribe
+  /**
+   * Fetch the analytics summary for the admin dashboard.
+   *
+   * @provisional Calls \`GET /v1/admin/analytics\` — endpoint not yet live in
+   * guildpass-core. Contract tracked in issue #157; pending backend confirmation.
+   */
+  getPendingActions(): Promise<PendingAction[]>
+  approveAction(id: string): Promise<void>
+  rejectAction(id: string): Promise<void>
+  updateApprovalConfig(config: ApprovalConfig): Promise<void>
+  
+  assignRole(address: string, role: Role): Promise<{ status: 'executed' | 'pending'; pendingActionId?: string }>
+  removeRole(address: string, role: Role): Promise<{ status: 'executed' | 'pending'; pendingActionId?: string }>
+  updatePolicy(policy: AccessPolicy): Promise<{ status: 'executed' | 'pending'; pendingActionId?: string }>
+
+  // ── Moderation Queue ──
+  listReports(signal?: AbortSignal): Promise<ModerationReport[]>
+  getReport(id: string, signal?: AbortSignal): Promise<ModerationReport | null>
+  updateReportState(id: string, state: ModerationState, updates?: Partial<ModerationReport>): Promise<void>
 }
 
 /**
@@ -180,9 +348,19 @@ export interface SiweAuthApi {
   getNonce(address: string): Promise<string>
   /**
    * Submit a signed EIP-4361 message and receive an authenticated session
-   * token. The backend verifies the signature and returns a short-lived token.
+   * token. The backend verifies the signature and returns a short-lived access
+   * token plus a longer-lived refresh token.
    */
   siweVerify(message: string, signature: string): Promise<SiweAuthSession>
+  /**
+   * Exchange a valid refresh token for a fresh access token (and a new
+   * refresh token — token rotation). The caller must immediately persist the
+   * returned session and discard the old refresh token.
+   *
+   * Throws a 401 ApiError when the refresh token is expired or invalid,
+   * signalling that the user must re-sign with their wallet.
+   */
+  siweRefresh(refreshToken: string): Promise<SiweAuthSession>
   /** Invalidate the current server-side session (no-op for stateless JWTs). */
   siweLogout(token: string): Promise<void>
   verifyWallet(address: string): Promise<WalletVerification>
@@ -234,6 +412,9 @@ function getTsType(propSchema) {
       }
       return 'Record<string, unknown>';
     default:
+      if (propSchema.type !== undefined) {
+        throw new Error(`Unsupported OpenAPI schema type: ${propSchema.type}`);
+      }
       return 'any';
   }
 }
@@ -294,10 +475,29 @@ const STATIC_SCHEMA_NAMES = new Set([
   'WebhookPayloadSummary',
 ]);
 
-function generateTypes() {
-  const rawSchema = fs.readFileSync(SCHEMA_PATH, 'utf8');
-  const schema = JSON.parse(rawSchema);
+/**
+ * Compute a deterministic SHA-256 hash over the structural parts of the
+ * schema (paths and components.schemas) that represent the actual API
+ * contract shape. Metadata fields (info, x-*) are excluded so that only
+ * meaningful schema changes affect the hash.
+ */
+function computeSchemaHash(schema) {
+  const structural = {
+    paths: schema.paths,
+    schemas: schema.components?.schemas,
+  }
+  const normalized = JSON.stringify(structural, Object.keys(structural).sort())
+  return crypto.createHash('sha256').update(normalized).digest('hex').slice(0, 16)
+}
+
+function generateTypes(schema) {
+  if (!schema) {
+    const rawSchema = fs.readFileSync(SCHEMA_PATH, 'utf8');
+    schema = JSON.parse(rawSchema);
+  }
   const schemasObj = schema.components.schemas;
+
+  const contractVersion = (schema.info && schema.info.version) ? schema.info.version : '0.0.0-unknown'
 
   let output = `/**
  * This file was auto-generated from the OpenAPI schema.
@@ -307,6 +507,18 @@ function generateTypes() {
  */
 
 import { z } from 'zod';
+import { ApiError } from './errors'
+
+/**
+ * The API contract version this frontend build expects the backend to
+ * implement. Generated from test/fixtures/openapi.json info.version.
+ */
+export const EXPECTED_API_VERSION = "${contractVersion}"
+
+export type ResourceLookupResult =
+  | { status: 'found'; data: Resource; source: 'direct' | 'fallback' }
+  | { status: 'not_found' }
+  | { status: 'error'; error: ApiError }
 
 `;
 
@@ -374,7 +586,44 @@ function main() {
     process.exit(1);
   }
 
-  const generated = generateTypes();
+  const rawSchema = fs.readFileSync(SCHEMA_PATH, 'utf8');
+  const schema = JSON.parse(rawSchema);
+
+  const currentHash = computeSchemaHash(schema);
+  const storedHash = schema['x-schema-hash'];
+  const version = schema.info?.version;
+
+  if (!version) {
+    console.error('FAIL: openapi.json is missing info.version. Please add a semver version (e.g. "1.0.0").');
+    process.exit(1);
+  }
+
+  // Schema hash enforcement: if the hash changed but the stored hash
+  // hasn't been updated in the file yet, the developer must also bump
+  // the version. This only applies during --check, not --write (since
+  // --write updates both the hash and the types file).
+  if (isCheck && storedHash) {
+    if (currentHash !== storedHash) {
+      console.error(
+        'FAIL: Schema hash changed but version was not bumped!\n' +
+        `  Stored hash:  ${storedHash}\n` +
+        `  Current hash: ${currentHash}\n` +
+        `  Current version: ${version}\n` +
+        '  Action: Bump the version in test/fixtures/openapi.json (info.version), then run:\n' +
+        '    npm run sync-types'
+      );
+      process.exit(1);
+    }
+  }
+
+  // When writing, always update the stored hash in openapi.json
+  if (isWrite) {
+    schema['x-schema-hash'] = currentHash;
+    fs.writeFileSync(SCHEMA_PATH, JSON.stringify(schema, null, 2) + '\n', 'utf8');
+    console.log(`Schema hash updated: ${currentHash}`);
+  }
+
+  const generated = generateTypes(schema);
 
   if (isCheck) {
     if (!fs.existsSync(TARGET_PATH)) {
@@ -401,4 +650,8 @@ function main() {
   }
 }
 
-main();
+module.exports = { getTsType, generateTypes };
+
+if (require.main === module) {
+  main();
+}

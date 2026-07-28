@@ -54,12 +54,18 @@ export function mapMembership(raw: BackendMember): Membership {
 // ── Member Profile ───────────────────────────────────────────────────────────
 
 export function mapMemberProfile(raw: any, address: string): MemberProfile {
+  const socialLinks = raw.socialLinks ?? raw.social_links
   return {
     address,
     displayName:
       raw.displayName ?? raw.display_name ?? raw.username ?? 'Unknown',
     bio: raw.bio,
     badges: raw.badges ?? [],
+    // Only present when set — keeps callers that never touch these new
+    // fields (existing snapshots/tests) unaffected, matching the
+    // conditional-key convention already used elsewhere in this module.
+    ...(raw.avatar ? { avatar: raw.avatar } : {}),
+    ...(socialLinks ? { socialLinks } : {}),
   }
 }
 
@@ -100,6 +106,10 @@ export function mapPolicy(raw: any): AccessPolicy {
     // Only include the composable rule tree when the backend provides one so
     // legacy policies keep their exact shape.
     ...(raw.rule !== undefined ? { rule: raw.rule } : {}),
+    // Include updatedAt for optimistic concurrency control
+    ...(raw.updatedAt ?? raw.updated_at
+      ? { updatedAt: raw.updatedAt ?? raw.updated_at }
+      : {}),
   }
 }
 

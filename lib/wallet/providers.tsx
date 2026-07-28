@@ -1,4 +1,4 @@
-'use client'
+"use client";
 
 /**
  * lib/wallet/providers.tsx
@@ -48,62 +48,72 @@
 import {
   createContext,
   useCallback,
-  useContext,
   useEffect,
   useMemo,
   useReducer,
   useRef,
   useState,
-} from 'react'
+} from "react";
 import {
   WagmiProvider,
   createConfig,
   useSignMessage,
   useAccount,
   useDisconnect,
-} from 'wagmi'
-import { walletConfig } from '@/lib/wallet/config'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { getApi } from '@/lib/api'
-import { config } from '@/lib/config'
-import { SiweAuthSession, AdminSessionStatus } from '@/lib/api/types'
+  useAccountEffect,
+} from "wagmi";
+import { walletConfig } from "@/lib/wallet/config";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { createSyncStoragePersister } from "@tanstack/query-sync-storage-persister";
+import { getApi } from "@/lib/api";
+import { config } from "@/lib/config";
+import { SiweAuthSession, AdminSessionStatus } from "@/lib/api/types";
 import {
   clearAuthSession,
+  getStoredToken,
   isRefreshTokenExpired,
   loadAuthSession,
   loadAuthSessionIncludingExpired,
   msUntilRenewal,
+  SESSION_KEY,
   storeAuthSession,
-} from '@/lib/session'
-import { isApiError } from '@/lib/api/errors'
+  subscribeToAuthSessionStorage,
+} from "@/lib/session";
+import { isApiError } from "@/lib/api/errors";
 import {
   buildSiweMessage,
   deriveSessionStatus,
   initialSiweSessionState,
   siweSessionReducer,
-} from '@/lib/wallet/siwe-session'
+} from "@/lib/wallet/siwe-session";
+import { SiweAuthContext } from "@/lib/wallet/siwe-context";
+import { useContext } from "react";
 
 // ── Wagmi config ──────────────────────────────────────────────────────────────
 
-const wagmiConfig = createConfig(walletConfig)
+const wagmiConfig = createConfig(walletConfig);
 
 // ── BroadcastChannel message types ───────────────────────────────────────────
 
 type AuthBroadcastMessage =
-  | { type: 'signed-in'; session: SiweAuthSession }
-  | { type: 'refreshed'; session: SiweAuthSession }
-  | { type: 'signed-out' }
+  | { type: "signed-in"; session: SiweAuthSession }
+  | { type: "refreshed"; session: SiweAuthSession }
+  | { type: "signed-out" };
 
-const AUTH_CHANNEL_NAME = 'guildpass:auth'
+const AUTH_CHANNEL_NAME = "guildpass:auth";
 
 // ── SIWE Auth Context ─────────────────────────────────────────────────────────
+//
+// The context, its type, and the useSiweAuth hook live in
+// '@/lib/wallet/siwe-context' so they can be imported without pulling in the
+// wagmi/wallet stack. This provider supplies the value.
 
 export interface SiweAuthContextValue {
   /** The authenticated session, or null if the user has not signed in. */
-  authSession: SiweAuthSession | null
-  isAuthenticated: boolean
+  authSession: SiweAuthSession | null;
+  isAuthenticated: boolean;
   /** Granular status of the admin session. */
-  sessionStatus: AdminSessionStatus
+  sessionStatus: AdminSessionStatus;
   /**
    * Legacy 4-value status for backward compatibility with AdminGuard and
    * connect-button components.
@@ -113,71 +123,89 @@ export interface SiweAuthContextValue {
    * - `'authenticated'`  — active session (more than 60 s remaining)
    * - `'expiring'`       — active session with ≤ 60 s remaining (show warning)
    */
-  status: 'disconnected' | 'unauthenticated' | 'authenticated' | 'expiring'
+  status: "disconnected" | "unauthenticated" | "authenticated" | "expiring";
   /**
    * Seconds remaining until the access token expires.
    * 0 when no active session.
    */
-  timeLeft: number
+  timeLeft: number;
+  /** True when active session will expire within warningThresholdSeconds. */
+  isExpiring: boolean;
+  /** Warning threshold in seconds before access token expiry (default 120s / 2m). */
+  warningThresholdSeconds: number;
   /** True while a signature request is in-flight. */
-  isSigningIn: boolean
+  isSigningIn: boolean;
   /** Human-readable error from the most recent signIn attempt, if any. */
-  error: string | null
+  error: string | null;
   /** Trigger the EIP-4361 sign-in flow for the currently connected address. */
-  signIn: () => Promise<void>
+  signIn: () => Promise<void>;
   /**
    * Alias for `signIn` — retained for backward compatibility with components
    * that call `login()` (e.g. AdminGuard, connect-button).
    */
-  login: () => Promise<void>
+  login: () => Promise<void>;
   /** Clear the session and disconnect the wallet. */
-  logout: () => Promise<void>
+  logout: () => Promise<void>;
   /** Mark the current session as expired (e.g. after a 401 from the backend). */
-  markExpired: () => void
+  markExpired: () => void;
 }
 
-const SiweAuthContext = createContext<SiweAuthContextValue | undefined>(
-  undefined,
-)
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      // Keep data for 15 minutes to allow offline usage
+      staleTime: 1000 * 60 * 15,
+      gcTime: 1000 * 60 * 60 * 24,
+    },
+  },
+});
 
-const queryClient = new QueryClient()
+// Create a persister that uses localStorage (only on the client)
+const persister = typeof window !== 'undefined'
+  ? createSyncStoragePersister({ storage: window.localStorage })
+  : undefined;
 
 // ── SiweAuthProvider ──────────────────────────────────────────────────────────
 
 export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
-  const { address, isConnected, chainId } = useAccount()
-  const { signMessageAsync } = useSignMessage()
-  const { disconnect } = useDisconnect()
-  const [state, dispatch] = useReducer(siweSessionReducer, initialSiweSessionState)
+  const { address, isConnected, chainId } = useAccount();
+  const { signMessageAsync } = useSignMessage();
+  const { disconnect } = useDisconnect();
+  const [state, dispatch] = useReducer(
+    siweSessionReducer,
+    initialSiweSessionState,
+  );
 
   // Countdown timer (seconds until access token expires)
-  const timeLeft = useTimeLeft(state.authSession)
+  const timeLeft = useTimeLeft(state.authSession);
 
   // Guard against concurrent refresh attempts in the same tab
-  const isRefreshing = useRef(false)
+  const isRefreshing = useRef(false);
+  // Guard against concurrent sign-in attempts (prevents racing nonce fetches)
+  const isSigningIn = useRef(false);
   // Renewal timer handle
-  const renewalTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const renewalTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // BroadcastChannel reference — created once, torn down on unmount
-  const channelRef = useRef<BroadcastChannel | null>(null)
+  const channelRef = useRef<BroadcastChannel | null>(null);
 
   // ── Helpers ─────────────────────────────────────────────────────────────────
 
   /** Broadcast to peer tabs (fire-and-forget; swallows errors). */
   const broadcast = useCallback((msg: AuthBroadcastMessage) => {
     try {
-      channelRef.current?.postMessage(msg)
+      channelRef.current?.postMessage(msg);
     } catch {
       // BroadcastChannel may throw in some edge cases (e.g. detached page)
     }
-  }, [])
+  }, []);
 
   /** Cancel any pending renewal timer. */
   const cancelRenewal = useCallback(() => {
     if (renewalTimer.current !== null) {
-      clearTimeout(renewalTimer.current)
-      renewalTimer.current = null
+      clearTimeout(renewalTimer.current);
+      renewalTimer.current = null;
     }
-  }, [])
+  }, []);
 
   // ── Silent refresh ──────────────────────────────────────────────────────────
 
@@ -188,34 +216,34 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
    */
   const performSilentRefresh = useCallback(
     async (session: SiweAuthSession) => {
-      if (isRefreshing.current) return
+      if (isRefreshing.current) return;
       if (!session.refreshToken || isRefreshTokenExpired(session)) {
-        dispatch({ type: 'mark-expired' })
-        clearAuthSession()
-        broadcast({ type: 'signed-out' })
-        return
+        dispatch({ type: "mark-expired" });
+        clearAuthSession();
+        broadcast({ type: "signed-out" });
+        return;
       }
 
-      isRefreshing.current = true
+      isRefreshing.current = true;
       try {
-        const api = getApi(session.address)
-        const refreshed = await api.siweRefresh(session.refreshToken)
-        storeAuthSession(refreshed)
-        dispatch({ type: 'refresh-success', session: refreshed })
-        broadcast({ type: 'refreshed', session: refreshed })
-        scheduleRenewal(refreshed)
+        const api = getApi(session.address);
+        const refreshed = await api.siweRefresh(session.refreshToken);
+        storeAuthSession(refreshed);
+        dispatch({ type: "refresh-success", session: refreshed });
+        broadcast({ type: "refreshed", session: refreshed });
+        scheduleRenewal(refreshed);
       } catch {
         // 401 or network failure — session cannot be renewed
-        clearAuthSession()
-        dispatch({ type: 'mark-expired' })
-        broadcast({ type: 'signed-out' })
+        clearAuthSession();
+        dispatch({ type: "mark-expired" });
+        broadcast({ type: "signed-out" });
       } finally {
-        isRefreshing.current = false
+        isRefreshing.current = false;
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [broadcast],
-  )
+  );
 
   /**
    * Schedule a proactive refresh 60 s before the access token expires.
@@ -223,202 +251,347 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
    */
   const scheduleRenewal = useCallback(
     (session: SiweAuthSession) => {
-      cancelRenewal()
-      if (isRefreshTokenExpired(session)) return // no renewal possible
+      cancelRenewal();
+      if (isRefreshTokenExpired(session)) return; // no renewal possible
 
-      const delay = msUntilRenewal(session, 60_000)
+      const delay = msUntilRenewal(session, 60_000);
       if (delay <= 0) {
         // Already within the renewal window — attempt immediately
-        void performSilentRefresh(session)
-        return
+        void performSilentRefresh(session);
+        return;
       }
 
       renewalTimer.current = setTimeout(() => {
         // Re-read from sessionStorage in case a peer tab already refreshed
-        const current = loadAuthSessionIncludingExpired()
-        if (current) void performSilentRefresh(current)
-      }, delay)
+        const current = loadAuthSessionIncludingExpired();
+        if (current) void performSilentRefresh(current);
+      }, delay);
     },
     [cancelRenewal, performSilentRefresh],
-  )
+  );
 
   // ── Hydrate from sessionStorage on mount ───────────────────────────────────
 
   useEffect(() => {
-    const stored = loadAuthSession()
+    const stored = loadAuthSession();
     if (stored) {
-      dispatch({ type: 'restore', session: stored })
-      scheduleRenewal(stored)
-      return
+      dispatch({ type: "restore", session: stored });
+      scheduleRenewal(stored);
+      return;
     }
 
     // Access token expired but refresh token may still be valid
-    const raw = loadAuthSessionIncludingExpired()
+    const raw = loadAuthSessionIncludingExpired();
     if (raw && !isRefreshTokenExpired(raw)) {
-      void performSilentRefresh(raw)
+      void performSilentRefresh(raw);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, []);
 
   // ── BroadcastChannel — receive messages from peer tabs ─────────────────────
 
   useEffect(() => {
-    if (typeof window === 'undefined' || !('BroadcastChannel' in window)) return
+    if (typeof window === "undefined") return;
 
-    const channel = new BroadcastChannel(AUTH_CHANNEL_NAME)
-    channelRef.current = channel
-
-    channel.onmessage = (event: MessageEvent<AuthBroadcastMessage>) => {
-      const msg = event.data
-      if (!msg?.type) return
-
-      if (msg.type === 'signed-in' || msg.type === 'refreshed') {
-        storeAuthSession(msg.session)
-        dispatch({ type: 'restore', session: msg.session })
-        scheduleRenewal(msg.session)
-      } else if (msg.type === 'signed-out') {
-        cancelRenewal()
-        clearAuthSession()
-        dispatch({ type: 'clear' })
+    const applyIncomingSession = (session: SiweAuthSession | null) => {
+      if (!session) {
+        cancelRenewal();
+        clearAuthSession();
+        dispatch({ type: "clear" });
+        return;
       }
+      if (
+        typeof session.token !== "string" ||
+        !session.token.trim() ||
+        typeof session.address !== "string" ||
+        !session.address.trim() ||
+        typeof session.expiresAt !== "string" ||
+        !session.expiresAt.trim()
+      ) {
+        return;
+      }
+      // If a wallet is currently connected in this tab, discard sessions for other addresses
+      if (address && session.address.toLowerCase() !== address.toLowerCase()) {
+        return;
+      }
+      storeAuthSession(session);
+      dispatch({ type: "restore", session });
+      scheduleRenewal(session);
+    };
+
+    const onStorageMessage = (event: StorageEvent) => {
+      if (event.key && event.key !== SESSION_KEY) return;
+      if (event.newValue === null) {
+        applyIncomingSession(null);
+        return;
+      }
+      try {
+        const parsed = JSON.parse(event.newValue ?? "") as SiweAuthSession;
+        applyIncomingSession(parsed);
+      } catch {
+        // Ignore malformed peer-session payloads.
+      }
+    };
+
+    const unsubscribeStorage = subscribeToAuthSessionStorage(onStorageMessage);
+
+    if ("BroadcastChannel" in window) {
+      const channel = new BroadcastChannel(AUTH_CHANNEL_NAME);
+      channelRef.current = channel;
+
+      channel.onmessage = (event: MessageEvent<AuthBroadcastMessage>) => {
+        const msg = event.data;
+        if (!msg?.type) return;
+
+        if (msg.type === "signed-in" || msg.type === "refreshed") {
+          applyIncomingSession(msg.session);
+        } else if (msg.type === "signed-out") {
+          applyIncomingSession(null);
+        }
+      };
+
+      return () => {
+        unsubscribeStorage();
+        channel.close();
+        channelRef.current = null;
+      };
     }
 
     return () => {
-      channel.close()
-      channelRef.current = null
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+      unsubscribeStorage();
+    };
+  }, [address, cancelRenewal, scheduleRenewal]);
 
   // ── Invalidation event from same tab (lib/session.ts fires this) ───────────
 
   useEffect(() => {
-    const onInvalidated = () => dispatch({ type: 'mark-expired' })
-    window.addEventListener('siwe:invalidated', onInvalidated)
-    return () => window.removeEventListener('siwe:invalidated', onInvalidated)
-  }, [])
+    const onInvalidated = () => dispatch({ type: "mark-expired" });
+    window.addEventListener("siwe:invalidated", onInvalidated);
+    return () => window.removeEventListener("siwe:invalidated", onInvalidated);
+  }, []);
 
   // ── Drop session when wallet disconnects or switches address ───────────────
 
+  useAccountEffect({
+    onDisconnect() {
+      if (state.authSession) {
+        cancelRenewal();
+        clearAuthSession();
+        dispatch({ type: "clear" });
+        broadcast({ type: "signed-out" });
+      }
+    },
+  });
+
   useEffect(() => {
-    const session = state.authSession
-    if (!session) return
-    if (
-      !isConnected ||
-      (address && session.address.toLowerCase() !== address.toLowerCase())
-    ) {
-      cancelRenewal()
-      clearAuthSession()
-      dispatch({ type: 'clear' })
-      broadcast({ type: 'signed-out' })
+    const session = state.authSession;
+    if (!session) return;
+    if (address && session.address.toLowerCase() !== address.toLowerCase()) {
+      cancelRenewal();
+      clearAuthSession();
+      dispatch({ type: "clear" });
+      broadcast({ type: "signed-out" });
     }
-  }, [address, isConnected, state.authSession, cancelRenewal, broadcast])
+  }, [address, state.authSession, cancelRenewal, broadcast]);
 
   // ── Expiry polling — mark expired once the access token clock runs out ─────
 
   useEffect(() => {
-    const session = state.authSession
-    if (!session) return
+    const session = state.authSession;
+    if (!session) return;
 
     const check = () => {
       if (new Date(session.expiresAt).getTime() <= Date.now()) {
         // Try a silent refresh before marking expired
-        void performSilentRefresh(session)
+        void performSilentRefresh(session);
       }
+    };
+
+    check();
+    const interval = setInterval(check, 1000);
+    return () => clearInterval(interval);
+  }, [state.authSession, performSilentRefresh]);
+
+  // ── Security validation helpers ───────────────────────────────────────────────
+
+  /**
+   * Validates that the configured SIWE domain matches the actual runtime origin.
+   * This prevents phishing attacks where a malicious site presents a SIWE message
+   * with a domain field that doesn't match the site the user is actually on.
+   *
+   * @throws {Error} If domain mismatch is detected (security error)
+   */
+  const validateSiweDomain = useCallback(() => {
+    if (typeof window === "undefined") return; // Skip validation on server
+
+    const configuredDomain = config.siwe.domain;
+    const actualHost = window.location.host;
+
+    // Normalize both for comparison (handle port differences consistently)
+    const normalizeDomain = (d: string) => d.toLowerCase().replace(/^https?:\/\//, "");
+    const normalizedConfigured = normalizeDomain(configuredDomain);
+    const normalizedActual = normalizeDomain(actualHost);
+
+    if (normalizedConfigured !== normalizedActual) {
+      throw new Error(
+        [
+          "🔒 Security Error: Domain Mismatch",
+          "",
+          `The configured SIWE domain (${configuredDomain}) does not match the current site (${actualHost}).`,
+          "",
+          "This indicates either:",
+          "  • A misconfiguration (NEXT_PUBLIC_SIWE_DOMAIN is stale or incorrect)",
+          "  • A phishing attempt or proxying scenario",
+          "",
+          "For your security, sign-in is blocked. Please contact the site administrator if this persists.",
+        ].join("\n")
+      );
+    }
+  }, []);
+
+  /**
+   * Validates that the wallet's current chainId matches the chainId we're about to
+   * embed in the SIWE message. This prevents signature replay across chains.
+   *
+   * Re-checks immediately before signature request (not just at flow start) since
+   * users can switch chains mid-session.
+   *
+   * @param messageChainId - The chainId embedded in the SIWE message
+   * @throws {Error} If chainId mismatch is detected (security error)
+   */
+  const validateChainId = useCallback((messageChainId: number) => {
+    const currentChainId = chainId;
+    if (currentChainId === undefined) {
+      throw new Error(
+        "🔒 Security Error: Unable to determine wallet chain. Please ensure your wallet is connected."
+      );
     }
 
-    check()
-    const interval = setInterval(check, 1000)
-    return () => clearInterval(interval)
-  }, [state.authSession, performSilentRefresh])
+    if (currentChainId !== messageChainId) {
+      throw new Error(
+        [
+          "🔒 Security Error: Chain Mismatch",
+          "",
+          `Your wallet is connected to chain ${currentChainId}, but the sign-in request is for chain ${messageChainId}.`,
+          "",
+          "This prevents signature replay across different chains.",
+          "Please switch your wallet to the correct chain and try again.",
+        ].join("\n")
+      );
+    }
+  }, [chainId]);
 
   // ── Sign-in ─────────────────────────────────────────────────────────────────
 
   const signIn = useCallback(async () => {
-    if (!address) return
-    dispatch({ type: 'sign-in-start' })
+    if (!address) return;
+    if (isSigningIn.current) return;
+    isSigningIn.current = true;
+    dispatch({ type: "sign-in-start" });
     try {
-      const api = getApi(address)
-      const nonce = await api.getNonce(address)
+      // Security check: validate domain matches runtime origin
+      validateSiweDomain();
+
+      const api = getApi(address);
+      const nonce = await api.getNonce(address);
+
+      const messageChainId = chainId ?? 1;
       const message = buildSiweMessage({
         domain: config.siwe.domain,
         address,
         statement: config.siwe.statement,
         uri:
-          typeof window !== 'undefined'
+          typeof window !== "undefined"
             ? window.location.origin
             : `https://${config.siwe.domain}`,
-        chainId: chainId ?? 1,
+        chainId: messageChainId,
         nonce,
         issuedAt: new Date().toISOString(),
-      })
-      const signature = await signMessageAsync({ message })
-      const session = await api.siweVerify(message, signature)
-      storeAuthSession(session)
-      dispatch({ type: 'sign-in-success', session })
-      scheduleRenewal(session)
-      broadcast({ type: 'signed-in', session })
+      });
+
+      // Security check: re-validate chainId immediately before signature
+      // (user may have switched chains after message construction)
+      validateChainId(messageChainId);
+
+      const signature = await signMessageAsync({ message });
+      const session = await api.siweVerify(message, signature);
+      storeAuthSession(session);
+      dispatch({ type: "sign-in-success", session });
+      scheduleRenewal(session);
+      broadcast({ type: "signed-in", session });
     } catch (err) {
       dispatch({
-        type: 'sign-in-error',
+        type: "sign-in-error",
         message: isApiError(err)
           ? err.safeMessage
-          : 'Sign-in was cancelled or failed. Please try again.',
-      })
+          : err instanceof Error
+            ? err.message
+            : "Sign-in was cancelled or failed. Please try again.",
+      });
+    } finally {
+      isSigningIn.current = false;
     }
-  }, [address, chainId, signMessageAsync, scheduleRenewal, broadcast])
+  }, [address, chainId, signMessageAsync, scheduleRenewal, broadcast, validateSiweDomain, validateChainId]);
 
   // ── Logout ──────────────────────────────────────────────────────────────────
 
   const logout = useCallback(async () => {
-    cancelRenewal()
-    const token = state.authSession?.token
-    clearAuthSession()
-    dispatch({ type: 'clear' })
-    broadcast({ type: 'signed-out' })
-    disconnect()
+    cancelRenewal();
+    const token = getStoredToken();
+    clearAuthSession();
+    dispatch({ type: "clear" });
+    broadcast({ type: "signed-out" });
+    disconnect();
     if (token) {
-      await getApi(address).siweLogout(token).catch(() => {
-        // best-effort server-side invalidation
-      })
+      await getApi(address)
+        .siweLogout(token)
+        .catch(() => {
+          // best-effort server-side invalidation
+        });
     }
-  }, [address, state.authSession, cancelRenewal, broadcast, disconnect])
+  }, [address, cancelRenewal, broadcast, disconnect]);
 
   // ── markExpired ─────────────────────────────────────────────────────────────
 
   const markExpired = useCallback(() => {
-    cancelRenewal()
+    cancelRenewal();
     // Attempt a silent refresh if a refresh token is still available
-    const raw = loadAuthSessionIncludingExpired()
+    const raw = loadAuthSessionIncludingExpired();
     if (raw && !isRefreshTokenExpired(raw)) {
-      void performSilentRefresh(raw)
+      void performSilentRefresh(raw);
     } else {
-      clearAuthSession()
-      dispatch({ type: 'mark-expired' })
-      broadcast({ type: 'signed-out' })
+      clearAuthSession();
+      dispatch({ type: "mark-expired" });
+      broadcast({ type: "signed-out" });
     }
-  }, [cancelRenewal, performSilentRefresh, broadcast])
+  }, [cancelRenewal, performSilentRefresh, broadcast]);
 
   // ── Derived values ──────────────────────────────────────────────────────────
 
-  const sessionStatus = deriveSessionStatus(state, isConnected)
+  const sessionStatus = deriveSessionStatus(state, isConnected);
+  const warningThresholdSeconds = config.siwe.warningThresholdSeconds ?? 120;
+  const isExpiring =
+    sessionStatus === "authenticated" &&
+    timeLeft > 0 &&
+    timeLeft <= warningThresholdSeconds;
 
-  const legacyStatus: SiweAuthContextValue['status'] =
-    sessionStatus === 'authenticated' && timeLeft > 0 && timeLeft <= 60
-      ? 'expiring'
-      : sessionStatus === 'authenticated'
-        ? 'authenticated'
-        : isConnected
-          ? 'unauthenticated'
-          : 'disconnected'
+  const legacyStatus: SiweAuthContextValue["status"] = isExpiring
+    ? "expiring"
+    : sessionStatus === "authenticated"
+      ? "authenticated"
+      : isConnected
+        ? "unauthenticated"
+        : "disconnected";
 
   const value = useMemo<SiweAuthContextValue>(
     () => ({
       authSession: state.authSession,
-      isAuthenticated: sessionStatus === 'authenticated',
+      isAuthenticated: sessionStatus === "authenticated",
       sessionStatus,
       status: legacyStatus,
       timeLeft,
+      isExpiring,
+      warningThresholdSeconds,
       isSigningIn: state.isSigningIn,
       error: state.error,
       signIn,
@@ -433,17 +606,19 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
       sessionStatus,
       legacyStatus,
       timeLeft,
+      isExpiring,
+      warningThresholdSeconds,
       signIn,
       logout,
       markExpired,
     ],
-  )
+  );
 
   return (
-    <SiweAuthContext.Provider value={value}>
+    <SiweAuthContext.Provider value={value as any}>
       {children}
     </SiweAuthContext.Provider>
-  )
+  );
 }
 
 // ── useTimeLeft hook ──────────────────────────────────────────────────────────
@@ -454,33 +629,34 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
  * there is no active session.
  */
 function useTimeLeft(session: SiweAuthSession | null): number {
-  const [timeLeft, setTimeLeft] = useState(0)
+  const [timeLeft, setTimeLeft] = useState(0);
 
   useEffect(() => {
     if (!session) {
-      setTimeLeft(0)
-      return
+      setTimeLeft(0);
+      return;
     }
 
     const tick = () => {
-      const diff = new Date(session.expiresAt).getTime() - Date.now()
-      setTimeLeft(Math.max(0, Math.floor(diff / 1000)))
-    }
+      const diff = new Date(session.expiresAt).getTime() - Date.now();
+      setTimeLeft(Math.max(0, Math.floor(diff / 1000)));
+    };
 
-    tick()
-    const interval = setInterval(tick, 1000)
-    return () => clearInterval(interval)
-  }, [session, setTimeLeft])
+    tick();
+    const interval = setInterval(tick, 1000);
+    return () => clearInterval(interval);
+  }, [session, setTimeLeft]);
 
-  return timeLeft
+  return timeLeft;
 }
 
 // ── Public hook ───────────────────────────────────────────────────────────────
 
 export function useSiweAuth(): SiweAuthContextValue {
-  const context = useContext(SiweAuthContext)
-  if (!context) throw new Error('useSiweAuth must be used within SiweAuthProvider')
-  return context
+  const context = useContext(SiweAuthContext);
+  if (!context)
+    throw new Error("useSiweAuth must be used within SiweAuthProvider");
+  return context as unknown as SiweAuthContextValue;
 }
 
 // ── Root providers ────────────────────────────────────────────────────────────
@@ -489,10 +665,8 @@ export function RootProviders({ children }: { children: React.ReactNode }) {
   return (
     <WagmiProvider config={wagmiConfig}>
       <QueryClientProvider client={queryClient}>
-        <SiweAuthProvider>
-          {children}
-        </SiweAuthProvider>
+        <SiweAuthProvider>{children}</SiweAuthProvider>
       </QueryClientProvider>
     </WagmiProvider>
-  )
+  );
 }

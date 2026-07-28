@@ -14,3 +14,23 @@ test-dist
 CLAUDE.md
 PLAN.md
 tasks/
+AGENTS.md
+update-test.js
+update-test.mjs
+temp/
+
+# Lock files
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+bun.lock
+
+# Playwright
+.auth/
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+
+# TS build info
+tsconfig.tsbuildinfo
