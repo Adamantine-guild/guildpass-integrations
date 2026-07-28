@@ -16,11 +16,9 @@ import { queryKeys } from "@/lib/query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { MembershipExpiryBadge } from "@/components/ui/membership-expiry-badge";
-import { MembershipCardSkeleton } from "@/components/dashboard/membership-card-skeleton";
 import Link from "next/link";
 import { buttonVariants } from "@/components/ui/button";
 import {
-  LoadingState,
   ErrorState,
   EmptyState,
   DeniedState,
@@ -465,5 +463,5 @@ export default function DashboardPage() {
         </Section>
       </div>
     </div>
-  );
+  )
 }
