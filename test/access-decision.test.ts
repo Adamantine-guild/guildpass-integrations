@@ -1,3 +1,4 @@
+import './setup-env'
 import { test } from 'node:test'
 import * as assert from 'node:assert/strict'
 import { computeAccessDecision } from '../lib/api/access-decision'

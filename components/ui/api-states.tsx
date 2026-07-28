@@ -19,6 +19,7 @@ function StateShell({
   tone,
   title,
   message,
+  icon,
   actions,
   role,
   ariaLive = "polite",
@@ -28,6 +29,7 @@ function StateShell({
   tone: "loading" | "empty" | "error" | "denied"
   title?: string
   message: string
+  icon?: ReactNode
   actions?: ReactNode
   role?: "status" | "alert" | "note"
   ariaLive?: "polite" | "assertive"
@@ -59,6 +61,7 @@ function StateShell({
           {title}
         </div>
       )}
+      {icon && <div className="flex justify-center text-muted-foreground">{icon}</div>}
       <div
         className={cn(
           "text-sm text-muted-foreground",
@@ -87,11 +90,14 @@ export function LoadingState({ message = "Loading…" }: { message?: string }) {
 export function ErrorState({
   title = "Something went wrong",
   message,
-  onRetry
+  onRetry,
+  retrying = false
 }: {
   title?: string
   message?: string
   onRetry?: () => void
+  /** Disables the retry button and relabels it while a retry is already in flight. */
+  retrying?: boolean
 }) {
   return (
     <StateShell
@@ -101,8 +107,8 @@ export function ErrorState({
       role="alert"
       ariaLive="assertive"
       actions={onRetry && (
-        <Button size="sm" variant="outline" onClick={onRetry}>
-          Try again
+        <Button size="sm" variant="outline" onClick={onRetry} disabled={retrying}>
+          {retrying ? "Retrying…" : "Try again"}
         </Button>
       )}
     />
@@ -112,10 +118,12 @@ export function ErrorState({
 export function EmptyState({
   title = "Nothing here yet",
   message = "There is no data to show right now.",
+  icon,
   actions
 }: {
   title?: string
   message?: string
+  icon?: ReactNode
   actions?: ReactNode
 }) {
   return (
@@ -123,8 +131,10 @@ export function EmptyState({
       tone="empty"
       title={title}
       message={message}
+      icon={icon}
       role="status"
       actions={actions}
+      className="text-center"
     />
   )
 }

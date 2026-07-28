@@ -21,6 +21,23 @@ export function normalizeAddress(address: unknown): string {
   return typeof address === 'string' ? address.trim() : ''
 }
 
+const REDACTED_ADDRESS_PLACEHOLDER = '[redacted-address]'
+
+/**
+ * Redacts a wallet address for logging. Unlike formatAddress(), this never
+ * echoes back any part of the raw input for values that don't match the
+ * expected 0x + 40 hex format — inputs reaching this point may be
+ * unvalidated/attacker-controlled (oversized, non-hex, injection payloads),
+ * so a fixed placeholder is the only safe fallback.
+ */
+export function redactAddress(address: unknown): string {
+  const value = normalizeAddress(address)
+  if (!isWalletAddress(value)) {
+    return REDACTED_ADDRESS_PLACEHOLDER
+  }
+  return `${value.slice(0, 6)}…${value.slice(-4)}`
+}
+
 function positiveIntegerOrDefault(value: number | undefined, fallback: number) {
   return Number.isInteger(value) && value !== undefined && value > 0 ? value : fallback
 }
