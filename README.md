@@ -88,7 +88,7 @@ Admin actions are protected by [Sign-In with Ethereum (EIP-4361)](https://eips.e
 4. EIP-4361 message built client-side (domain, statement, nonce, chainId, issuedAt)
 5. wagmi signMessage → user approves in wallet
 6. POST /v1/auth/siwe/verify → { token, expiresAt }
-7. Token stored in sessionStorage; auto-attached to admin mutations
+7. Token stored in sessionStorage; peer tabs sync the session via BroadcastChannel and storage-event fallback so a sign-in or logout in one tab is reflected in others
 8. 401 from backend shows inline re-auth banner without page redirect
 ```
 

@@ -6,6 +6,7 @@ import {
   loadAuthSession,
   clearAuthSession,
   invalidateAuthSession,
+  subscribeToAuthSessionStorage,
 } from '../lib/session'
 import type { SiweAuthSession } from '../lib/api/types'
 
@@ -49,15 +50,30 @@ function validSession(overrides: Partial<SiweAuthSession> = {}): SiweAuthSession
 }
 
 let dispatched: string[] = []
+let storageListeners: Array<(event: StorageEvent) => void> = []
 
 beforeEach(() => {
   dispatched = []
+  storageListeners = []
   const storage = new MemoryStorage()
   ;(globalThis as any).window = {
     sessionStorage: storage,
     dispatchEvent: (event: { type: string }) => {
       dispatched.push(event.type)
+      for (const listener of storageListeners) {
+        listener(event as StorageEvent)
+      }
       return true
+    },
+    addEventListener: (type: string, listener: (event: StorageEvent) => void) => {
+      if (type === 'storage') {
+        storageListeners.push(listener)
+      }
+    },
+    removeEventListener: (type: string, listener: (event: StorageEvent) => void) => {
+      if (type === 'storage') {
+        storageListeners = storageListeners.filter((entry) => entry !== listener)
+      }
     },
   }
   ;(globalThis as any).CustomEvent = class {
@@ -114,6 +130,18 @@ describe('session storage helpers (#117)', () => {
     invalidateAuthSession()
 
     assert.equal(loadAuthSession(), null)
+  })
+
+  test('subscribeToAuthSessionStorage reacts to peer-tab logout events', () => {
+    const seen: Array<string | null> = []
+    const unsubscribe = subscribeToAuthSessionStorage((event) => {
+      seen.push(event.key)
+    })
+
+    ;(globalThis as any).window.dispatchEvent({ type: 'storage', key: SESSION_KEY, newValue: null })
+
+    assert.deepEqual(seen, [SESSION_KEY])
+    unsubscribe()
   })
 
   // ── Corrupted / missing data path ────────────────────────────────────────

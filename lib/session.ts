@@ -26,7 +26,7 @@
 
 import type { SiweAuthSession } from './api/types'
 
-const SESSION_KEY = 'guildpass:siwe-session'
+export const SESSION_KEY = 'guildpass:siwe-session'
 
 // ── Persist ───────────────────────────────────────────────────────────────────
 
@@ -93,6 +93,30 @@ export function loadAuthSessionIncludingExpired(): SiweAuthSession | null {
   } catch {
     return null
   }
+}
+
+// ── Cross-tab sync helpers ────────────────────────────────────────────────
+
+/**
+ * Subscribe to storage events for the SIWE session key so peer tabs can react
+ * when another tab signs in, refreshes, or logs out.
+ *
+ * We keep the canonical session in sessionStorage because it is still scoped to
+ * the current origin and survives tab reloads without the broader XSS exposure
+ * of localStorage. The storage-event listener is a fallback for browsers or
+ * environments where BroadcastChannel is unavailable.
+ */
+export function subscribeToAuthSessionStorage(
+  listener: (event: StorageEvent) => void,
+): () => void {
+  if (typeof window === 'undefined') return () => undefined
+  const handler = (event: StorageEvent) => {
+    if (event.key === null || event.key === SESSION_KEY) {
+      listener(event)
+    }
+  }
+  window.addEventListener('storage', handler)
+  return () => window.removeEventListener('storage', handler)
 }
 
 // ── Clear ─────────────────────────────────────────────────────────────────────
