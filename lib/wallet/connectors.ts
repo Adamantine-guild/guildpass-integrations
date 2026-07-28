@@ -13,7 +13,7 @@
 
 import { ConfigError } from '../config'
 
-export const SUPPORTED_CONNECTOR_NAMES = ['injected'] as const
+export const SUPPORTED_CONNECTOR_NAMES = ['injected', 'walletConnect'] as const
 
 export type WalletConnectorName = (typeof SUPPORTED_CONNECTOR_NAMES)[number]
 
