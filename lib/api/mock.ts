@@ -408,6 +408,7 @@ export function getCommunityState(communityId: string = 'guildpass-demo'): Commu
       resources: [...(MOCK_RESOURCES[normalizedId] ?? [])],
       policies: [...(MOCK_POLICIES[normalizedId] ?? [])],
       webhookEvents: [...DEFAULT_WEBHOOK_EVENTS],
+      memberStore: { ...(MOCK_MEMBER_STORES[normalizedId] ?? {}) },
       memberStore: Object.fromEntries(
         Object.entries(MOCK_MEMBER_STORES[normalizedId] ?? {}).map(([k, v]) => [
           k,
@@ -1191,6 +1192,8 @@ export class MockAccessApi implements AccessApi {
     const action = state.pendingActions.find(a => a.id === id)
     if (!action || action.status !== 'pending') return
     
+    if (!action.currentApprovals.includes(MOCK_ADMIN_ADDRESS)) {
+      action.currentApprovals.push(MOCK_ADMIN_ADDRESS)
     const adminAddr = this.address || '0x0000000000000000000000000000000000000001'
     if (!action.currentApprovals.includes(adminAddr)) {
       action.currentApprovals.push(adminAddr)
@@ -1229,6 +1232,8 @@ export class MockAccessApi implements AccessApi {
 
   async updateApprovalConfig(config: ApprovalConfig): Promise<void> {
     await initPromise
+    const state = getCommunityState(this.communityId)
+    state.community.approvalConfig = config
     const state = getCommunityState(this.communityId);
     (state.community as any).approvalConfig = config
     schedulePersist()
@@ -1236,6 +1241,7 @@ export class MockAccessApi implements AccessApi {
 
   private _checkApproval(type: PendingActionType, payload: PendingActionPayload): { status: 'executed' | 'pending'; pendingActionId?: string } {
     const state = getCommunityState(this.communityId)
+    const config = state.community.approvalConfig
     const config = (state.community as any).approvalConfig
     const required = config ? config[type] || 1 : 1
     
@@ -1246,6 +1252,9 @@ export class MockAccessApi implements AccessApi {
         id: pendingActionId,
         type,
         payload,
+        proposer: MOCK_ADMIN_ADDRESS,
+        requiredApprovals: required,
+        currentApprovals: [MOCK_ADMIN_ADDRESS],
         proposer: adminAddr,
         requiredApprovals: required,
         currentApprovals: [adminAddr],

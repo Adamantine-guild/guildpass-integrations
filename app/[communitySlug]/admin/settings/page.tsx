@@ -71,6 +71,52 @@ export default function SettingsPage() {
               </span>
             </div>
           </CardContent>
+        <Card>
+          <CardHeader>
+            <CardTitle>Workflow & Approvals</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-sm text-muted-foreground mb-4">
+              Configure the number of admin approvals required before sensitive actions take effect. (1 = instant execution)
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Assign Role</label>
+                <Input
+                  type="number"
+                  min="1"
+                  max="5"
+                  value={approvalConfig.assignRole}
+                  onChange={(e) => setApprovalConfig({ ...approvalConfig, assignRole: parseInt(e.target.value) || 1 })}
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Remove Role</label>
+                <Input
+                  type="number"
+                  min="1"
+                  max="5"
+                  value={approvalConfig.removeRole}
+                  onChange={(e) => setApprovalConfig({ ...approvalConfig, removeRole: parseInt(e.target.value) || 1 })}
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Update Policy</label>
+                <Input
+                  type="number"
+                  min="1"
+                  max="5"
+                  value={approvalConfig.updatePolicy}
+                  onChange={(e) => setApprovalConfig({ ...approvalConfig, updatePolicy: parseInt(e.target.value) || 1 })}
+                />
+              </div>
+            </div>
+            <div className="pt-2">
+              <Button onClick={() => updateConfigMutation.mutate(approvalConfig)} disabled={updateConfigMutation.isPending}>
+                {updateConfigMutation.isPending ? "Saving..." : "Save Approvals"}
+              </Button>
+            </div>
+          </CardContent>
         </Card>
         <Card>
           <CardHeader>

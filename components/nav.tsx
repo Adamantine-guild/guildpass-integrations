@@ -164,6 +164,7 @@ export function Nav() {
 
   const items = [
     { href: `${prefix}/dashboard` as Route, label: "Dashboard", enabled: true },
+    { href: `/analytics` as Route, label: "Analytics", enabled: true },
     ...adminNavItems.map((item) => ({ ...item, enabled: true })),
     {
       href: `${prefix}/resources/alpha` as Route,

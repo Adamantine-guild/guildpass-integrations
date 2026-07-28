@@ -357,6 +357,7 @@ export default function MembersPage() {
         }
         setPendingAssignment(null);
         addToast({
+          tone: "default",
           tone: "warning",
           title: "Approval Required",
           description: `Assignment of ${input.role} to ${input.address.slice(0, 6)}…${input.address.slice(-4)} has been proposed for approval.`,
@@ -487,6 +488,7 @@ export default function MembersPage() {
         }
         setPendingAssignment(null);
         addToast({
+          tone: "default",
           tone: "warning",
           title: "Approval Required",
           description: `Removal of ${input.role} from ${input.address.slice(0, 6)}…${input.address.slice(-4)} has been proposed for approval.`,
@@ -813,6 +815,7 @@ export default function MembersPage() {
                       <span className="text-xs text-muted-foreground">
                         {log.timestamp.toLocaleTimeString()}
                       </span>
+                      {log.status === 'pending' && <Badge variant="secondary">Pending</Badge>}
                       {log.status === 'pending' && <Badge variant="outline">Pending</Badge>}
                       {log.status === 'success' && <Badge className="bg-green-600 hover:bg-green-700">Success</Badge>}
                       {log.status === 'error' && (

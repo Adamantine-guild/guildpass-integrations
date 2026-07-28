@@ -65,6 +65,8 @@
     "../lib/validation/policy.ts",
     "../lib/validation/profile.ts",
     "../lib/api/analytics.ts",
+    "../components/analytics/*.tsx",
+    "../app/analytics/*.tsx"
     "../lib/integration-client.ts",
     "../lib/integration/resilientCall.ts"
   ]
