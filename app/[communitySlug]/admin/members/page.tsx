@@ -167,7 +167,7 @@ function VirtualList<T>({
 
 export default function MembersPage() {
   const { address } = useAccount();
-  const { authSession, markExpired, sessionStatus } = useSiweAuth();
+  const { authSession, markExpired, sessionStatus, registerPendingRetry } = useSiweAuth();
   const qc = useQueryClient();
   const { toasts, addToast, dismissToast } = useToasts();
   const params = useParams();
@@ -300,13 +300,9 @@ export default function MembersPage() {
   } = useMutation<{ status: 'executed' | 'pending'; pendingActionId?: string }, unknown, AssignRoleInput, { previousQueries?: [any, any][]; auditId: string }>({
     mutationFn: (input) =>
       getApi(address, authSession?.token, communitySlug).assignRole(input.address, input.role),
-    retry: (failureCount, error) => {
-      if (error instanceof AuthError && error.code === "unauthorized" && failureCount < 1) {
-        return true;
-      }
-      return false;
-    },
-    retryDelay: 1000,
+    // Auth errors are handled via registerPendingRetry — do not auto-retry 401s
+    // to avoid racing with the re-auth banner flow.
+    retry: false,
     onMutate: async (input) => {
       const auditId = Date.now().toString() + Math.random().toString();
       setAuditLog((prev) => [
@@ -395,7 +391,7 @@ export default function MembersPage() {
       void qc.invalidateQueries({ queryKey: queryKeys.members.all(communitySlug) });
       const isExpiredSession = err instanceof AuthError && err.code === "unauthorized";
       const message = isExpiredSession
-        ? "Session expired. Use the re-authentication banner to sign in again."
+        ? "Session expired. Re-authenticating and retrying role assignment…"
         : safeErrorMessage(err);
 
       if (context?.auditId) {
@@ -408,13 +404,47 @@ export default function MembersPage() {
         );
       }
 
-      setRollbackMessage(`Change reverted: ${message}`);
+      setRollbackMessage(`Change reverted: ${safeErrorMessage(err)}`);
       addToast({
         tone: isExpiredSession ? "warning" : "error",
-        title: isExpiredSession ? "Admin session expired" : "Failed to assign role",
+        title: isExpiredSession ? "Session expired — retrying after re-auth" : "Failed to assign role",
         description: message,
       });
+
       if (isExpiredSession) {
+        // Capture the input so the mutation can be replayed once re-auth succeeds.
+        const capturedInput = _input;
+        registerPendingRetry(
+          async (freshSession) => {
+            await getApi(address, freshSession.token, communitySlug).assignRole(
+              capturedInput.address,
+              capturedInput.role,
+            );
+            // Reconcile cache and notify success
+            reconcileMemberRoleCache(
+              qc,
+              { address: capturedInput.address, role: capturedInput.role, action: "assign" },
+              communitySlug,
+            );
+            setSuccessAssignment(capturedInput);
+            setRollbackMessage("");
+            addToast({
+              tone: "success",
+              title: `Role assigned to ${capturedInput.address.slice(0, 6)}…${capturedInput.address.slice(-4)}`,
+              description: `The ${capturedInput.role} role was assigned successfully after re-authentication.`,
+            });
+          },
+          {
+            onRetryFailure: (retryErr) => {
+              setRollbackMessage(`Retry failed: ${safeErrorMessage(retryErr)}`);
+              addToast({
+                tone: "error",
+                title: "Role assignment failed after re-auth",
+                description: safeErrorMessage(retryErr),
+              });
+            },
+          },
+        );
         markExpired();
       }
     },
@@ -434,13 +464,8 @@ export default function MembersPage() {
   >({
     mutationFn: (input) =>
       getApi(address, authSession?.token, communitySlug).removeRole(input.address, input.role),
-    retry: (failureCount, error) => {
-      if (error instanceof AuthError && error.code === "unauthorized" && failureCount < 1) {
-        return true;
-      }
-      return false;
-    },
-    retryDelay: 1000,
+    // Auth errors are handled via registerPendingRetry — do not auto-retry 401s.
+    retry: false,
     onMutate: async (input) => {
       const auditId = Date.now().toString() + Math.random().toString();
       setAuditLog((prev) => [
@@ -524,7 +549,7 @@ export default function MembersPage() {
       void qc.invalidateQueries({ queryKey: queryKeys.members.all(communitySlug) });
       const isExpiredSession = err instanceof AuthError && err.code === "unauthorized";
       const message = isExpiredSession
-        ? "Session expired. Use the re-authentication banner to sign in again."
+        ? "Session expired. Re-authenticating and retrying role removal…"
         : safeErrorMessage(err);
 
       if (context?.auditId) {
@@ -537,13 +562,45 @@ export default function MembersPage() {
         );
       }
 
-      setRollbackMessage(`Change reverted: ${message}`);
+      setRollbackMessage(`Change reverted: ${safeErrorMessage(err)}`);
       addToast({
         tone: isExpiredSession ? "warning" : "error",
-        title: isExpiredSession ? "Admin session expired" : "Failed to remove role",
+        title: isExpiredSession ? "Session expired — retrying after re-auth" : "Failed to remove role",
         description: message,
       });
+
       if (isExpiredSession) {
+        const capturedInput = _input;
+        registerPendingRetry(
+          async (freshSession) => {
+            await getApi(address, freshSession.token, communitySlug).removeRole(
+              capturedInput.address,
+              capturedInput.role,
+            );
+            reconcileMemberRoleCache(
+              qc,
+              { address: capturedInput.address, role: capturedInput.role, action: "remove" },
+              communitySlug,
+            );
+            setSuccessMessage(`Role "${capturedInput.role}" removed from ${capturedInput.address}.`);
+            setRollbackMessage("");
+            addToast({
+              tone: "success",
+              title: `Role removed from ${capturedInput.address.slice(0, 6)}…${capturedInput.address.slice(-4)}`,
+              description: `The ${capturedInput.role} role was removed successfully after re-authentication.`,
+            });
+          },
+          {
+            onRetryFailure: (retryErr) => {
+              setRollbackMessage(`Retry failed: ${safeErrorMessage(retryErr)}`);
+              addToast({
+                tone: "error",
+                title: "Role removal failed after re-auth",
+                description: safeErrorMessage(retryErr),
+              });
+            },
+          },
+        );
         markExpired();
       }
     },

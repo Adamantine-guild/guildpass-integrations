@@ -62,6 +62,7 @@ require.cache[providersPath] = {
       login: async () => {},
       logout: async () => {},
       markExpired: () => {},
+      registerPendingRetry: () => {},
     }),
   },
 } as any
