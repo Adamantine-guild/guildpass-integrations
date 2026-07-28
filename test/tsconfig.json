@@ -1,6 +1,7 @@
 {
   "extends": "../tsconfig.json",
   "compilerOptions": {
+    "skipLibCheck": true,
     "module": "CommonJS",
     "moduleResolution": "Node10",
     "noEmit": false,
@@ -16,8 +17,10 @@
     "../lib/api/access-decision.ts",
     "../lib/api/mock.ts",
     "../lib/wallet/address.ts",
+    "../lib/wallet/chains.ts",
     "../lib/wallet/connectors.ts",
     "../lib/wallet/siwe-session.ts",
+    "../lib/wallet/config.ts",
     "../lib/config.ts",
     "../lib/features.ts",
     "../components/feature-gate.tsx",

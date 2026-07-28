@@ -2,6 +2,7 @@ import type { Metadata } from 'next'
 import './globals.css'
 import { RootProviders } from '@/lib/wallet/providers'
 import { Nav } from '@/components/nav'
+import { UnsupportedChainBanner } from '@/components/wallet/unsupported-chain-banner'
 
 export const metadata: Metadata = {
   title: 'GuildPass',
@@ -14,6 +15,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body>
         <RootProviders>
           <Nav />
+          <UnsupportedChainBanner />
           <main className="mx-auto max-w-6xl px-4 py-6">{children}</main>
         </RootProviders>
       </body>
