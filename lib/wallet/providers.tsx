@@ -54,6 +54,7 @@ import {
   useRef,
   useState,
 } from "react";
+import type { PendingRetryCallback } from "@/lib/wallet/siwe-context";
 import {
   WagmiProvider,
   createConfig,
@@ -148,6 +149,19 @@ export interface SiweAuthContextValue {
   logout: () => Promise<void>;
   /** Mark the current session as expired (e.g. after a 401 from the backend). */
   markExpired: () => void;
+  /**
+   * Register a callback to be automatically retried once after the user
+   * successfully re-authenticates following a 401.  The callback receives the
+   * fresh session so it can supply the new token to its API call.
+   *
+   * Only one retry is attempted per registration — if the retried call also
+   * returns a 401 the callback is discarded and a failure toast is shown via
+   * the `onRetryFailure` handler passed in the registration options.
+   */
+  registerPendingRetry: (
+    callback: PendingRetryCallback,
+    options?: { onRetryFailure?: (err: unknown) => void }
+  ) => void;
 }
 
 const queryClient = new QueryClient({
@@ -232,6 +246,18 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
         dispatch({ type: "refresh-success", session: refreshed });
         broadcast({ type: "refreshed", session: refreshed });
         scheduleRenewal(refreshed);
+
+        // A silent refresh also counts as session recovery — drain any pending
+        // retry callbacks that were registered before the 401 was surfaced.
+        const retries = pendingRetriesRef.current;
+        pendingRetriesRef.current = [];
+        for (const entry of retries) {
+          try {
+            await entry.callback(refreshed);
+          } catch (retryErr) {
+            entry.onRetryFailure?.(retryErr);
+          }
+        }
       } catch {
         // 401 or network failure — session cannot be renewed
         clearAuthSession();
@@ -481,6 +507,30 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, [chainId]);
 
+  // ── Pending-retry queue ──────────────────────────────────────────────────────
+  //
+  // When a mutation fails with 401, it may register a retry callback here
+  // before calling markExpired().  After a successful re-auth, signIn() drains
+  // this queue by invoking each callback with the fresh session.  A second 401
+  // on the retry call invokes the registered onRetryFailure handler instead of
+  // looping forever.
+
+  type RetryEntry = {
+    callback: PendingRetryCallback;
+    onRetryFailure?: (err: unknown) => void;
+  };
+  const pendingRetriesRef = useRef<RetryEntry[]>([]);
+
+  const registerPendingRetry = useCallback(
+    (callback: PendingRetryCallback, options?: { onRetryFailure?: (err: unknown) => void }) => {
+      pendingRetriesRef.current = [
+        ...pendingRetriesRef.current,
+        { callback, onRetryFailure: options?.onRetryFailure },
+      ];
+    },
+    [],
+  );
+
   // ── Sign-in ─────────────────────────────────────────────────────────────────
 
   const signIn = useCallback(async () => {
@@ -519,6 +569,21 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
       dispatch({ type: "sign-in-success", session });
       scheduleRenewal(session);
       broadcast({ type: "signed-in", session });
+
+      // Drain any pending retry callbacks registered before re-auth.
+      // We take the entire queue atomically so a second 401 inside a callback
+      // does not enqueue another retry and cause an infinite loop.
+      const retries = pendingRetriesRef.current;
+      pendingRetriesRef.current = [];
+      for (const entry of retries) {
+        try {
+          await entry.callback(session);
+        } catch (retryErr) {
+          // The retried call failed — invoke the registered failure handler
+          // rather than silently swallowing the error.
+          entry.onRetryFailure?.(retryErr);
+        }
+      }
     } catch (err) {
       dispatch({
         type: "sign-in-error",
@@ -598,6 +663,7 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
       login: signIn, // backward-compat alias
       logout,
       markExpired,
+      registerPendingRetry,
     }),
     [
       state.authSession,
@@ -611,6 +677,7 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
       signIn,
       logout,
       markExpired,
+      registerPendingRetry,
     ],
   );
 

@@ -100,7 +100,8 @@ const mockWalletProviders = {
     signIn: () => {},
     logout: () => {},
     error: null,
-    markExpired: () => {}
+    markExpired: () => {},
+    registerPendingRetry: () => {},
   })
 }
 const providersPath = require.resolve('../lib/wallet/providers')

@@ -36,6 +36,7 @@ const mockProviders = {
     login: async () => {},
     logout: async () => {},
     markExpired: () => {},
+    registerPendingRetry: () => {},
     ...mockAuthState,
   }),
 }
