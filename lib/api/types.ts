@@ -6,6 +6,18 @@
  */
 
 import { z } from 'zod';
+import { ApiError } from './errors'
+
+/**
+ * The API contract version this frontend build expects the backend to
+ * implement. Generated from test/fixtures/openapi.json info.version.
+ */
+export const EXPECTED_API_VERSION = "1.0.0"
+
+export type ResourceLookupResult =
+  | { status: 'found'; data: Resource; source: 'direct' | 'fallback' }
+  | { status: 'not_found' }
+  | { status: 'error'; error: ApiError }
 
 export type Role = 'member' | 'moderator' | 'admin'
 
@@ -35,11 +47,37 @@ export const WebhookEventLogSchema = z.object({
   payloadSummary: WebhookPayloadSummarySchema,
 })
 
+export interface ApprovalConfig {
+  assignRole: number
+  removeRole: number
+  updatePolicy: number
+}
+
+export type PendingActionType = 'assignRole' | 'removeRole' | 'updatePolicy'
+
+export interface PendingActionPayload {
+  address?: string
+  role?: string
+  policy?: AccessPolicy
+}
+
+export interface PendingAction {
+  id: string
+  type: PendingActionType
+  payload: PendingActionPayload
+  proposer: string
+  requiredApprovals: number
+  currentApprovals: string[] // List of admin addresses who approved
+  status: 'pending' | 'approved' | 'rejected' | 'executed'
+  createdAt: string
+}
+
 export interface Community {
   id: string
   name: string
   description?: string
   tiers: MembershipTier[]
+  approvalConfig?: ApprovalConfig
 }
 
 export const CommunitySchema = z.object({
@@ -63,10 +101,22 @@ export const MembershipSchema = z.object({
   expiresAt: z.string().optional(),
 })
 
+export interface SocialLink {
+  platform: string
+  url: string
+}
+
+export const SocialLinkSchema = z.object({
+  platform: z.string(),
+  url: z.string(),
+})
+
 export interface MemberProfile {
   address: string
   displayName?: string
   bio?: string
+  avatar?: string
+  socialLinks?: SocialLink[]
   badges: string[]
 }
 
@@ -74,6 +124,8 @@ export const MemberProfileSchema = z.object({
   address: z.string(),
   displayName: z.string().optional(),
   bio: z.string().optional(),
+  avatar: z.string().optional(),
+  socialLinks: z.array(SocialLinkSchema).optional(),
   badges: z.array(z.string()),
 })
 
@@ -149,6 +201,7 @@ export interface AccessPolicy {
   minTier?: MembershipTier
   roles?: Role[]
   rule?: AccessRule
+  updatedAt?: string
 }
 
 export const AccessPolicySchema = z.object({
@@ -156,6 +209,7 @@ export const AccessPolicySchema = z.object({
   minTier: MembershipTierSchema.optional(),
   roles: z.array(RoleSchema).optional(),
   rule: AccessRuleSchema.optional(),
+  updatedAt: z.string().optional(),
 })
 
 export interface MemberRow {
@@ -172,6 +226,48 @@ export const MemberRowSchema = z.object({
   active: z.boolean(),
 })
 
+export interface MemberGrowthDataPoint {
+  date: string
+  newMembers: number
+  totalMembers: number
+}
+
+export const MemberGrowthDataPointSchema = z.object({
+  date: z.string(),
+  newMembers: z.number(),
+  totalMembers: z.number(),
+})
+
+export interface ResourceAccessCount {
+  resourceId: string
+  resourceTitle: string
+  accessCount: number
+  deniedCount: number
+}
+
+export const ResourceAccessCountSchema = z.object({
+  resourceId: z.string(),
+  resourceTitle: z.string(),
+  accessCount: z.number(),
+  deniedCount: z.number(),
+})
+
+export interface AnalyticsSummary {
+  totalMembers: number
+  activeMembers: number
+  memberGrowth: MemberGrowthDataPoint[]
+  resourceAccess: ResourceAccessCount[]
+  generatedAt: string
+}
+
+export const AnalyticsSummarySchema = z.object({
+  totalMembers: z.number(),
+  activeMembers: z.number(),
+  memberGrowth: z.array(MemberGrowthDataPointSchema),
+  resourceAccess: z.array(ResourceAccessCountSchema),
+  generatedAt: z.string(),
+})
+
 export const ApiErrorBodySchema = z.object({
   code: z.string().optional(),
   error: z.string().optional(),
@@ -181,19 +277,10 @@ export const ApiErrorBodySchema = z.object({
 
 export interface SiweAuthSession {
   isAuthenticated: true
-  /** Short-lived access token (typically 1 h). Attach as `Authorization: Bearer` on admin mutations. */
   token: string
   address: string
-  /** ISO 8601 expiry of the access token. */
   expiresAt: string
-  /**
-   * Opaque longer-lived refresh credential (typically 7 d).
-   * Must be treated as a secret — never log or expose it.
-   * Optional so that existing persisted sessions without a refresh token
-   * are still valid (they will just not support silent renewal).
-   */
   refreshToken?: string
-  /** ISO 8601 expiry of the refresh token. Absence means no refresh is available. */
   refreshExpiresAt?: string
 }
 
@@ -212,6 +299,90 @@ export const WalletVerificationSchema = z.object({
   checkedAt: z.string(),
 })
 
+export type ConnectionStatus = 'pending' | 'accepted' | 'blocked'
+
+export const ConnectionStatusSchema = z.enum(['pending', 'accepted', 'blocked'])
+
+export interface Connection {
+  id: string
+  fromAddress: string
+  toAddress: string
+  status: ConnectionStatus
+  createdAt: string
+  updatedAt: string
+}
+
+export const ConnectionSchema = z.object({
+  id: z.string(),
+  fromAddress: z.string(),
+  toAddress: z.string(),
+  status: ConnectionStatusSchema,
+  createdAt: z.string(),
+  updatedAt: z.string(),
+})
+
+export type PrivacySetting = 'public' | 'mutual-only' | 'private'
+
+export const PrivacySettingSchema = z.enum(['public', 'mutual-only', 'private'])
+
+export interface MemberPrivacySettings {
+  address: string
+  connectionVisibility: PrivacySetting
+}
+
+export const MemberPrivacySettingsSchema = z.object({
+  address: z.string(),
+  connectionVisibility: PrivacySettingSchema,
+})
+
+export type ModerationState = 'report_submitted' | 'under_review' | 'action_taken' | 'dismissed' | 'appeal_submitted' | 'appeal_reviewed_reinstated' | 'appeal_reviewed_upheld'
+
+export const ModerationStateSchema = z.enum(['report_submitted', 'under_review', 'action_taken', 'dismissed', 'appeal_submitted', 'appeal_reviewed_reinstated', 'appeal_reviewed_upheld'])
+
+export type PenaltyType = 'warning' | 'suspension' | 'permanent_ban'
+
+export const PenaltyTypeSchema = z.enum(['warning', 'suspension', 'permanent_ban'])
+
+export interface MetaResponse {
+  version: string
+  commit?: string
+  uptime?: number
+}
+
+export const MetaResponseSchema = z.object({
+  version: z.string(),
+  commit: z.string().optional(),
+  uptime: z.number().optional(),
+})
+
+export interface ModerationReport {
+  id: string
+  reporterAddress: string
+  reportedAddress: string
+  reason: string
+  details?: string
+  state: ModerationState
+  penaltyApplied?: PenaltyType
+  appealNotes?: string
+  adminNotes?: string
+  createdAt: string
+  updatedAt: string
+}
+
+export const ModerationReportSchema = z.object({
+  id: z.string(),
+  reporterAddress: z.string(),
+  reportedAddress: z.string(),
+  reason: z.string(),
+  details: z.string().optional(),
+  state: ModerationStateSchema,
+  penaltyApplied: PenaltyTypeSchema.optional(),
+  appealNotes: z.string().optional(),
+  adminNotes: z.string().optional(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+})
+
 export type WebhookEventStatus = 'success' | 'failed' | 'pending';
 
 export type WebhookEventType = 
@@ -220,6 +391,8 @@ export type WebhookEventType =
   | 'membership.expired' 
   | 'tier.upgraded' 
   | 'policy.updated';
+
+export type WebhookEventUnsubscribe = () => void
 
 export interface WebhookEventLog {
   id: string;
@@ -233,6 +406,35 @@ export interface WebhookEventLog {
     tier?: string;
     reason?: string;
   };
+  /** Raw event payload for detail inspection (optional — added by the replay/debug tool). */
+  fullPayload?: Record<string, unknown>;
+  /** True when this entry was injected via the replay/debug tool rather than ingested from a real webhook. */
+  isReplay?: boolean;
+}
+
+export interface ApprovalConfig {
+  assignRole: number
+  removeRole: number
+  updatePolicy: number
+}
+
+export type PendingActionType = 'assignRole' | 'removeRole' | 'updatePolicy'
+
+export interface PendingActionPayload {
+  address?: string
+  role?: string
+  policy?: AccessPolicy
+}
+
+export interface PendingAction {
+  id: string
+  type: PendingActionType
+  payload: PendingActionPayload
+  proposer: string
+  requiredApprovals: number
+  currentApprovals: string[]
+  status: 'pending' | 'approved' | 'rejected' | 'executed'
+  createdAt: string
 }
 
 export interface WalletVerification {
@@ -265,12 +467,6 @@ export interface MemberGrowthDataPoint {
   totalMembers: number
 }
 
-export const MemberGrowthDataPointSchema = z.object({
-  date: z.string(),
-  newMembers: z.number().int().nonnegative(),
-  totalMembers: z.number().int().nonnegative(),
-})
-
 /**
  * Access attempt counts for a single gated resource.
  */
@@ -282,13 +478,6 @@ export interface ResourceAccessCount {
   /** Number of denied access attempts (insufficient tier/role). */
   deniedCount: number
 }
-
-export const ResourceAccessCountSchema = z.object({
-  resourceId: z.string(),
-  resourceTitle: z.string(),
-  accessCount: z.number().int().nonnegative(),
-  deniedCount: z.number().int().nonnegative(),
-})
 
 /**
  * Top-level analytics summary for the admin dashboard.
@@ -311,14 +500,6 @@ export interface AnalyticsSummary {
   generatedAt: string
 }
 
-export const AnalyticsSummarySchema = z.object({
-  totalMembers: z.number().int().nonnegative(),
-  activeMembers: z.number().int().nonnegative(),
-  memberGrowth: z.array(MemberGrowthDataPointSchema),
-  resourceAccess: z.array(ResourceAccessCountSchema),
-  generatedAt: z.string(),
-})
-
 // ── Access Decision (cached per wallet + resource) ───────────────────────────
 
 /**
@@ -333,6 +514,29 @@ export interface AccessDecision {
   reason: string
   /** ISO timestamp of when the check was performed */
   checkedAt: string
+}
+
+export interface WebhookEvent {
+  id: string
+  type: string
+  payload: any
+  createdAt: string
+  status?: string
+}
+
+export interface Paginated<T> {
+  data: T[]
+  total: number
+  page: number
+  limit: number
+}
+
+export interface AdminEventFilterParams {
+  types?: string[]
+  startDate?: string
+  endDate?: string
+  page?: number
+  limit?: number
 }
 
 // ── Client-side State Types ──────────────────────────────────────────────────
@@ -381,6 +585,9 @@ export interface BackendMember {
   display_name?: string
   username?: string
   bio?: string
+  avatar?: string
+  socialLinks?: SocialLink[]
+  social_links?: SocialLink[]
   badges?: string[]
 }
 
@@ -402,6 +609,8 @@ export interface BackendPolicy {
   min_tier?: MembershipTier
   roles?: Role[]
   rule?: AccessRule
+  updatedAt?: string
+  updated_at?: string
 }
 
 export interface BackendSession {
@@ -430,16 +639,42 @@ export interface PaginatedMembers {
 
 export interface MemberAccessApi {
   // ── Read-only (no auth token required) ──────────────────────────────────
-  getSession(): Promise<Session>
-  getCommunity(): Promise<Community>
-  getMembership(address: string): Promise<Membership | null>
-  verifyWallet(address: string): Promise<WalletVerification>
-  getProfile(address: string): Promise<MemberProfile | null>
-  listMembers(params?: { cursor?: string; limit?: number; filter?: string }): Promise<MemberRow[] | PaginatedMembers>
-  listResources(): Promise<Resource[]>
-  listPolicies(): Promise<AccessPolicy[]>
-  getResource(id: string): Promise<Resource | null>
-  getPolicy(resourceId: string): Promise<AccessPolicy | null>
+  getSession(signal?: AbortSignal): Promise<Session>
+  getCommunity(signal?: AbortSignal): Promise<Community>
+  getMembership(address: string, signal?: AbortSignal): Promise<Membership | null>
+  verifyWallet(address: string, signal?: AbortSignal): Promise<WalletVerification>
+  getProfile(address: string, signal?: AbortSignal): Promise<MemberProfile | null>
+  listMembers(params?: { cursor?: string; limit?: number; filter?: string }, signal?: AbortSignal): Promise<MemberRow[] | PaginatedMembers>
+  listResources(signal?: AbortSignal): Promise<Resource[]>
+  listPolicies(signal?: AbortSignal): Promise<AccessPolicy[]>
+  getResource(id: string, signal?: AbortSignal): Promise<ResourceLookupResult>
+  getPolicy(resourceId: string, signal?: AbortSignal): Promise<AccessPolicy | null>
+  /**
+   * Updates the caller's own profile (display name, bio, avatar, social
+   * links). The one mutation on this interface: unlike the rest of
+   * {@link MemberAccessApi} it requires a SIWE bearer token, but reuses the
+   * existing member/admin SIWE session rather than a separate auth
+   * mechanism — the backend must reject the request unless the token's
+   * address matches `profile.address`. `badges` is system-assigned and is
+   * not settable through this method.
+   */
+  updateProfile(profile: MemberProfile): Promise<void>
+
+  /**
+   * Fetch backend metadata including the API contract version.
+   * Used by the startup version-compatibility check.
+   */
+  getMeta(signal?: AbortSignal): Promise<MetaResponse>
+
+  // ── Social Graph (Connections / Blocks) ──
+  getConnections(address: string, signal?: AbortSignal): Promise<Connection[]>
+  getPrivacySettings(address: string, signal?: AbortSignal): Promise<MemberPrivacySettings>
+  updatePrivacySettings(address: string, settings: MemberPrivacySettings): Promise<void>
+  blockMember(targetAddress: string): Promise<void>
+  unblockMember(targetAddress: string): Promise<void>
+  createConnectionRequest(targetAddress: string): Promise<void>
+  acceptConnectionRequest(targetAddress: string): Promise<void>
+  rejectConnectionRequest(targetAddress: string): Promise<void>
 }
 
 /**
@@ -448,17 +683,38 @@ export interface MemberAccessApi {
  */
 export interface AdminAccessApi {
   // ── Admin queries & mutations (require a valid SIWE token context) ────────
-  listWebhookEvents(): Promise<WebhookEventLog[]>
+  listWebhookEvents(signal?: AbortSignal): Promise<WebhookEventLog[]>
+  /**
+   * Subscribe to the admin webhook event stream.
+   *
+   * @provisional Live mode attempts `GET /v1/admin/events/stream` as an
+   * SSE-compatible stream. If setup fails, the caller should fall back to
+   * `listWebhookEvents()` polling.
+   */
+  subscribeWebhookEvents(
+    onEvent: (event: WebhookEventLog) => void,
+    onError?: (error: unknown) => void,
+  ): WebhookEventUnsubscribe
   /**
    * Fetch the analytics summary for the admin dashboard.
    *
    * @provisional Calls `GET /v1/admin/analytics` — endpoint not yet live in
    * guildpass-core. Contract tracked in issue #157; pending backend confirmation.
    */
-  getAnalyticsSummary(): Promise<AnalyticsSummary>
-  assignRole(address: string, role: Role): Promise<void>
-  removeRole(address: string, role: Role): Promise<void>
-  updatePolicy(policy: AccessPolicy): Promise<void>
+  getAnalyticsSummary(signal?: AbortSignal): Promise<AnalyticsSummary>
+  getPendingActions(): Promise<PendingAction[]>
+  approveAction(id: string): Promise<void>
+  rejectAction(id: string): Promise<void>
+  updateApprovalConfig(config: ApprovalConfig): Promise<void>
+  
+  assignRole(address: string, role: Role): Promise<{ status: 'executed' | 'pending'; pendingActionId?: string }>
+  removeRole(address: string, role: Role): Promise<{ status: 'executed' | 'pending'; pendingActionId?: string }>
+  updatePolicy(policy: AccessPolicy): Promise<{ status: 'executed' | 'pending'; pendingActionId?: string }>
+
+  // ── Moderation Queue ──
+  listReports(signal?: AbortSignal): Promise<ModerationReport[]>
+  getReport(id: string, signal?: AbortSignal): Promise<ModerationReport | null>
+  updateReportState(id: string, state: ModerationState, updates?: Partial<ModerationReport>): Promise<void>
 }
 
 /**

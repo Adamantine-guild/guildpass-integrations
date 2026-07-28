@@ -44,6 +44,24 @@ The status is exposed via `useSiweAuth().sessionStatus` and is derived from loca
 
 ---
 
+## XSS mitigation (interim)
+
+The session token is stored in `sessionStorage` and is therefore readable by
+any JavaScript running on the page — this is a known XSS exfiltration vector.
+Until the httpOnly cookie migration (see [`http-only-cookie-migration.md`](./http-only-cookie-migration.md))
+is complete, these defenses reduce risk:
+
+| Mitigation | Detail |
+|------------|--------|
+| **CSP headers** | `next.config.mjs` sets a strict `Content-Security-Policy` that constrains `connect-src` to configured origins, blocks `eval()`, and disallows frames and plugins. |
+| **Short access token TTL** | The access token expires after ~1 hour, limiting the window in which a stolen token is usable. |
+| **Refresh token rotation** | Each refresh invalidates the previous refresh token, so a leaked refresh token is worthless after the first legitimate use. |
+| **`lib/session.ts` isolation** | All `sessionStorage` access is confined to `lib/session.ts`; no component reads the storage directly. This enables a future swap to httpOnly cookies without touching call sites. |
+
+See also: `docs/http-only-cookie-migration.md` for the full migration plan.
+
+---
+
 ## Required Backend Endpoints (live mode only)
 
 | Method | Path | Request body | Success response |
@@ -53,6 +71,33 @@ The status is exposed via `useSiweAuth().sessionStatus` and is derived from loca
 | `POST` | `/v1/auth/siwe/logout` | — (Bearer token in `Authorization` header) | `204 No Content` |
 
 > In **mock mode** all three endpoints are simulated in-memory — no backend required.
+
+---
+
+## Nonce Lifecycle Contract
+
+The `/v1/auth/siwe/nonce` and `/v1/auth/siwe/verify` endpoints work together to provide replay-safe SIWE authentication. Integrators implementing the backend must adhere to these invariants:
+
+| Property | Requirement |
+|----------|------------|
+| **Single-use** | A nonce is consumed on the first successful call to `/v1/auth/siwe/verify`. Any subsequent verify attempt with the same nonce must be rejected. |
+| **TTL (time-to-live)** | A nonce expires after a fixed window from issuance (recommended: **5 minutes**). An expired nonce must be rejected even if never used. |
+| **Address binding** | The nonce should be stored server-side and associated with the requesting address so that a nonce issued for address A cannot be used in a message claiming address B. |
+| **Unpredictability** | Nonces must be generated with a cryptographically-secure random source — no counters, timestamps, or UUIDs alone. |
+| **Message extraction** | The frontend embeds the nonce in the EIP-4361 message `Nonce:` field. The backend must parse this field from the signed message and look it up in its store. |
+
+### Error responses
+
+Both rejection cases return `400 Bad Request` with a distinguishable `safeMessage` so the frontend can surface a meaningful error:
+
+| Condition | HTTP status | `code` | `safeMessage` |
+|-----------|-----------|--------|---------------|
+| Nonce not found or already used | `400` | `bad_request` | `"Nonce not found or already used."` |
+| Nonce expired | `400` | `bad_request` | `"Nonce expired. Please request a new one."` |
+
+The frontend (in mock mode) enforces the same contract so contributors developing against mock mode encounter the same constraints as production.
+
+---
 
 ### Field contract for `/v1/auth/siwe/verify`
 

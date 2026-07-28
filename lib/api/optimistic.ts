@@ -1,4 +1,4 @@
-import type { AccessPolicy, MemberRow, Role } from './types'
+import type { AccessPolicy, MemberProfile, MemberRow, Role } from './types'
 
 export function applyOptimisticRole(
   members: MemberRow[] | undefined,
@@ -62,4 +62,20 @@ export function applyOptimisticPolicy(
   return currentPolicies.map((currentPolicy, index) =>
     index === policyIndex ? policy : currentPolicy,
   )
+}
+
+export function applyOptimisticProfile(
+  current: MemberProfile | null | undefined,
+  update: MemberProfile,
+): MemberProfile {
+  return {
+    address: update.address,
+    displayName: update.displayName,
+    bio: update.bio,
+    avatar: update.avatar,
+    socialLinks: update.socialLinks,
+    // badges are system-assigned and never accepted from the client — always
+    // carry forward whatever is already cached rather than the submitted value.
+    badges: current?.badges ?? [],
+  }
 }

@@ -10,8 +10,11 @@ import {
   MemberRow,
   Membership,
   MembershipTier,
+  MetaResponse,
+  MetaResponseSchema,
   PaginatedMembers,
   Resource,
+  ResourceLookupResult,
   Role,
   Session,
   SiweAuthSession,
@@ -21,6 +24,7 @@ import {
   BackendResource,
   BackendPolicy,
   WebhookEventLog,
+  WebhookEventUnsubscribe,
   SessionSchema,
   CommunitySchema,
   MembershipSchema,
@@ -31,7 +35,17 @@ import {
   AccessPolicySchema,
   WebhookEventLogSchema,
   SiweAuthSessionSchema,
+  Connection,
+  ConnectionSchema,
+  MemberPrivacySettings,
+  MemberPrivacySettingsSchema,
+  ModerationReport,
+  ModerationReportSchema,
+  ModerationState,
+  PendingAction,
+  ApprovalConfig,
 } from './types'
+import { checkVersionCompatibility, type VersionCompatibility } from './version'
 import {
   mapCommunity,
   mapMembership,
@@ -42,7 +56,7 @@ import {
   mapSession,
   mapWebhookEvent,
 } from './mappers'
-import { ApiError } from './errors'
+import { ApiError, AuthError, NetworkError } from './errors'
 import {
   validateCommunityResponse,
   validateMemberProfileResponse,
@@ -56,13 +70,157 @@ import {
   validateWebhookEventsResponse,
 } from './validators'
 
-/** Alias for ApiError — re-exported so admin pages can import AuthError from this module. */
-export { ApiError as AuthError } from './errors'
+/**
+ * Re-exported so admin pages can import these from this module.
+ * AuthError, NetworkError, isAuthError, isNetworkError, and categorizeError
+ * are now dedicated implementations in ./errors.
+ */
+export {
+  AuthError,
+  NetworkError,
+  isAuthError,
+  isNetworkError,
+  categorizeError,
+  type ErrorCategory,
+} from './errors'
 
 import { PolicyValidationError, validatePolicy } from '../validation/policy'
+import { ProfileValidationError, validateProfile } from '../validation/profile'
 import { config } from '../config'
+import { ensureOnline, backendOnline } from '@/lib/api/backendStatus'
+import { OfflineError } from '@/lib/api/errors'
 
 const BASE = config.apiUrl
+
+type CircuitState = 'closed' | 'open' | 'half-open'
+
+interface CircuitEntry {
+  state: CircuitState
+  failures: number[]
+  openedAt?: number
+  halfOpenProbeInFlight: boolean
+}
+
+const RETRY_MAX_ATTEMPTS = Number(
+  process.env.NEXT_PUBLIC_API_RETRY_MAX_ATTEMPTS ?? 3,
+)
+const RETRY_BASE_DELAY_MS = Number(
+  process.env.NEXT_PUBLIC_API_RETRY_BASE_DELAY_MS ?? 100,
+)
+const RETRY_MAX_DELAY_MS = Number(
+  process.env.NEXT_PUBLIC_API_RETRY_MAX_DELAY_MS ?? 1_000,
+)
+const CIRCUIT_FAILURE_THRESHOLD = Number(
+  process.env.NEXT_PUBLIC_API_CIRCUIT_FAILURE_THRESHOLD ?? 3,
+)
+const CIRCUIT_FAILURE_WINDOW_MS = Number(
+  process.env.NEXT_PUBLIC_API_CIRCUIT_FAILURE_WINDOW_MS ?? 30_000,
+)
+const CIRCUIT_COOLDOWN_MS = Number(
+  process.env.NEXT_PUBLIC_API_CIRCUIT_COOLDOWN_MS ?? 10_000,
+)
+
+const circuitBreakers = new Map<string, CircuitEntry>()
+
+function requestMethod(init?: RequestInit): string {
+  return (init?.method ?? 'GET').toUpperCase()
+}
+
+function shouldRetryRequest(init?: RequestInit | RequestOptions): boolean {
+  return requestMethod(init) === 'GET'
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function backoffDelayMs(attemptIndex: number): number {
+  const exponentialDelay = Math.min(
+    RETRY_BASE_DELAY_MS * 2 ** Math.max(0, attemptIndex - 1),
+    RETRY_MAX_DELAY_MS,
+  )
+  const jitter = Math.floor(Math.random() * exponentialDelay * 0.25)
+  return exponentialDelay + jitter
+}
+
+function getCircuit(path: string): CircuitEntry {
+  let circuit = circuitBreakers.get(path)
+  if (!circuit) {
+    circuit = { state: 'closed', failures: [], halfOpenProbeInFlight: false }
+    circuitBreakers.set(path, circuit)
+  }
+  return circuit
+}
+
+function serviceUnavailableError(path: string): ApiError {
+  return new ApiError({
+    status: 503,
+    code: 'service_unavailable',
+    safeMessage: 'Service temporarily unavailable. Please try again shortly.',
+    path,
+    retryable: true,
+  })
+}
+
+function assertCircuitAllowsRequest(path: string): void {
+  const circuit = getCircuit(path)
+  if (circuit.state !== 'open') {
+    return
+  }
+
+  const openedAt = circuit.openedAt ?? 0
+  if (Date.now() - openedAt >= CIRCUIT_COOLDOWN_MS) {
+    circuit.state = 'half-open'
+    circuit.halfOpenProbeInFlight = false
+  } else {
+    throw serviceUnavailableError(path)
+  }
+
+  if (circuit.halfOpenProbeInFlight) {
+    throw serviceUnavailableError(path)
+  }
+  circuit.halfOpenProbeInFlight = true
+}
+
+function recordCircuitSuccess(path: string): void {
+  const circuit = getCircuit(path)
+  circuit.state = 'closed'
+  circuit.failures = []
+  circuit.openedAt = undefined
+  circuit.halfOpenProbeInFlight = false
+}
+
+function recordCircuitFailure(path: string): void {
+  const now = Date.now()
+  const circuit = getCircuit(path)
+  circuit.failures = circuit.failures.filter(
+    (failureAt) => now - failureAt <= CIRCUIT_FAILURE_WINDOW_MS,
+  )
+  circuit.failures.push(now)
+  circuit.halfOpenProbeInFlight = false
+
+  if (
+    circuit.state === 'half-open' ||
+    circuit.failures.length >= CIRCUIT_FAILURE_THRESHOLD
+  ) {
+    circuit.state = 'open'
+    circuit.openedAt = now
+  }
+}
+
+function isRetryableError(err: unknown): boolean {
+  return (
+    err instanceof ApiError &&
+    err.retryable &&
+    (err.code === 'network_error' ||
+      err.code === 'server_error' ||
+      err.code === 'rate_limited')
+  )
+}
+
+export function resetLiveApiResilienceState(): void {
+  circuitBreakers.clear()
+}
 
 function createApiError(status: number, body?: ApiErrorBody, path?: string): ApiError {
   const details =
@@ -81,7 +239,7 @@ function createApiError(status: number, body?: ApiErrorBody, path?: string): Api
   }
 
   if (status === 401) {
-    return new ApiError({
+    return new AuthError({
       status,
       code: 'unauthorized',
       safeMessage: 'Session expired. Please sign in again.',
@@ -90,7 +248,7 @@ function createApiError(status: number, body?: ApiErrorBody, path?: string): Api
   }
 
   if (status === 403) {
-    return new ApiError({
+    return new AuthError({
       status,
       code: 'forbidden',
       safeMessage: 'You do not have permission to perform this action.',
@@ -104,6 +262,17 @@ function createApiError(status: number, body?: ApiErrorBody, path?: string): Api
       code: 'not_found',
       safeMessage: 'The requested resource could not be found.',
       path,
+    })
+  }
+
+  if (status === 409) {
+    return new ApiError({
+      status,
+      code: 'conflict',
+      safeMessage:
+        body?.message || 'This policy was modified by another user. Please reload and try again.',
+      path,
+      details,
     })
   }
 
@@ -165,6 +334,24 @@ async function parseErrorBody(
   }
 }
 
+function parseSseEvent(chunk: string): WebhookEventLog[] {
+  return chunk
+    .split('\n\n')
+    .map((block) => {
+      const data = block
+        .split('\n')
+        .filter((line) => line.startsWith('data:'))
+        .map((line) => line.slice(5).trimStart())
+        .join('\n')
+
+      if (!data || data === '[DONE]') return null
+      const parsed = JSON.parse(data)
+      WebhookEventLogSchema.parse(parsed)
+      return mapWebhookEvent(parsed)
+    })
+    .filter((event): event is WebhookEventLog => event !== null)
+}
+
 function normalizeResponseKeys(data: any): any {
   if (data === null || data === undefined) {
     return data
@@ -176,7 +363,7 @@ function normalizeResponseKeys(data: any): any {
     const res: any = {}
     for (const [key, val] of Object.entries(data)) {
       const normalizedVal = normalizeResponseKeys(val)
-      
+
       let targetKey = key
       if (key === 'wallet_address') targetKey = 'address'
       else if (key === 'membership_tier') targetKey = 'tier'
@@ -190,13 +377,13 @@ function normalizeResponseKeys(data: any): any {
       else if (key === 'affected_identifier') targetKey = 'affectedIdentifier'
       else if (key === 'payload_summary') targetKey = 'payloadSummary'
       else if (key === 'tx_hash') targetKey = 'txHash'
-      
+
       res[targetKey] = normalizedVal
       if (targetKey !== key) {
         res[key] = normalizedVal
       }
     }
-    
+
     // Mappers fallbacks
     if (res.name !== undefined && res.title === undefined) {
       res.title = res.name
@@ -212,7 +399,7 @@ function normalizeResponseKeys(data: any): any {
     if (res.token !== undefined && res.isAuthenticated === undefined) {
       res.isAuthenticated = true
     }
-    
+
     return res
   }
   return data
@@ -226,7 +413,7 @@ function validateResponse(raw: any, schema: z.ZodType<any>, path?: string): void
       .map((issue) => `${issue.path.join('.')}: ${issue.message}`)
       .join(', ')
     const errorMsg = `API contract mismatch at ${path || 'unknown'}: ${issues}`
-    
+
     if (config.apiValidationLogOnly) {
       console.error(errorMsg)
     } else {
@@ -240,29 +427,146 @@ function validateResponse(raw: any, schema: z.ZodType<any>, path?: string): void
   }
 }
 
-async function getJson<T>(path: string, init?: RequestInit, schema?: z.ZodType<any>): Promise<T> {
-  let res: Response
+// ── Shared HTTP request helper ────────────────────────────────────────────────
 
-  try {
-    res = await fetch(`${BASE}${path}`, {
-      ...init,
-      headers: {
-        'Content-Type': 'application/json',
-        ...(init?.headers ?? {}),
-      },
-    })
-  } catch (cause) {
-    throw new ApiError({
-      code: 'network_error',
-      safeMessage:
-        'Unable to connect. Please check your connection and try again.',
-      retryable: true,
-      cause,
-    })
+/**
+ * Options accepted by {@link getJson}, extending the standard {@link RequestInit}
+ * with knobs that let a single code path serve both the core API and the
+ * integration gateway without changing observable behavior.
+ */
+interface RequestOptions extends RequestInit {
+  /**
+   * Schema used to validate the parsed JSON response. When omitted, the raw
+   * parsed body is returned without contract validation.
+   */
+  schema?: z.ZodType<any>
+  /**
+   * When `false`, the path is treated as absolute and is NOT prefixed with the
+   * configured core API base URL. Integration-gateway calls hit absolute paths
+   * (e.g. `/api/integration/...`) and must set this to `false`.
+   * Defaults to `true`.
+   */
+  prefixBase?: boolean
+  /**
+   * The `safeMessage` surfaced when the underlying `fetch` throws (network
+   * failure / DNS / offline). Lets the integration gateway present its own
+   * connection-error copy while the core API keeps its own. Defaults to the
+   * core API's connection message.
+   */
+  networkErrorMessage?: string
+}
+
+/**
+ * Returns true when the error represents an aborted fetch (DOMException with
+ * name "AbortError", or any error whose name is "AbortError").
+ */
+function isAbortError(err: unknown): boolean {
+  return (
+    err instanceof Error &&
+    (err.name === 'AbortError' ||
+      (typeof DOMException !== 'undefined' && err instanceof DOMException && err.name === 'AbortError'))
+  )
+}
+
+/**
+ * The single internal HTTP entry point for this module.
+ *
+ * Centralizes base-URL joining, default `Content-Type`, JSON parsing, HTTP
+ * error mapping, empty-body handling, schema validation, retry logic, and the
+ * per-path circuit breaker.
+ *
+ * An `AbortSignal` can be passed via `options.signal`. When the signal fires
+ * the in-flight fetch is cancelled, the retry loop exits immediately, and an
+ * `ApiError` with `code: 'aborted'` is thrown. Aborted requests are **never**
+ * counted by the circuit breaker.
+ */
+async function getJson<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  // Abort if backend is offline
+  ensureOnline();
+  const {
+    schema,
+    prefixBase = true,
+    networkErrorMessage = 'Unable to connect. Please check your connection and try again.',
+    headers,
+    signal,
+    ...init
+  } = options
+
+  const url = prefixBase ? `${BASE}${path}` : path
+  const retriesEnabled = shouldRetryRequest(options)
+
+  if (retriesEnabled) {
+    assertCircuitAllowsRequest(path)
   }
 
-  if (!res.ok) {
-    throw createApiError(res.status, await parseErrorBody(res), path)
+  let res!: Response
+
+  for (let attempt = 1; ; attempt += 1) {
+    // Bail out immediately if the caller already aborted before we even fetch
+    if (signal?.aborted) {
+      throw new ApiError({
+        code: 'aborted',
+        safeMessage: 'Request was cancelled.',
+        retryable: false,
+      })
+    }
+
+    try {
+      res = await fetch(url, {
+        ...init,
+        headers: {
+          'Content-Type': 'application/json',
+          ...(headers ?? {}),
+        },
+        signal,
+      })
+
+      if (!res.ok) {
+        throw createApiError(res.status, await parseErrorBody(res), path)
+      }
+
+      if (retriesEnabled) {
+        recordCircuitSuccess(path)
+      }
+      break
+    } catch (err) {
+      // Aborts must never be retried or counted as circuit-breaker failures
+      if (isAbortError(err)) {
+        throw new ApiError({
+          code: 'aborted',
+          safeMessage: 'Request was cancelled.',
+          retryable: false,
+          cause: err,
+        })
+      }
+
+      // Wrap raw network errors (fetch throwing, not an HTTP error response)
+      if (!(err instanceof ApiError)) {
+        const networkErr = new NetworkError({
+          safeMessage: networkErrorMessage,
+          path,
+          cause: err,
+        })
+        if (retriesEnabled) {
+          recordCircuitFailure(path)
+        }
+        throw networkErr
+      }
+
+      const canRetry =
+        retriesEnabled &&
+        isRetryableError(err) &&
+        attempt < RETRY_MAX_ATTEMPTS
+
+      if (!canRetry) {
+        if (retriesEnabled && isRetryableError(err)) {
+          recordCircuitFailure(path)
+        }
+        throw err
+      }
+
+      await sleep(backoffDelayMs(attempt))
+    }
   }
 
   if (res.status === 204 || res.status === 205) {
@@ -281,43 +585,18 @@ async function getJson<T>(path: string, init?: RequestInit, schema?: z.ZodType<a
   return raw as T
 }
 
-async function getIntegrationJson<T>(path: string, schema?: z.ZodType<any>): Promise<T> {
-  let res: Response
-
-  try {
-    res = await fetch(path, {
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    })
-  } catch (cause) {
-    throw new ApiError({
-      code: 'network_error',
-      safeMessage:
-        'Unable to connect to the integration gateway. Please check your configuration and try again.',
-      retryable: true,
-      cause,
-    })
-  }
-
-  if (!res.ok) {
-    throw createApiError(res.status, await parseErrorBody(res))
-  }
-
-  if (res.status === 204 || res.status === 205) {
-    return {} as T
-  }
-
-  const text = await res.text()
-  if (!text.trim()) {
-    return {} as T
-  }
-
-  const raw = parseJsonResponse<any>(text, path)
-  if (schema) {
-    validateResponse(raw, schema, path)
-  }
-  return raw as T
+/**
+ * Convenience wrapper for integration-gateway calls. These calls use an
+ * absolute path (no BASE prefix) and present their own network-error copy.
+ */
+async function getIntegrationJson<T>(path: string, schema?: z.ZodType<any>, signal?: AbortSignal): Promise<T> {
+  return getJson<T>(path, {
+    schema,
+    prefixBase: false,
+    networkErrorMessage:
+      'Unable to connect to the integration gateway. Please check your configuration and try again.',
+    signal,
+  })
 }
 
 function parseJsonResponse<T>(text: string, path?: string): T {
@@ -338,37 +617,109 @@ function parseJsonResponse<T>(text: string, path?: string): T {
 // ── LiveAccessApi ─────────────────────────────────────────────────────────────
 
 export class LiveAccessApi implements AccessApi {
+  /** Resolved after the first successful version-compatibility check. */
+  #versionCheckResult: VersionCompatibility | null = null
+  #versionCheckPromise: Promise<VersionCompatibility> | null = null
+
   constructor(
     private readonly address?: string,
     private readonly token?: string,
+    private readonly communityId?: string,
   ) { }
 
-  private authHeaders(): HeadersInit {
-    return this.token ? { Authorization: `Bearer ${this.token}` } : {}
+  /**
+   * Returns the result of the startup version-compatibility check, or
+   * `null` if the check has not yet completed.
+   */
+  get versionCompatibility(): VersionCompatibility | null {
+    return this.#versionCheckResult
   }
 
-  async getSession(): Promise<Session> {
+  /**
+   * Perform a one-time version-compatibility check against the backend's
+   * `/v1/meta` endpoint. Resolves with the compatibility result. Subsequent
+   * calls return the cached result.
+   */
+  async checkVersion(): Promise<VersionCompatibility> {
+    if (this.#versionCheckResult) {
+      return this.#versionCheckResult
+    }
+    if (this.#versionCheckPromise) {
+      return this.#versionCheckPromise
+    }
+
+    this.#versionCheckPromise = this.#performVersionCheck()
+    try {
+      this.#versionCheckResult = await this.#versionCheckPromise
+    } finally {
+      this.#versionCheckPromise = null
+    }
+    return this.#versionCheckResult!
+  }
+
+  async #performVersionCheck(): Promise<VersionCompatibility> {
+    try {
+      const meta = await this.getMeta()
+      return checkVersionCompatibility(meta.version)
+    } catch (err) {
+      return {
+        compatible: false,
+        expectedVersion: '',
+        backendVersion: '',
+        reason:
+          err instanceof Error
+            ? `Could not reach backend /v1/meta endpoint: ${err.message}`
+            : 'Could not reach backend /v1/meta endpoint.',
+      }
+    }
+  }
+
+  async getMeta(signal?: AbortSignal): Promise<MetaResponse> {
+    return getJson<MetaResponse>('/v1/meta', {
+      schema: MetaResponseSchema,
+      headers: this.authHeaders(),
+      signal,
+    })
+  }
+
+  private authHeaders(extra?: HeadersInit): HeadersInit {
+    const headers: Record<string, string> = {
+      ...(extra as Record<string, string> ?? {})
+    }
+    if (this.token) {
+      headers['Authorization'] = `Bearer ${this.token}`
+    }
+    if (this.communityId) {
+      headers['X-Community-Id'] = this.communityId
+      headers['X-Community-Slug'] = this.communityId
+    }
+    return headers
+  }
+
+  async getSession(signal?: AbortSignal): Promise<Session> {
     const addr = this.address
       ? `?address=${encodeURIComponent(this.address)}`
       : ''
     const path = `/v1/session${addr}`
-    const raw = await getJson<BackendSession>(path, undefined, SessionSchema)
+    const raw = await getJson<BackendSession>(path, { schema: SessionSchema, signal, headers: this.authHeaders() })
     validateSessionResponse(raw, path)
     const session = mapSession(raw)
 
     if (this.address) {
-      const mPath = `/api/integration/membership?address=${encodeURIComponent(this.address)}`
       try {
-        const integrationPath = `/api/integration/membership?address=${encodeURIComponent(this.address)}`
+        const integrationPath = `/api/integration/membership?address=${encodeURIComponent(this.address)}&community=${encodeURIComponent(this.communityId ?? '')}`
         const integrationMembership = await getIntegrationJson<BackendMember | null>(
           integrationPath,
           MembershipSchema.nullable(),
+          signal,
         )
         validateMembershipResponse(integrationMembership, integrationPath)
         if (integrationMembership) {
           session.membership = mapMembership(integrationMembership)
         }
-      } catch {
+      } catch (err) {
+        // Re-throw aborts — don't swallow cancellation
+        if (err instanceof ApiError && err.code === 'aborted') throw err
         // If the integration gateway is unavailable, retain the membership data
         // returned by the core API rather than failing the entire session.
       }
@@ -377,36 +728,79 @@ export class LiveAccessApi implements AccessApi {
     return session
   }
 
-  async getCommunity(): Promise<Community> {
+  async getCommunity(signal?: AbortSignal): Promise<Community> {
     const path = '/v1/community'
-    const raw = await getJson<BackendSession['community']>(path, undefined, CommunitySchema)
+    const raw = await getJson<BackendSession['community']>(path, { schema: CommunitySchema, signal, headers: this.authHeaders() })
     validateCommunityResponse(raw, path)
     return mapCommunity(raw)
   }
 
-  async getMembership(address: string): Promise<Membership | null> {
+  async getMembership(address: string, signal?: AbortSignal): Promise<Membership | null> {
     const raw = await getIntegrationJson<BackendMember | null>(
-      `/api/integration/membership?address=${encodeURIComponent(address)}`,
+      `/api/integration/membership?address=${encodeURIComponent(address)}&community=${encodeURIComponent(this.communityId ?? '')}`,
       MembershipSchema.nullable(),
+      signal,
     )
     return raw ? mapMembership(raw) : null
   }
 
-  async verifyWallet(address: string): Promise<WalletVerification> {
+  async verifyWallet(address: string, signal?: AbortSignal): Promise<WalletVerification> {
     return await getIntegrationJson<WalletVerification>(
-      `/api/integration/verify?address=${encodeURIComponent(address)}`,
+      `/api/integration/verify?address=${encodeURIComponent(address)}&community=${encodeURIComponent(this.communityId ?? '')}`,
       WalletVerificationSchema,
+      signal,
     )
   }
 
-  async getProfile(address: string): Promise<MemberProfile | null> {
+  async getProfile(address: string, signal?: AbortSignal): Promise<MemberProfile | null> {
     const path = `/v1/members/${encodeURIComponent(address)}/profile`
-    const raw = await getJson<BackendMember | null>(path, undefined, MemberProfileSchema.nullable())
+    const raw = await getJson<BackendMember | null>(path, { schema: MemberProfileSchema.nullable(), signal, headers: this.authHeaders() })
     validateMemberProfileResponse(raw, path)
     return raw ? mapMemberProfile(raw, address) : null
   }
 
-  async listMembers(params?: { cursor?: string; limit?: number; filter?: string }): Promise<MemberRow[] | PaginatedMembers> {
+  /**
+   * Updates the caller's own profile (display name, bio, avatar, social
+   * links). `badges` is system-assigned and cannot be set through this
+   * method — the backend is expected to ignore it if sent.
+   *
+   * Ownership: self-service only. The frontend requires `profile.address` to
+   * match the connected wallet address bound to this client instance, and
+   * relies on the SIWE bearer token (`this.token`, the same session used by
+   * admin mutations) for the real, server-side ownership check — the backend
+   * must reject the request unless the token's address matches `address` in
+   * the path. No new auth mechanism is introduced for this; it reuses the
+   * existing SIWE session rather than requiring a per-request signature.
+   */
+  async updateProfile(profile: MemberProfile): Promise<void> {
+    const result = validateProfile(profile)
+
+    if (!result.valid) {
+      throw new ProfileValidationError(result.errors)
+    }
+
+    if (!this.address || this.address.toLowerCase() !== result.value.address.toLowerCase()) {
+      throw new ApiError({
+        status: 403,
+        code: 'forbidden',
+        safeMessage: 'You can only edit your own profile.',
+      })
+    }
+
+    await getJson<void>(`/v1/members/${encodeURIComponent(result.value.address)}/profile`, {
+      method: 'PUT',
+      headers: this.authHeaders(),
+      body: JSON.stringify({
+        address: result.value.address,
+        display_name: result.value.displayName,
+        bio: result.value.bio,
+        avatar: result.value.avatar,
+        social_links: result.value.socialLinks,
+      }),
+    })
+  }
+
+  async listMembers(params?: { cursor?: string; limit?: number; filter?: string }, signal?: AbortSignal): Promise<MemberRow[] | PaginatedMembers> {
     const query = new URLSearchParams()
     if (params?.cursor) query.append('cursor', params.cursor)
     if (params?.limit !== undefined) query.append('limit', String(params.limit))
@@ -423,7 +817,7 @@ export class LiveAccessApi implements AccessApi {
       }),
     ])
 
-    const raw = await getJson<BackendMember[] | { members: BackendMember[]; nextCursor?: string }>(path, undefined, schema)
+    const raw = await getJson<BackendMember[] | { members: BackendMember[]; nextCursor?: string }>(path, { schema, signal, headers: this.authHeaders() })
 
     if (Array.isArray(raw)) {
       validateMemberRowsResponse(raw, path)
@@ -437,68 +831,168 @@ export class LiveAccessApi implements AccessApi {
     }
   }
 
-  async listResources(): Promise<Resource[]> {
+  async listResources(signal?: AbortSignal): Promise<Resource[]> {
     const path = '/v1/resources'
-    const raw = await getJson<BackendResource[]>(path, undefined, z.array(ResourceSchema))
+    const raw = await getJson<BackendResource[]>(path, { schema: z.array(ResourceSchema), signal, headers: this.authHeaders() })
     validateResourcesResponse(raw, path)
     return raw.map(mapResource)
   }
 
-  async listPolicies(): Promise<AccessPolicy[]> {
+  async listPolicies(signal?: AbortSignal): Promise<AccessPolicy[]> {
     const path = '/v1/policies'
-    const raw = await getJson<BackendPolicy[]>(path, undefined, z.array(AccessPolicySchema))
+    const raw = await getJson<BackendPolicy[]>(path, { schema: z.array(AccessPolicySchema), signal, headers: this.authHeaders() })
     validatePoliciesResponse(raw, path)
     return raw.map(mapPolicy)
   }
 
-  async getResource(id: string): Promise<Resource | null> {
-    const path = `/v1/resources/${encodeURIComponent(id)}`
+  async getResource(id: string, signal?: AbortSignal): Promise<ResourceLookupResult> {
+    ensureOnline();
+  const path = `/v1/resources/${encodeURIComponent(id)}`
     try {
-      const raw = await getJson<BackendResource>(path, undefined, ResourceSchema)
+      const raw = await getJson<BackendResource>(path, { schema: ResourceSchema, signal, headers: this.authHeaders() })
       if (raw && Object.keys(raw).length > 0) {
         validateResourceResponse(raw, path)
-        return mapResource(raw)
+        return { status: 'found', data: mapResource(raw), source: 'direct' }
       }
     } catch (err) {
+      // Re-throw aborts immediately
+      if (err instanceof ApiError && err.code === 'aborted') throw err
       if (!(err instanceof ApiError && err.status === 404)) {
-        throw err
+        return {
+          status: 'error',
+          error: err instanceof ApiError
+            ? err
+            : new ApiError({
+              code: 'unknown_error',
+              safeMessage: 'Request failed.',
+              path,
+              cause: err,
+            }),
+        }
       }
     }
 
     // Fallback for older backends or if direct lookup returned empty/404
-    const list = await this.listResources()
-    return list.find((r) => r.id === id) ?? null
+    try {
+      const list = await this.listResources(signal)
+      const resource = list.find((r) => r.id === id)
+      return resource
+        ? { status: 'found', data: resource, source: 'fallback' }
+        : { status: 'not_found' }
+    } catch (err) {
+      return {
+        status: 'error',
+        error: err instanceof ApiError
+          ? err
+          : new ApiError({
+            code: 'unknown_error',
+            safeMessage: 'Request failed.',
+            cause: err,
+          }),
+      }
+    }
   }
 
-  async getPolicy(resourceId: string): Promise<AccessPolicy | null> {
+  async getPolicy(resourceId: string, signal?: AbortSignal): Promise<AccessPolicy | null> {
     const path = `/v1/policies/${encodeURIComponent(resourceId)}`
     try {
-      const raw = await getJson<BackendPolicy>(path, undefined, AccessPolicySchema)
+      const raw = await getJson<BackendPolicy>(path, { schema: AccessPolicySchema, signal, headers: this.authHeaders() })
       if (raw && Object.keys(raw).length > 0) {
         validatePolicyResponse(raw, path)
         return mapPolicy(raw)
       }
     } catch (err) {
+      // Re-throw aborts immediately
+      if (err instanceof ApiError && err.code === 'aborted') throw err
       if (!(err instanceof ApiError && err.status === 404)) {
         throw err
       }
     }
 
     // Fallback for older backends or if direct lookup returned empty/404
-    const list = await this.listPolicies()
+    const list = await this.listPolicies(signal)
     return list.find((p) => p.resourceId === resourceId) ?? null
   }
 
   // ── Admin queries & mutations (require a valid SIWE token) ─────────────────
 
-  async listWebhookEvents(): Promise<WebhookEventLog[]> {
+  async listWebhookEvents(signal?: AbortSignal): Promise<WebhookEventLog[]> {
     const path = '/v1/admin/events'
     const raw = await getJson<any[]>(path, {
       method: 'GET',
       headers: this.authHeaders(),
-    }, z.array(WebhookEventLogSchema))
+      schema: z.array(WebhookEventLogSchema),
+      signal,
+    })
     validateWebhookEventsResponse(raw, path)
     return raw.map(mapWebhookEvent)
+  }
+
+  async listAdminEvents(params?: any): Promise<any> {
+    const searchParams = new URLSearchParams()
+    if (params?.types) params.types.forEach((t: string) => searchParams.append('types', t))
+    if (params?.startDate) searchParams.set('startDate', params.startDate)
+    if (params?.endDate) searchParams.set('endDate', params.endDate)
+    if (params?.page) searchParams.set('page', params.page.toString())
+    if (params?.limit) searchParams.set('limit', params.limit.toString())
+    
+    return await getJson<any>(`/v1/admin/events/paginated?${searchParams.toString()}`, {
+      headers: this.authHeaders(),
+    })
+  }
+
+  subscribeWebhookEvents(
+    onEvent: (event: WebhookEventLog) => void,
+    onError?: (error: unknown) => void,
+  ): WebhookEventUnsubscribe {
+    const path = '/v1/admin/events/stream'
+    const controller = new AbortController()
+    let buffer = ''
+
+    /**
+     * PROVISIONAL — `GET /v1/admin/events/stream` is a proposed guildpass-core
+     * SSE endpoint. It should return `text/event-stream` frames whose `data:`
+     * payload is a single WebhookEventLog object. Until the backend ships this
+     * contract, failures are intentionally reported to the caller so the UI can
+     * silently resume the existing `/v1/admin/events` polling behavior.
+     */
+    fetch(`${BASE}${path}`, {
+      method: 'GET',
+      headers: {
+        ...this.authHeaders(),
+        Accept: 'text/event-stream',
+      },
+      signal: controller.signal,
+    })
+      .then(async (res) => {
+        if (!res.ok || !res.body) {
+          const body = await parseErrorBody(res).catch(() => undefined)
+          throw createApiError(res.status, body, path)
+        }
+
+        const reader = res.body.getReader()
+        const decoder = new TextDecoder()
+
+        while (!controller.signal.aborted) {
+          const { done, value } = await reader.read()
+          if (done) {
+            throw new Error('Admin events stream closed before unsubscribe')
+          }
+          buffer += decoder.decode(value, { stream: true })
+          const frames = buffer.split('\n\n')
+          buffer = frames.pop() ?? ''
+          for (const frame of frames) {
+            for (const event of parseSseEvent(frame)) {
+              onEvent(event)
+            }
+          }
+        }
+      })
+      .catch((err) => {
+        if (!controller.signal.aborted) onError?.(err)
+      })
+
+    return () => controller.abort()
   }
 
   /**
@@ -512,23 +1006,42 @@ export class LiveAccessApi implements AccessApi {
    *
    * Expected response shape: {@link AnalyticsSummary}
    */
-  async getAnalyticsSummary(): Promise<AnalyticsSummary> {
+  async getAnalyticsSummary(signal?: AbortSignal): Promise<AnalyticsSummary> {
     const path = '/v1/admin/analytics'
     return getJson<AnalyticsSummary>(path, {
       method: 'GET',
       headers: this.authHeaders(),
-    }, AnalyticsSummarySchema)
+      schema: AnalyticsSummarySchema,
+      signal,
+    })
   }
 
-  async assignRole(address: string, role: Role): Promise<void> {
+  async getPendingActions(): Promise<PendingAction[]> {
+    throw new Error("Pending actions are not yet supported by guildpass-core.")
+  }
+
+  async approveAction(id: string): Promise<void> {
+    throw new Error("Pending actions are not yet supported by guildpass-core.")
+  }
+
+  async rejectAction(id: string): Promise<void> {
+    throw new Error("Pending actions are not yet supported by guildpass-core.")
+  }
+
+  async updateApprovalConfig(config: ApprovalConfig): Promise<void> {
+    throw new Error("Pending actions are not yet supported by guildpass-core.")
+  }
+
+  async assignRole(address: string, role: Role): Promise<{ status: 'executed' | 'pending'; pendingActionId?: string }> {
     await getJson<void>(`/v1/members/${encodeURIComponent(address)}/roles`, {
       method: 'POST',
       headers: this.authHeaders(),
       body: JSON.stringify({ role }),
     })
+    return { status: 'executed' }
   }
 
-  async removeRole(address: string, role: Role): Promise<void> {
+  async removeRole(address: string, role: Role): Promise<{ status: 'executed' | 'pending'; pendingActionId?: string }> {
     await getJson<void>(
       `/v1/members/${encodeURIComponent(address)}/roles/${encodeURIComponent(role)}`,
       {
@@ -536,9 +1049,10 @@ export class LiveAccessApi implements AccessApi {
         headers: this.authHeaders(),
       },
     )
+    return { status: 'executed' }
   }
 
-  async updatePolicy(policy: AccessPolicy): Promise<void> {
+  async updatePolicy(policy: AccessPolicy): Promise<{ status: 'executed' | 'pending'; pendingActionId?: string }> {
     const result = validatePolicy(policy)
 
     if (!result.valid) {
@@ -552,15 +1066,18 @@ export class LiveAccessApi implements AccessApi {
         resource_id: result.value.resourceId,
         min_tier: result.value.minTier,
         roles: result.value.roles,
+        updated_at: result.value.updatedAt,
       }),
     })
+    return { status: 'executed' }
   }
-  
+
   async getNonce(address: string): Promise<string> {
     const data = await getJson<{ nonce: string }>('/v1/auth/siwe/nonce', {
       method: 'POST',
       body: JSON.stringify({ address }),
-    }, z.object({ nonce: z.string() }))
+      schema: z.object({ nonce: z.string() }),
+    })
     return data.nonce
   }
 
@@ -577,24 +1094,12 @@ export class LiveAccessApi implements AccessApi {
     }>('/v1/auth/siwe/verify', {
       method: 'POST',
       body: JSON.stringify({ message, signature }),
-    }, SiweAuthSessionSchema)
+      schema: SiweAuthSessionSchema,
+    })
 
     return { isAuthenticated: true, ...data }
   }
 
-  /**
-   * Exchange a refresh token for a new access token (and rotated refresh
-   * token).  Calls the proposed `POST /v1/auth/siwe/refresh` endpoint.
-   *
-   * The backend contract is:
-   *   Request body:  `{ "refreshToken": "<opaque>" }`
-   *   Success (200): same shape as `/v1/auth/siwe/verify` response
-   *   Failure (401): refresh token expired or invalid → must re-sign
-   *
-   * This method is intentionally *not* best-effort: if the network call
-   * fails for any reason, the error propagates so the caller can decide
-   * whether to retry or transition the user to the 'expired' state.
-   */
   async siweRefresh(refreshToken: string): Promise<SiweAuthSession> {
     const data = await getJson<{
       token: string
@@ -605,7 +1110,8 @@ export class LiveAccessApi implements AccessApi {
     }>('/v1/auth/siwe/refresh', {
       method: 'POST',
       body: JSON.stringify({ refreshToken }),
-    }, SiweAuthSessionSchema)
+      schema: SiweAuthSessionSchema,
+    })
 
     return { isAuthenticated: true, ...data }
   }
@@ -617,5 +1123,109 @@ export class LiveAccessApi implements AccessApi {
     }).catch(() => {
       // best-effort logout
     })
+  }
+
+  // ── Social Graph (Connections / Blocks) ──
+  async getConnections(address: string, signal?: AbortSignal): Promise<Connection[]> {
+    const path = `/v1/members/${encodeURIComponent(address)}/connections`
+    return getJson<Connection[]>(path, { signal, headers: this.authHeaders(), schema: z.array(ConnectionSchema) })
+  }
+
+  async getPrivacySettings(address: string, signal?: AbortSignal): Promise<MemberPrivacySettings> {
+    const path = `/v1/members/${encodeURIComponent(address)}/privacy`
+    return getJson<MemberPrivacySettings>(path, { signal, headers: this.authHeaders(), schema: MemberPrivacySettingsSchema })
+  }
+
+  async updatePrivacySettings(address: string, settings: MemberPrivacySettings): Promise<void> {
+    const path = `/v1/members/${encodeURIComponent(address)}/privacy`
+    await getJson<void>(path, {
+      method: 'PUT',
+      body: JSON.stringify(settings),
+      headers: this.authHeaders(),
+    })
+  }
+
+  async blockMember(targetAddress: string): Promise<void> {
+    const path = `/v1/members/${encodeURIComponent(targetAddress)}/block`
+    await getJson<void>(path, {
+      method: 'POST',
+      headers: this.authHeaders(),
+    })
+  }
+
+  async unblockMember(targetAddress: string): Promise<void> {
+    const path = `/v1/members/${encodeURIComponent(targetAddress)}/block`
+    await getJson<void>(path, {
+      method: 'DELETE',
+      headers: this.authHeaders(),
+    })
+  }
+
+  async createConnectionRequest(targetAddress: string): Promise<void> {
+    const path = `/v1/members/${encodeURIComponent(targetAddress)}/connections`
+    await getJson<void>(path, {
+      method: 'POST',
+      headers: this.authHeaders(),
+    })
+  }
+
+  async acceptConnectionRequest(targetAddress: string): Promise<void> {
+    const path = `/v1/members/${encodeURIComponent(targetAddress)}/connections/accept`
+    await getJson<void>(path, {
+      method: 'POST',
+      headers: this.authHeaders(),
+    })
+  }
+
+  async rejectConnectionRequest(targetAddress: string): Promise<void> {
+    const path = `/v1/members/${encodeURIComponent(targetAddress)}/connections/reject`
+    await getJson<void>(path, {
+      method: 'POST',
+      headers: this.authHeaders(),
+    })
+  }
+
+  // ── Moderation Queue ──
+  async listReports(signal?: AbortSignal): Promise<ModerationReport[]> {
+    const path = `/v1/admin/reports`
+    return getJson<ModerationReport[]>(path, { signal, headers: this.authHeaders(), schema: z.array(ModerationReportSchema) })
+  }
+
+  async getReport(id: string, signal?: AbortSignal): Promise<ModerationReport | null> {
+    const path = `/v1/admin/reports/${encodeURIComponent(id)}`
+    return getJson<ModerationReport | null>(path, { signal, headers: this.authHeaders(), schema: ModerationReportSchema.nullable() })
+  }
+
+  async updateReportState(id: string, state: ModerationState, updates?: Partial<ModerationReport>): Promise<void> {
+    const path = `/v1/admin/reports/${encodeURIComponent(id)}/state`
+    await getJson<void>(path, {
+      method: 'PUT',
+      body: JSON.stringify({ state, ...updates }),
+      headers: this.authHeaders(),
+    })
+  }
+  
+  public analytics: any = {
+    getMembershipTrend: async (signal?: AbortSignal) => {
+      const summary = await this.getAnalyticsSummary(signal);
+      return summary.memberGrowth;
+    },
+    getRoleDistribution: async (signal?: AbortSignal) => {
+      // NOTE: getAnalyticsSummary currently doesn't provide roleDistribution,
+      // but to satisfy the new interface without breaking the backend contract immediately,
+      // we'll fetch members and compute it like we used to.
+      // In a real live app, the backend would be updated to provide this in getAnalyticsSummary.
+      const members = await this.listMembers({}, signal);
+      const memberArray = Array.isArray(members) ? members : members.members;
+      const ALL_ROLES: import('./types').Role[] = ['member', 'moderator', 'admin'];
+      return ALL_ROLES.map(role => ({
+        role,
+        count: memberArray.filter(m => m.roles.includes(role)).length
+      }));
+    },
+    getAccessAttempts: async (signal?: AbortSignal) => {
+      const summary = await this.getAnalyticsSummary(signal);
+      return summary.resourceAccess;
+    }
   }
 }

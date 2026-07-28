@@ -26,7 +26,7 @@
 
 import type { SiweAuthSession } from './api/types'
 
-const SESSION_KEY = 'guildpass:siwe-session'
+export const SESSION_KEY = 'guildpass:siwe-session'
 
 // ── Persist ───────────────────────────────────────────────────────────────────
 
@@ -77,12 +77,46 @@ export function loadAuthSessionIncludingExpired(): SiweAuthSession | null {
     const raw = window.sessionStorage.getItem(SESSION_KEY)
     if (!raw) return null
     const parsed = JSON.parse(raw) as SiweAuthSession
-    // Guard against missing required fields
-    if (!parsed.token || !parsed.address || !parsed.expiresAt) return null
+    // Guard against missing required fields or invalid types
+    if (
+      !parsed ||
+      typeof parsed.token !== 'string' ||
+      !parsed.token.trim() ||
+      typeof parsed.address !== 'string' ||
+      !parsed.address.trim() ||
+      typeof parsed.expiresAt !== 'string' ||
+      !parsed.expiresAt.trim()
+    ) {
+      return null
+    }
     return parsed
   } catch {
     return null
   }
+}
+
+// ── Cross-tab sync helpers ────────────────────────────────────────────────
+
+/**
+ * Subscribe to storage events for the SIWE session key so peer tabs can react
+ * when another tab signs in, refreshes, or logs out.
+ *
+ * We keep the canonical session in sessionStorage because it is still scoped to
+ * the current origin and survives tab reloads without the broader XSS exposure
+ * of localStorage. The storage-event listener is a fallback for browsers or
+ * environments where BroadcastChannel is unavailable.
+ */
+export function subscribeToAuthSessionStorage(
+  listener: (event: StorageEvent) => void,
+): () => void {
+  if (typeof window === 'undefined') return () => undefined
+  const handler = (event: StorageEvent) => {
+    if (event.key === null || event.key === SESSION_KEY) {
+      listener(event)
+    }
+  }
+  window.addEventListener('storage', handler)
+  return () => window.removeEventListener('storage', handler)
 }
 
 // ── Clear ─────────────────────────────────────────────────────────────────────
@@ -106,6 +140,27 @@ export function clearAuthSession(): void {
 /** Convenience to clear session and notify listeners explicitly. */
 export function invalidateAuthSession(): void {
   clearAuthSession()
+}
+
+/**
+ * Returns the raw bearer token from the stored session, or `null` if no
+ * session exists.  This is the narrowest possible read operation — callers
+ * that only need the token string should prefer this over loading the full
+ * session object so the storage implementation can be swapped later
+ * (e.g. to httpOnly cookies) without touching call sites.
+ */
+export function getStoredToken(): string | null {
+  const session = loadAuthSessionIncludingExpired()
+  return session?.token ?? null
+}
+
+/**
+ * Returns the wallet address from the stored session, or `null` if no
+ * session exists.
+ */
+export function getStoredAddress(): string | null {
+  const session = loadAuthSessionIncludingExpired()
+  return session?.address ?? null
 }
 
 // ── Expiry helpers ────────────────────────────────────────────────────────────
@@ -150,3 +205,45 @@ export function msUntilRenewal(
 ): number {
   return new Date(session.expiresAt).getTime() - Date.now() - renewalLeadMs
 }
+
+// ── Proactive Session Expiry Warning Helpers ───────────────────────────────
+
+/** Default proactive warning threshold in seconds before access token expiry (2 minutes / 120 seconds). */
+export const DEFAULT_WARNING_THRESHOLD_SECONDS = 120
+
+/**
+ * Returns the number of seconds remaining until the access token expires.
+ * Returns 0 if session is null or already expired.
+ */
+export function getRemainingSessionSeconds(
+  session: Pick<SiweAuthSession, 'expiresAt'> | null | undefined,
+): number {
+  if (!session?.expiresAt) return 0
+  const diff = new Date(session.expiresAt).getTime() - Date.now()
+  return Math.max(0, Math.floor(diff / 1000))
+}
+
+/**
+ * Returns `true` if the access token will expire within `thresholdSeconds`
+ * (and has not already expired).
+ */
+export function isSessionExpiringSoon(
+  session: Pick<SiweAuthSession, 'expiresAt'> | null | undefined,
+  thresholdSeconds = DEFAULT_WARNING_THRESHOLD_SECONDS,
+): boolean {
+  if (!session?.expiresAt) return false
+  const remaining = getRemainingSessionSeconds(session)
+  return remaining > 0 && remaining <= thresholdSeconds
+}
+
+/**
+ * Format remaining seconds as human readable string (e.g. "1m 45s" or "45s").
+ */
+export function formatTimeRemaining(seconds: number): string {
+  if (seconds <= 0) return '0s'
+  const mins = Math.floor(seconds / 60)
+  const secs = seconds % 60
+  if (mins === 0) return `${secs}s`
+  return `${mins}m ${secs}s`
+}
+

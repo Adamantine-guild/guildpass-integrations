@@ -16,16 +16,26 @@ export type ApiMode = 'mock' | 'live'
 export interface SiweConfig {
   domain: string
   statement: string
+  warningThresholdSeconds: number
 }
 
 export type FeatureFlagKey =
   | 'adminPolicies'
+  | 'adminSettings'
   | 'events'
   | 'analytics'
   | 'resources'
   | 'governance'
+  | 'rewards'
+  | 'multiCommunity'
+  | 'profiles'
 
 export type FeatureFlags = Record<FeatureFlagKey, boolean>
+
+export interface IntegrationGatewayConfig {
+  /** Expected same-origin value for CSRF checks on /api/integration/* mutations */
+  allowedOrigin?: string
+}
 
 export interface AppConfig {
   /** 'mock' when NEXT_PUBLIC_MOCK_MODE or NEXT_PUBLIC_DEMO_MODE is 'true', otherwise 'live' */
@@ -40,6 +50,8 @@ export interface AppConfig {
   siwe: SiweConfig
   /** Feature flag booleans */
   features: FeatureFlags
+  /** Server route-handler integration gateway security configuration */
+  integrationGateway: IntegrationGatewayConfig
   /** Whether to validate API responses in log-only mode */
   apiValidationLogOnly: boolean
 }
@@ -138,11 +150,20 @@ const apiUrl: string = (() => {
   return env('NEXT_PUBLIC_CORE_API_URL') || 'http://localhost:4000'
 })()
 
+const warningMinutesEnv = env('NEXT_PUBLIC_SIWE_WARNING_MINUTES')
+const warningSecondsEnv = env('NEXT_PUBLIC_SIWE_WARNING_SECONDS')
+const warningThresholdSeconds = warningSecondsEnv
+  ? Number(warningSecondsEnv)
+  : warningMinutesEnv
+    ? Number(warningMinutesEnv) * 60
+    : 120
+
 const siwe: SiweConfig = {
   domain: env('NEXT_PUBLIC_SIWE_DOMAIN') ?? 'localhost:3000',
   statement: validateSiweStatement(
     env('NEXT_PUBLIC_SIWE_STATEMENT') ?? 'Sign in to GuildPass Admin',
   ),
+  warningThresholdSeconds: Number.isNaN(warningThresholdSeconds) ? 120 : warningThresholdSeconds,
 }
 
 const isMock = apiMode === 'mock'
@@ -153,12 +174,28 @@ function flag(varName: string, defaultVal: boolean): boolean {
   return val === 'true'
 }
 
+const integrationGateway: IntegrationGatewayConfig = {
+  allowedOrigin: env('INTEGRATION_ALLOWED_ORIGIN'),
+}
+
 const features: FeatureFlags = {
-  adminPolicies: flag('NEXT_PUBLIC_FEATURE_ADMIN_POLICIES', isMock),
+  adminPolicies: flag('NEXT_PUBLIC_FEATURE_ADMIN_POLICIES', true),
+  // Advanced admin tooling (community settings). Persistence is deferred for the
+  // MVP, so this defaults on only in mock/demo mode and stays off in live until
+  // the settings backend ships.
+  adminSettings: flag('NEXT_PUBLIC_FEATURE_ADMIN_SETTINGS', isMock),
   events: flag('NEXT_PUBLIC_FEATURE_EVENTS', isMock),
   analytics: flag('NEXT_PUBLIC_FEATURE_ANALYTICS', false),
-  resources: flag('NEXT_PUBLIC_FEATURE_RESOURCES', isMock),
+  resources: flag('NEXT_PUBLIC_FEATURE_RESOURCES', true),
   governance: flag('NEXT_PUBLIC_FEATURE_GOVERNANCE', false),
+  rewards: flag('NEXT_PUBLIC_FEATURE_REWARDS', false),
+  // Multi-community support is not implemented — this only reserves nav
+  // space with a disabled switcher stub. Keep false in every environment
+  // until real multi-community logic ships.
+  multiCommunity: flag('NEXT_PUBLIC_FEATURE_MULTI_COMMUNITY', false),
+  // Rich profile customization / public profile view (#254) — deferred module,
+  // off in every environment (including mock) until explicitly enabled.
+  profiles: flag('NEXT_PUBLIC_FEATURE_PROFILES', false),
 }
 
 export const config: AppConfig = Object.freeze({
@@ -166,6 +203,7 @@ export const config: AppConfig = Object.freeze({
   apiUrl,
   siwe: Object.freeze(siwe),
   features: Object.freeze(features),
+  integrationGateway: Object.freeze(integrationGateway),
   get apiValidationLogOnly() {
     return flag('NEXT_PUBLIC_API_VALIDATION_LOG_ONLY', false)
   },

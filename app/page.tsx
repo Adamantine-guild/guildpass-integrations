@@ -1,5 +1,11 @@
 import Link from 'next/link'
 import { buttonVariants } from '@/components/ui/button'
+import { createPageMetadata } from '@/lib/page-metadata'
+
+export const metadata = createPageMetadata(
+  'Home',
+  'Discover GuildPass membership, community access, and token-gated resources.',
+)
 
 export default function Home() {
   return (

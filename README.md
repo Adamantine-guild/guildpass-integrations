@@ -11,8 +11,8 @@ The main frontend MVP for the GuildPass ecosystem. Built with **Next.js 14 App R
 
 ## Features (MVP)
 
-- **Member dashboard** — wallet connect, membership state, community & tier, expiration, badges placeholder, gated resources, profile summary
-- **Admin dashboard** — overview, member list, role assignment, resource access policies, community settings
+- **Member dashboard** — wallet connect, membership state, community & tier, expiration, badges, gated resources, wallet verification status, and a self-service profile editor (`NEXT_PUBLIC_FEATURE_PROFILES`)
+- **Admin dashboard** — overview, member list, role assignment, resource access policies, community settings, analytics (`NEXT_PUBLIC_FEATURE_ANALYTICS`)
 - **Access-gated experiences** — gated pages, gated content sections, event access, denied states, upgrade/renew placeholders
 - **Wallet-aware UX** — connect flow, SIWE-authenticated admin experience, role-aware UI states, admin-only sections
 - **SIWE authentication** — Sign-In with Ethereum (EIP-4361) for admin sessions; gasless off-chain signature; short-lived token attached to all mutations
@@ -60,6 +60,9 @@ In mock mode, visit `/developer` (or click "Dev" in the nav) to access:
   - Admin Session Expired: Admin user to test expired SIWE sessions
   - No Roles: Member with no roles assigned
 
+See [Mock scenario presets](./docs/mock-scenarios.md) for the exact seeded membership, role, badge, resource, and policy state behind each preset.
+  - Multiple Communities: Member active across several communities
+
 ### Run against live guildpass-core
 
 By default, live mode assumes the backend is running at `http://localhost:4000`.
@@ -85,7 +88,7 @@ Admin actions are protected by [Sign-In with Ethereum (EIP-4361)](https://eips.e
 4. EIP-4361 message built client-side (domain, statement, nonce, chainId, issuedAt)
 5. wagmi signMessage → user approves in wallet
 6. POST /v1/auth/siwe/verify → { token, expiresAt }
-7. Token stored in sessionStorage; auto-attached to admin mutations
+7. Token stored in sessionStorage; peer tabs sync the session via BroadcastChannel and storage-event fallback so a sign-in or logout in one tab is reflected in others
 8. 401 from backend shows inline re-auth banner without page redirect
 ```
 
@@ -153,17 +156,22 @@ Modules that are experimental or not yet production-ready are controlled by envi
 | Variable | Default (mock mode) | Default (prod) | Module |
 | -------- | ------------------- | -------------- | ------ |
 | `NEXT_PUBLIC_FEATURE_ADMIN_POLICIES` | `true` | `true` | Access policy editor in `/admin/policies` |
+| `NEXT_PUBLIC_FEATURE_ADMIN_SETTINGS` | `true` | `false` | Advanced admin community settings at `/admin/settings` (persistence deferred for MVP) |
 | `NEXT_PUBLIC_FEATURE_EVENTS` | `true` | `false` | Event access page at `/events/*` |
 | `NEXT_PUBLIC_FEATURE_RESOURCES` | `true` | `true` | Gated resources at `/resources/*` |
-| `NEXT_PUBLIC_FEATURE_ANALYTICS` | `false` | `false` | Analytics module (not yet built) |
+| `NEXT_PUBLIC_FEATURE_ANALYTICS` | `false` | `false` | Analytics at `/admin/analytics` — membership growth, role/tier distribution, computed client-side from `listMembers()`/`listWebhookEvents()`, no dedicated backend endpoint (#249) |
 | `NEXT_PUBLIC_FEATURE_GOVERNANCE` | `false` | `false` | Governance module (not yet built) |
+| `NEXT_PUBLIC_FEATURE_PROFILES` | `false` | `false` | Public member profile view at `/members/[address]` — rich profile customization (#254) |
+| `NEXT_PUBLIC_FEATURE_<NAME>_ROLLOUT_PCT` | unset | unset | Optional 0–100 percentage rollout for the matching flag |
 
 **How flags work:**
 
 - All flags are read at build time from `NEXT_PUBLIC_*` environment variables. No remote flag service is involved.
 - An omitted variable falls back to the default shown above.
-- In **mock/demo mode** (`NEXT_PUBLIC_MOCK_MODE=true`), flags for `adminPolicies`, `events`, and `resources` default to `true` so the full demo works locally without any extra configuration.
-- Flags for deferred modules (`analytics`, `governance`) default to `false` in every environment and must be explicitly set to `"true"` to enable them.
+- Add `NEXT_PUBLIC_FEATURE_<NAME>_ROLLOUT_PCT` to canary a module to a percentage of users or sessions. For example, `NEXT_PUBLIC_FEATURE_ANALYTICS_ROLLOUT_PCT=25` enables analytics for identifiers whose deterministic bucket is 0–24.
+- Rollout checks hash the feature key plus a wallet address or persisted anonymous session ID into a stable 0–99 bucket, so the same identifier receives the same experience across visits. If no rollout percentage is set, the original boolean flag behavior is used exactly.
+- In **mock/demo mode** (`NEXT_PUBLIC_MOCK_MODE=true`), flags for `adminPolicies`, `adminSettings`, `events`, and `resources` default to `true` so the full demo works locally without any extra configuration.
+- Flags for deferred modules (`analytics`, `governance`) default to `false` in every environment and must be explicitly set to `"true"` for full access or given a rollout percentage for canary access.
 - Navigation links for disabled modules are automatically hidden.
 - Visiting a disabled route directly renders a clear "Feature unavailable" message instead of broken content.
 
@@ -171,8 +179,9 @@ Modules that are experimental or not yet production-ready are controlled by envi
 
 1. Add the typed field to `FeatureFlags` in `lib/features.ts` and wire up the `flag()` call.
 2. Document the variable in `.env.example` with its recommended production default.
-3. Wrap the relevant page with `<FeatureGate enabled={features.yourFlag} name="Module Name">`.
-4. Filter the corresponding nav item using `features.yourFlag`.
+3. Wrap the relevant page with `<FeatureGate enabled={features.yourFlag} name="Module Name">` for a binary flag, or pass `featureRollouts.yourFlag` plus `rolloutIdentifier` when the page supports percentage rollout.
+4. Filter the corresponding nav item using `features.yourFlag` for binary launches, or `isFeatureEnabledForIdentifier('yourFlag', identifier)` when the current wallet/session identifier is available.
+5. Optionally document `NEXT_PUBLIC_FEATURE_YOUR_FLAG_ROLLOUT_PCT` when the module supports a canary rollout.
 
 ---
 
@@ -186,7 +195,57 @@ npm run lint       # Lint via Next.js ESLint config
 npm run typecheck  # TypeScript type checking
 npm run sync-types # Compile test/fixtures/openapi.json into lib/api/types.ts
 npm run check-types # Validate that types in lib/api/types.ts match the schema
+npm run test       # Run unit tests (Node.js test runner)
+npm run test:e2e   # Run end-to-end tests (Playwright)
+npm run test:e2e:ui # Run E2E tests in UI mode for debugging
 ```
+
+---
+
+## Testing
+
+### Unit Tests
+
+Unit tests use the Node.js built-in test runner and cover individual components, utilities, and business logic:
+
+```bash
+npm run test
+```
+
+Tests include:
+- Session storage and expiry logic
+- SIWE message construction and verification
+- Feature flags and access control
+- API mocking and contract validation
+- Wallet address validation
+- Mock data scenarios
+
+### End-to-End Tests
+
+E2E tests use Playwright to verify the full SIWE sign-in flow in a real browser environment. Tests simulate wallet connections, message signing, and session management without requiring a real wallet or backend:
+
+```bash
+npm run test:e2e              # Run all E2E tests headlessly
+npm run test:e2e:ui          # Run with visual UI (recommended for debugging)
+npx playwright test --debug  # Step through with debugger
+```
+
+**Features tested:**
+- Happy path: connect wallet → sign-in → authenticated
+- Session persistence across page navigations
+- Token storage (sessionStorage with expiry)
+- Refresh token renewal
+- 401 error handling → re-auth banner
+- Session expiry recovery flow
+- Logout and session clearing
+- Cross-tab session sync (BroadcastChannel)
+
+**Requirements:**
+- Dev server must be running: `npm run dev`
+- Tests run against `http://localhost:3000` by default (configurable via `BASE_URL` env var)
+- Mock mode enabled automatically in tests
+
+See [test/e2e/README.md](./test/e2e/README.md) for detailed E2E test documentation including troubleshooting and advanced usage.
 
 ---
 
@@ -219,6 +278,10 @@ The diagram covers:
 | `components/nav.tsx` | Navigation bar |
 | `test/fixtures/openapi.json` | OpenAPI schema contract fixture representing core API models |
 | `scripts/sync-api-types.js` | Zero-dependency compiler converting openapi.json to typescript types |
+| `app/members/[address]/page.tsx` | Public, read-only member profile view (`NEXT_PUBLIC_FEATURE_PROFILES`) |
+| `components/dashboard/profile-editor.tsx` | Self-service profile editor on the dashboard |
+| `lib/validation/profile.ts` | Profile field validation (`validateProfile`) |
+| `lib/api/analytics.ts` | Client-side analytics aggregation (`computeAnalyticsSummary`, `fetchAllMembers`) — no dedicated backend endpoint |
 
 ### Composable access rules
 
@@ -233,6 +296,15 @@ Access policies support an optional composable rule tree in addition to the lega
 ```
 
 Primitive conditions are `tier` (tier ≥ X), `role` (has role Y), and `badge` (has badge Z); `and`/`or` nodes nest arbitrarily. When a policy sets `rule`, it takes precedence over `minTier`/`roles`; legacy policies are evaluated by wrapping them into an equivalent one-node tree, so behavior is unchanged. The recursive evaluator lives in [`lib/api/access-decision.ts`](./lib/api/access-decision.ts) (`evaluateAccessRule`), and the mock data seeds two demo policies (`mod-lounge` — a genuine AND, `insider-hub` — a genuine OR).
+
+### Member profiles
+
+Members can customize a `displayName`, `bio`, `avatar` (URL — image upload is a disabled "coming soon" stub, not implemented), and a list of `socialLinks` (`{ platform, url }`), in addition to the existing system-assigned `badges`. The feature is gated behind `NEXT_PUBLIC_FEATURE_PROFILES` (off by default in every environment, including mock mode — see [Feature Flags](#feature-flags)).
+
+- **Editing** — the dashboard's "Profile" card (`components/dashboard/profile-editor.tsx`). Editing requires SIWE sign-in (reusing the same session as admin actions — see [docs/architecture.md](./docs/architecture.md#member-profile-edits-reuse-the-siwe-session-no-separate-auth-mechanism)), but *viewing* your own profile does not.
+- **Public view** — `/members/[address]` (`app/members/[address]/page.tsx`) renders any member's customized fields read-only, with no wallet connection required and no `<Gated>` check (profile reads are public, matching `getProfile()`'s existing unauthenticated contract). Linked from the dashboard's Profile card and from each row in `/admin/members`.
+- **Validation** — [`lib/validation/profile.ts`](./lib/validation/profile.ts) (`validateProfile()`), mirroring `validatePolicy()`'s `{valid, errors}` shape: length limits on `displayName`/`bio`, `http(s)`-only URL checks on `avatar` and each social link, and case-insensitive de-duplication of social link platforms.
+- **`badges` is read-only** — it's system-assigned (community milestones), and `updateProfile()` never accepts client-submitted badges; both the mock and live clients always carry the existing value forward regardless of what's submitted.
 
 ---
 
@@ -257,7 +329,8 @@ All live requests are sent to `NEXT_PUBLIC_CORE_API_URL` (default `http://localh
 | `GET` | `/v1/resources/:id` | — | Single resource lookup (with list fallback) |
 | `GET` | `/v1/policies` | — | All access policies |
 | `GET` | `/v1/policies/:resourceId` | — | Single policy lookup (with list fallback) |
-| `GET` | `/v1/admin/events` | Bearer | Admin webhook event feed |
+| `GET` | `/v1/admin/events` | Bearer | Admin webhook event feed fallback snapshot |
+| `GET` | `/v1/admin/events/stream` | Bearer | **Provisional proposal for guildpass-core**: SSE stream of admin webhook events (`text/event-stream`, one `WebhookEventLog` JSON object per `data:` frame). The frontend attempts this push transport first and silently falls back to `/v1/admin/events` polling if unavailable. |
 | `POST` | `/v1/members/:address/roles` | Bearer | Assign role to member |
 | `PUT` | `/v1/policies/:resourceId` | Bearer | Update access policy |
 | `POST` | `/v1/auth/siwe/nonce` | — | Request SIWE nonce |
@@ -295,10 +368,13 @@ and troubleshooting.
 - Core member and admin surfaces listed above
 - Basic role assignment and policy editing
 - Gated pages and states
+- Rich profile customization (#254)
+- Basic analytics — membership growth, role/tier distribution, computed client-side (#249)
 
 **Deferred (intentionally)**:
-- Advanced analytics and governance
-- Rich profile customization and contribution history
+- Governance
+- Richer analytics (e.g. per-resource access/denial tracking — the admin event log does not capture resource-access attempts today, only membership-lifecycle and policy-update events, so this isn't derivable from existing data; see [Feature Flags](#feature-flags))
+- Contribution history
 - Social graph and advanced moderation
 - Complex admin workflows, rewards visualization, full event management
 - Complete billing/subscription management UX

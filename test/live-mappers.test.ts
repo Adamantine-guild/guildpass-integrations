@@ -158,6 +158,40 @@ describe('mapMemberProfile', () => {
       badges: [],
     })
   })
+
+  it('maps avatar and camelCase socialLinks when present', () => {
+    const raw = {
+      displayName: 'Ada',
+      avatar: 'https://example.com/avatar.png',
+      socialLinks: [{ platform: 'github', url: 'https://example.com/github/ada' }],
+      badges: [],
+    }
+    const result = mapMemberProfile(raw, '0x4')
+    assert.equal(result.avatar, 'https://example.com/avatar.png')
+    assert.deepEqual(result.socialLinks, [
+      { platform: 'github', url: 'https://example.com/github/ada' },
+    ])
+  })
+
+  it('maps snake_case social_links when socialLinks is absent', () => {
+    const raw = {
+      displayName: 'Bob',
+      social_links: [{ platform: 'twitter', url: 'https://example.com/twitter/bob' }],
+      badges: [],
+    }
+    const result = mapMemberProfile(raw, '0x5')
+    assert.deepEqual(result.socialLinks, [
+      { platform: 'twitter', url: 'https://example.com/twitter/bob' },
+    ])
+  })
+
+  it('omits avatar and socialLinks keys entirely when not customized', () => {
+    // Regression check: these must be absent (not present-with-undefined), or
+    // strict deepEqual comparisons elsewhere in the mock/live contract break.
+    const result = mapMemberProfile({ displayName: 'Nobody' }, '0x6')
+    assert.equal('avatar' in result, false)
+    assert.equal('socialLinks' in result, false)
+  })
 })
 
 // ===========================================================================
