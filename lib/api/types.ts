@@ -629,6 +629,143 @@ export interface BackendSession {
   }
 }
 
+// ── Governance Types ──────────────────────────────────────────────────────────
+
+/**
+ * Proposal status lifecycle:
+ * - draft: Created by admin, not yet active
+ * - active: Open for voting by members
+ * - closed: Voting period ended, awaiting resolution
+ * - resolved: Outcome applied/executed
+ */
+export type ProposalStatus = 'draft' | 'active' | 'closed' | 'resolved'
+
+export type ProposalType = 'policy_change' | 'resource_addition' | 'rule_update' | 'other'
+
+export interface Proposal {
+  id: string
+  communityId: string
+  type: ProposalType
+  title: string
+  description: string
+  status: ProposalStatus
+  proposer: string
+  createdAt: string
+  votingStartsAt: string
+  votingEndsAt: string
+  /** JSON-encoded proposal-specific data (e.g., policy diff, resource spec). */
+  payload: Record<string, unknown>
+  /** Total voting weight available (sum of all role/tier weights). */
+  totalWeight: number
+  /** Vote counts and weighted results. */
+  votesSummary: VotesSummary
+}
+
+export interface VotesSummary {
+  totalVotes: number
+  weightsFor: number
+  weightsAgainst: number
+  weightsAbstain: number
+  percentFor?: number
+  percentAgainst?: number
+}
+
+export type VoteChoice = 'for' | 'against' | 'abstain'
+
+export interface Vote {
+  id: string
+  proposalId: string
+  voter: string
+  choice: VoteChoice
+  weight: number
+  /**
+   * Voter's tier/role at time of vote, used to calculate weight.
+   * { tier: 'pro', role: 'moderator' } for example.
+   */
+  voterContext?: {
+    tier?: MembershipTier
+    role?: Role
+  }
+  votedAt: string
+}
+
+export interface GovernanceApi {
+  // ── Member queries (read-only) ────────────────────────────────────────
+  /**
+   * List active and recent proposals.
+   * @param filter - Optional filter by status ('active', 'draft', 'closed', 'resolved') or type
+   * @param limit - Pagination limit (default 20)
+   * @param cursor - Pagination cursor
+   */
+  listProposals(params?: {
+    filter?: ProposalStatus | ProposalType
+    limit?: number
+    cursor?: string
+  }, signal?: AbortSignal): Promise<Proposal[]>
+
+  /**
+   * Get a single proposal by ID with full details and vote summary.
+   */
+  getProposal(id: string, signal?: AbortSignal): Promise<Proposal | null>
+
+  /**
+   * Get the authenticated member's vote on a proposal (if any).
+   */
+  getMemberVote(proposalId: string, signal?: AbortSignal): Promise<Vote | null>
+
+  /**
+   * List all votes on a proposal (for transparency).
+   */
+  listProposalVotes(proposalId: string, params?: {
+    limit?: number
+    cursor?: string
+  }, signal?: AbortSignal): Promise<Vote[]>
+
+  // ── Member mutations ──────────────────────────────────────────────────
+  /**
+   * Cast or update a vote on an active proposal.
+   * Requires SIWE authentication. The voter's weight is determined by their
+   * tier/role at the time of voting (or mock-determined in demo).
+   * Throws 403 if voting is not open, 404 if proposal not found.
+   */
+  castVote(proposalId: string, choice: VoteChoice): Promise<Vote>
+
+  // ── Admin mutations ───────────────────────────────────────────────────
+  /**
+   * Create a new governance proposal (admin only).
+   * Initially in 'draft' status; must call publishProposal() to activate.
+   */
+  createProposal(proposal: Omit<Proposal, 'id' | 'createdAt' | 'status' | 'communityId' | 'votesSummary' | 'totalWeight'>): Promise<Proposal>
+
+  /**
+   * Update a proposal (admin only, must be in draft or closed status).
+   */
+  updateProposal(id: string, updates: Partial<Omit<Proposal, 'id' | 'status' | 'proposer' | 'createdAt' | 'votesSummary' | 'totalWeight'>>): Promise<Proposal>
+
+  /**
+   * Publish a draft proposal, transitioning it to 'active' and opening voting.
+   * Admin only.
+   */
+  publishProposal(id: string): Promise<Proposal>
+
+  /**
+   * Close voting on an active proposal, transitioning to 'closed'.
+   * Admin only. Does not execute/resolve the outcome.
+   */
+  closeProposalVoting(id: string): Promise<Proposal>
+
+  /**
+   * Resolve a closed proposal by applying its outcome (e.g., update policy, add resource).
+   * Admin only. This is a notification method; actual state changes happen on the backend.
+   */
+  resolveProposal(id: string, outcome: string): Promise<Proposal>
+
+  /**
+   * Delete a draft proposal. Admin only.
+   */
+  deleteProposal(id: string): Promise<void>
+}
+
 // ── API Interface ─────────────────────────────────────────────────────────────
 
 /**
@@ -719,6 +856,19 @@ export interface AdminAccessApi {
   listReports(signal?: AbortSignal): Promise<ModerationReport[]>
   getReport(id: string, signal?: AbortSignal): Promise<ModerationReport | null>
   updateReportState(id: string, state: ModerationState, updates?: Partial<ModerationReport>): Promise<void>
+  
+  // ── Governance (requires SIWE auth for voting/proposals) ──
+  listProposals(params?: { filter?: ProposalStatus | ProposalType; limit?: number; cursor?: string }, signal?: AbortSignal): Promise<Proposal[]>
+  getProposal(id: string, signal?: AbortSignal): Promise<Proposal | null>
+  getMemberVote(proposalId: string, signal?: AbortSignal): Promise<Vote | null>
+  listProposalVotes(proposalId: string, params?: { limit?: number; cursor?: string }, signal?: AbortSignal): Promise<Vote[]>
+  castVote(proposalId: string, choice: VoteChoice): Promise<Vote>
+  createProposal(proposal: Omit<Proposal, 'id' | 'createdAt' | 'status' | 'communityId' | 'votesSummary' | 'totalWeight'>): Promise<Proposal>
+  updateProposal(id: string, updates: Partial<Omit<Proposal, 'id' | 'status' | 'proposer' | 'createdAt' | 'votesSummary' | 'totalWeight'>>): Promise<Proposal>
+  publishProposal(id: string): Promise<Proposal>
+  closeProposalVoting(id: string): Promise<Proposal>
+  resolveProposal(id: string, outcome: string): Promise<Proposal>
+  deleteProposal(id: string): Promise<void>
   
   // Analytics
   analytics: AnalyticsDataSource
