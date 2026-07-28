@@ -2,7 +2,7 @@
 
 import { useAccount } from "wagmi";
 import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { getApi, type MemberRow, type Role, type MembershipTier } from "@/lib/api";
+import { getApi, type MemberRow, type Role } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,7 +22,6 @@ import {
   DeniedState,
   safeErrorMessage,
 } from "@/components/ui/api-states";
-import { usePagination } from "@/lib/hooks/usePagination";
 import {
   applyOptimisticRole,
   applyOptimisticRemoveRole,
@@ -30,9 +29,9 @@ import {
 import { roleRemovalConfirmationMessage } from "@/lib/api/role-removal";
 import { AddressText } from "@/components/wallet/address-text";
 import { isWalletAddress, normalizeAddress } from "@/lib/wallet/address";
-import { BulkActionToolbar, type BulkResult } from "@/components/ui/bulk-action-toolbar";
+import type { BulkResult } from "@/components/ui/bulk-action-toolbar";
+import { MemberList } from "@/components/admin/member-list";
 import { Users } from "lucide-react";
-import Link from "next/link";
 import { features } from "@/lib/features";
 
 type AssignRoleInput = {
@@ -173,21 +172,6 @@ export default function MembersPage() {
   const params = useParams();
   const communitySlug = (params?.communitySlug as string) || 'guildpass-demo';
 
-  // Filter state
-  const [searchQuery, setSearchQuery] = useState('')
-  const [roleFilter, setRoleFilter] = useState<Role | 'all'>('all')
-  const [tierFilter, setTierFilter] = useState<MembershipTier | 'all'>('all')
-  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all')
-  const [pageSize, setPageSize] = useState(25)
-
-  const resetFilters = () => {
-    setSearchQuery('')
-    setRoleFilter('all')
-    setTierFilter('all')
-    setStatusFilter('all')
-    setPageSize(25)
-  }
-
   const {
     data,
     isLoading,
@@ -198,14 +182,16 @@ export default function MembersPage() {
     isFetchingNextPage,
     refetch,
   } = useInfiniteQuery({
-    queryKey: [...queryKeys.members.all(communitySlug), { searchQuery }],
+    queryKey: queryKeys.members.all(communitySlug),
     queryFn: async ({ pageParam }) => {
       const api = getApi(address, authSession?.token, communitySlug);
       const limit = 100;
+      // Search/role/tier filtering happens entirely client-side (see
+      // components/admin/member-list.tsx) — this fetch is purely
+      // cursor-driven and never re-runs in response to filter changes.
       const res = await api.listMembers({
         cursor: pageParam,
         limit,
-        filter: searchQuery || undefined,
       });
 
       if (Array.isArray(res)) {
@@ -254,42 +240,7 @@ export default function MembersPage() {
     return data?.pages.flatMap((page) => page.members) ?? [];
   }, [data]);
 
-  const isFallbackMode = data?.pages[0]?.isFallback ?? false;
-
-  const filteredMembers = useMemo(() => {
-    return allFetchedMembers.filter((m) => {
-      const matchesSearch =
-        !isFallbackMode ||
-        !searchQuery ||
-        m.address.toLowerCase().includes(searchQuery.toLowerCase());
-      const matchesRole = roleFilter === 'all' || m.roles.includes(roleFilter);
-      const matchesTier = tierFilter === 'all' || m.tier === tierFilter;
-      const matchesStatus =
-        statusFilter === 'all' ||
-        (statusFilter === 'active' && m.active) ||
-        (statusFilter === 'inactive' && !m.active);
-
-      return matchesSearch && matchesRole && matchesTier && matchesStatus;
-    });
-  }, [allFetchedMembers, isFallbackMode, searchQuery, roleFilter, tierFilter, statusFilter]);
-
-  const {
-    paginatedItems,
-    currentPage,
-    totalPages,
-    nextPage,
-    prevPage,
-    setPage,
-    setCurrentPage,
-  } = usePagination(filteredMembers, pageSize);
-
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [searchQuery, roleFilter, tierFilter, statusFilter, pageSize, setCurrentPage]);
-
-  const isFiltered = searchQuery || roleFilter !== 'all' || tierFilter !== 'all' || statusFilter !== 'all'
   const hasAnyMembers = allFetchedMembers.length > 0
-  const hasVisibleMembers = filteredMembers.length > 0
 
   const {
     mutate,
@@ -353,7 +304,6 @@ export default function MembersPage() {
         }
         setPendingAssignment(null);
         addToast({
-          tone: "default",
           tone: "warning",
           title: "Approval Required",
           description: `Assignment of ${input.role} to ${input.address.slice(0, 6)}…${input.address.slice(-4)} has been proposed for approval.`,
@@ -513,7 +463,6 @@ export default function MembersPage() {
         }
         setPendingAssignment(null);
         addToast({
-          tone: "default",
           tone: "warning",
           title: "Approval Required",
           description: `Removal of ${input.role} from ${input.address.slice(0, 6)}…${input.address.slice(-4)} has been proposed for approval.`,
@@ -637,28 +586,6 @@ export default function MembersPage() {
     });
   };
 
-  const toggleSelectAll = () => {
-    const pageAddresses = paginatedItems.map((m) => m.address);
-    const allSelected = pageAddresses.every((a) =>
-      selectedAddresses.has(a),
-    );
-    if (allSelected) {
-      // Deselect all on this page
-      setSelectedAddresses((prev) => {
-        const next = new Set(prev);
-        pageAddresses.forEach((a) => next.delete(a));
-        return next;
-      });
-    } else {
-      // Select all on this page
-      setSelectedAddresses((prev) => {
-        const next = new Set(prev);
-        pageAddresses.forEach((a) => next.add(a));
-        return next;
-      });
-    }
-  };
-
   const clearSelection = () => {
     setSelectedAddresses(new Set());
     setBulkResults(null);
@@ -732,11 +659,6 @@ export default function MembersPage() {
       await executeBulkAssign(bulkFailedItems);
     }
   };
-
-  const pageAddresses = paginatedItems.map((m) => m.address);
-  const allPageSelected =
-    pageAddresses.length > 0 &&
-    pageAddresses.every((a) => selectedAddresses.has(a));
 
   const handleScrollToBottom = () => {
     if (hasNextPage && !isFetchingNextPage) {
@@ -872,7 +794,6 @@ export default function MembersPage() {
                       <span className="text-xs text-muted-foreground">
                         {log.timestamp.toLocaleTimeString()}
                       </span>
-                      {log.status === 'pending' && <Badge variant="secondary">Pending</Badge>}
                       {log.status === 'pending' && <Badge variant="outline">Pending</Badge>}
                       {log.status === 'success' && <Badge className="bg-green-600 hover:bg-green-700">Success</Badge>}
                       {log.status === 'error' && (
@@ -888,11 +809,6 @@ export default function MembersPage() {
 
         <Card>
           <CardContent>
-            {hasAnyMembers && hasVisibleMembers && (
-              <CardHeader className="px-0 pt-0 pb-4 border-b-0">
-                <CardTitle>Member List</CardTitle>
-              </CardHeader>
-            )}
             {isLoading ? (
               <LoadingState message="Loading members…" />
             ) : isError ? (
@@ -915,119 +831,30 @@ export default function MembersPage() {
                   </a>
                 }
               />
-            ) : !hasVisibleMembers ? (
-              <EmptyState
-                title="No matching members"
-                message="Members exist, but none match the current filters. Clear the filters to see the full list."
-                icon={<Users className="h-10 w-10" aria-hidden="true" />}
-              />
             ) : (
-               <div className="space-y-4">
-                 {/* ── Bulk action toolbar ─────────────────────────── */}
-                 {selectedAddressArray.length > 0 && (
-                   <div className="space-y-2">
-                     <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_10rem_auto] sm:items-end">
-                       <div />
-                       <Select
-                         value={bulkRole}
-                         onChange={(e) => setBulkRole(e.target.value as Role)}
-                       >
-                         <option value="member">member</option>
-                         <option value="moderator">moderator</option>
-                         <option value="admin">admin</option>
-                       </Select>
-                     </div>
-                     <BulkActionToolbar
-                       selectedCount={selectedAddressArray.length}
-                       totalCount={filteredMembers.length}
-                       onDismiss={clearSelection}
-                       onBulkAction={handleBulkAssign}
-                       actionLabel={`Assign ${bulkRole} to selected`}
-                       isPending={isBulkPending}
-                       results={bulkResults}
-                       onRetryFailed={handleRetryFailed}
-                     />
-                   </div>
-                 )}
-                 <div className="space-y-2">
-                   {paginatedItems.map((m) => (
-                     <div
-                       key={m.address}
-                       className="flex flex-col gap-3 rounded-md border p-3 sm:flex-row sm:items-center sm:justify-between h-full bg-card"
-                     >
-                       <div className="flex items-center gap-2">
-                         <input
-                           type="checkbox"
-                           checked={selectedAddresses.has(m.address)}
-                           onChange={() => toggleSelect(m.address)}
-                           className="h-4 w-4 rounded border-gray-300"
-                           aria-label={`Select ${m.address}`}
-                         />
-                         <AddressText address={m.address} className="text-sm" />
-                         {features.profiles && (
-                           <Link
-                             href={`/members/${m.address}`}
-                             className="text-xs text-primary underline-offset-4 hover:underline"
-                           >
-                             View profile
-                           </Link>
-                         )}
-                       </div>
-                       <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                         <span>Tier: {m.tier}</span>
-                         <div className="flex flex-wrap gap-1">
-                           {m.roles.map((r: string) => (
-                             <button
-                               key={r}
-                               type="button"
-                               className="inline-flex items-center rounded-md border border-transparent bg-secondary px-2 py-0.5 text-xs font-semibold text-secondary-foreground transition-colors hover:bg-destructive hover:text-destructive-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-                               onClick={() => requestRoleRemoval(m, r as import('@/lib/api/types').Role)}
-                               aria-label={`Remove ${r} role from ${m.address}`}
-                               title={`Remove ${r} role`}
-                             >
-                               {r} <span aria-hidden="true">✕</span>
-                             </button>
-                           ))}
-                         </div>
-                         {pendingAssignment?.address.toLowerCase() ===
-                           m.address.toLowerCase() && (
-                           <Badge variant="warning">Saving</Badge>
-                         )}
-                       </div>
-                     </div>
-                   ))}
-                 </div>
-                 
-                 <div className="flex items-center justify-between border-t pt-4">
-                    <div className="text-sm text-muted-foreground">
-                      Page {currentPage} of {totalPages} ({filteredMembers.length} members)
-                    </div>
-                    <div className="flex items-center gap-2">
-                       <Select
-                          value={String(pageSize)}
-                          onChange={(e) => setPageSize(Number(e.target.value))}
-                       >
-                          <option value="25">25 per page</option>
-                          <option value="50">50 per page</option>
-                          <option value="100">100 per page</option>
-                       </Select>
-                       <Button variant="outline" size="sm" onClick={prevPage} disabled={currentPage === 1}>
-                         Previous
-                       </Button>
-                       <Button variant="outline" size="sm" onClick={nextPage} disabled={currentPage === totalPages}>
-                         Next
-                       </Button>
-                    </div>
-                 </div>
-
-                 {isFetchingNextPage && (
-                   <div className="text-center py-2 text-xs text-muted-foreground">
-                     Loading more members…
-                   </div>
-                 )}
-               </div>
-             )}
-
+              <>
+                <MemberList
+                  members={allFetchedMembers}
+                  showProfileLink={features.profiles}
+                  pendingAddress={pendingAssignment?.address.toLowerCase()}
+                  onRequestRoleRemoval={requestRoleRemoval}
+                  selectedAddresses={selectedAddresses}
+                  onToggleSelect={toggleSelect}
+                  bulkRole={bulkRole}
+                  onBulkRoleChange={setBulkRole}
+                  onBulkAssign={handleBulkAssign}
+                  onClearSelection={clearSelection}
+                  onRetryFailedBulk={handleRetryFailed}
+                  isBulkPending={isBulkPending}
+                  bulkResults={bulkResults}
+                />
+                {isFetchingNextPage && (
+                  <div className="text-center py-2 text-xs text-muted-foreground">
+                    Loading more members…
+                  </div>
+                )}
+              </>
+            )}
           </CardContent>
         </Card>
       </div>

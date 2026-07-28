@@ -617,6 +617,9 @@
           },
           "active": {
             "type": "boolean"
+          },
+          "displayName": {
+            "type": "string"
           }
         },
         "required": [
