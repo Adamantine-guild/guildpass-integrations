@@ -75,7 +75,9 @@ import {
   loadAuthSession,
   loadAuthSessionIncludingExpired,
   msUntilRenewal,
+  SESSION_KEY,
   storeAuthSession,
+  subscribeToAuthSessionStorage,
 } from "@/lib/session";
 import { isApiError } from "@/lib/api/errors";
 import {
@@ -289,46 +291,74 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
   // ── BroadcastChannel — receive messages from peer tabs ─────────────────────
 
   useEffect(() => {
-    if (typeof window === "undefined" || !("BroadcastChannel" in window))
-      return;
+    if (typeof window === "undefined") return;
 
-    const channel = new BroadcastChannel(AUTH_CHANNEL_NAME);
-    channelRef.current = channel;
-
-    channel.onmessage = (event: MessageEvent<AuthBroadcastMessage>) => {
-      const msg = event.data;
-      if (!msg?.type) return;
-
-      if (msg.type === "signed-in" || msg.type === "refreshed") {
-        const s = msg.session;
-        if (
-          !s ||
-          typeof s.token !== "string" ||
-          !s.token.trim() ||
-          typeof s.address !== "string" ||
-          !s.address.trim() ||
-          typeof s.expiresAt !== "string" ||
-          !s.expiresAt.trim()
-        ) {
-          return;
-        }
-        // If a wallet is currently connected in this tab, discard sessions for other addresses
-        if (address && s.address.toLowerCase() !== address.toLowerCase()) {
-          return;
-        }
-        storeAuthSession(s);
-        dispatch({ type: "restore", session: s });
-        scheduleRenewal(s);
-      } else if (msg.type === "signed-out") {
+    const applyIncomingSession = (session: SiweAuthSession | null) => {
+      if (!session) {
         cancelRenewal();
         clearAuthSession();
         dispatch({ type: "clear" });
+        return;
+      }
+      if (
+        typeof session.token !== "string" ||
+        !session.token.trim() ||
+        typeof session.address !== "string" ||
+        !session.address.trim() ||
+        typeof session.expiresAt !== "string" ||
+        !session.expiresAt.trim()
+      ) {
+        return;
+      }
+      // If a wallet is currently connected in this tab, discard sessions for other addresses
+      if (address && session.address.toLowerCase() !== address.toLowerCase()) {
+        return;
+      }
+      storeAuthSession(session);
+      dispatch({ type: "restore", session });
+      scheduleRenewal(session);
+    };
+
+    const onStorageMessage = (event: StorageEvent) => {
+      if (event.key && event.key !== SESSION_KEY) return;
+      if (event.newValue === null) {
+        applyIncomingSession(null);
+        return;
+      }
+      try {
+        const parsed = JSON.parse(event.newValue ?? "") as SiweAuthSession;
+        applyIncomingSession(parsed);
+      } catch {
+        // Ignore malformed peer-session payloads.
       }
     };
 
+    const unsubscribeStorage = subscribeToAuthSessionStorage(onStorageMessage);
+
+    if ("BroadcastChannel" in window) {
+      const channel = new BroadcastChannel(AUTH_CHANNEL_NAME);
+      channelRef.current = channel;
+
+      channel.onmessage = (event: MessageEvent<AuthBroadcastMessage>) => {
+        const msg = event.data;
+        if (!msg?.type) return;
+
+        if (msg.type === "signed-in" || msg.type === "refreshed") {
+          applyIncomingSession(msg.session);
+        } else if (msg.type === "signed-out") {
+          applyIncomingSession(null);
+        }
+      };
+
+      return () => {
+        unsubscribeStorage();
+        channel.close();
+        channelRef.current = null;
+      };
+    }
+
     return () => {
-      channel.close();
-      channelRef.current = null;
+      unsubscribeStorage();
     };
   }, [address, cancelRenewal, scheduleRenewal]);
 
