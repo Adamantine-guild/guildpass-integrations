@@ -143,6 +143,101 @@ and does not require any backend changes.
 | `signed-in` | After a successful `/v1/auth/siwe/verify` | Write session to sessionStorage and authenticate |
 | `refreshed` | After a successful `/v1/auth/siwe/refresh` | Update access token in sessionStorage |
 | `signed-out` | After logout or 401-triggered expiry | Clear session and show re-auth prompt |
+| `request-current-session` | Sent by a tab that detects (via the localStorage marker below) that a peer refreshed but never received that peer's `refreshed` message | Any tab holding a valid session for that address re-broadcasts `refreshed` |
+
+Because each tab runs its own `SiweAuthProvider` instance, two tabs can
+independently enter the proactive renewal window (60 s before access-token
+expiry) and both attempt to redeem the same **one-time-use** refresh token
+before either observes the other's `BroadcastChannel` message. The refresh
+path (`lib/wallet/refresh-coordination.ts`, driven from
+`lib/wallet/providers.tsx`) adds three layers on top of `BroadcastChannel` to
+prevent that race:
+
+### Web Locks coordination
+
+The network call to `POST /v1/auth/siwe/refresh` is wrapped in
+`navigator.locks.request()`, scoped per wallet address
+(`guildpass:siwe-refresh:<address>`). At most one same-origin tab holds the
+lock for a given address at a time, so at most one tab is ever mid-flight on
+the refresh call for that address; any other tab that reaches its renewal
+window for the same address queues behind the lock instead of firing a
+concurrent request.
+
+### Adopting a peer's refreshed session
+
+A tab that was queued behind the lock does **not** blindly replay its refresh
+token once the lock is granted — that token may already have been rotated
+away by the peer that held the lock first. Before calling the API it:
+
+1. Re-reads the stored session and checks whether it is now newer than the
+   session snapshot this attempt started with (different `expiresAt` /
+   `refreshToken`, and not itself expired). If so, it adopts that session
+   directly — no network call.
+2. If storage hasn't caught up yet — a peer's `refreshed` message can be
+   **missed entirely**, not just delayed, if it was sent before this tab's
+   `BroadcastChannel` listener existed (e.g. the winner finishes in a
+   handful of milliseconds while this tab is still mid-navigation) — the tab
+   sends `request-current-session` and briefly polls storage for any peer's
+   response, rather than assuming it must perform its own call.
+3. Only if neither step yields a fresh session does the tab call
+   `siweRefresh()` itself, store the result, and broadcast `refreshed`.
+
+This adoption path also runs when Web Locks is unavailable (see below), so a
+tab that loses an unlocked race can still recover a peer's result instead of
+presenting an already-invalidated token.
+
+A small `localStorage` marker (timestamp of the last successful refresh per
+address — never the token itself) backs step 1/2 above: unlike
+`BroadcastChannel` messages, `localStorage` writes are synchronously visible
+to other same-origin tabs regardless of listener timing, so it reliably tells
+a queued tab *that* a peer refreshed even when it missed the message saying
+so.
+
+### Bounded fallback when the leader disappears
+
+The wait for a peer's response (`request-current-session` → `refreshed`) is
+bounded — by default a 2 second timeout, polling storage every 25 ms. If the
+tab that completed the refresh (or held the lock) closes or navigates away
+before a waiting tab observes the result — e.g. every peer holding the fresh
+session closed its tab — the wait times out and the queued tab falls back to
+performing its own `siweRefresh()` call. A stuck or vanished leader tab can
+therefore never wedge session renewal in the tabs that survive it.
+
+### Graceful degradation without Web Locks or BroadcastChannel
+
+Both coordination primitives are optional; their absence degrades safety
+without breaking functionality:
+
+- **No Web Locks** (`navigator.locks` undefined): `withRefreshLock` runs the
+  refresh operation directly instead of acquiring a lock. Same-tab exclusion
+  (the existing `isRefreshing` ref) still prevents duplicate calls within one
+  tab, and the peer-adoption check above still lets a tab that loses an
+  unlocked race adopt the winner's session — but multiple tabs can now
+  concurrently *attempt* the network call, relying on the backend's one-time-use
+  enforcement (see below) to make any redundant attempt fail safely as a 401
+  rather than a security issue.
+- **No `BroadcastChannel`** (checked via `"BroadcastChannel" in window`): the
+  provider skips wiring up the channel entirely. Cross-tab propagation of
+  `signed-in` / `refreshed` / `signed-out` and the `request-current-session`
+  handshake do not happen, so each tab manages its own session independently
+  and only learns of a peer's rotation the next time it reads
+  `sessionStorage` on its own schedule (e.g. its own renewal timer). Within a
+  single tab, refresh behaviour is unaffected.
+
+In both degraded cases, no tab presents a refresh token it already knows to
+be stale — the remaining risk is redundant network calls, not incorrect
+token reuse, and that risk is bounded by the backend contract below.
+
+### Backend contract is unchanged
+
+None of this cross-tab coordination changes the backend contract described
+above. The refresh token is still **one-time-use**
+(see [Token rotation and invalidation semantics](#token-rotation-and-invalidation-semantics)):
+if degraded conditions ever let two tabs present the same refresh token, the
+backend's existing 401 (`unauthorized`) response for an already-used token is
+what makes the loser's attempt fail safely — the frontend coordination above
+exists purely to make that case rare, not to replace the backend's
+enforcement of it.
 
 ---
 

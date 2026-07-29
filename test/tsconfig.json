@@ -30,6 +30,8 @@
     "../lib/wallet/chains.ts",
     "../lib/wallet/config.ts",
     "../lib/wallet/connectors.ts",
+    "../lib/config-validation.js",
+    "../lib/wallet/validation.js",
     "../lib/wallet/siwe-session.ts",
     "../lib/wallet/config.ts",
     "../lib/config.ts",
@@ -68,8 +70,11 @@
     "../lib/validation/profile.ts",
     "../lib/api/analytics.ts",
     "../components/analytics/*.tsx",
-    "../app/analytics/*.tsx"
+    "../app/analytics/*.tsx",
     "../lib/integration-client.ts",
-    "../lib/integration/resilientCall.ts"
+    "../lib/integration/resilientCall.ts",
+    "../lib/hooks/*.ts",
+    "../lib/members/*.ts",
+    "../components/admin/*.tsx"
   ]
 }

@@ -169,6 +169,31 @@ export async function navigateToAdmin(page: Page, baseUrl = 'http://localhost:30
 }
 
 /**
+ * Directly seed sessionStorage with a SIWE auth session before the app
+ * mounts (via addInitScript), bypassing the wallet-signature UI flow.
+ * Useful for deterministically forcing the provider's mount-time hydration
+ * path — e.g. seeding an already-expired access token with a still-valid
+ * refresh token triggers an immediate silent-refresh attempt on load.
+ */
+export async function seedAuthSession(
+  page: Page,
+  session: {
+    token: string
+    address: string
+    expiresAt: string
+    refreshToken: string
+    refreshExpiresAt: string
+  },
+): Promise<void> {
+  await page.addInitScript((seeded) => {
+    window.sessionStorage.setItem(
+      'guildpass:siwe-session',
+      JSON.stringify({ isAuthenticated: true, ...seeded }),
+    )
+  }, session)
+}
+
+/**
  * Get the current address from sessionStorage.
  * Useful for asserting that the session was persisted correctly.
  */

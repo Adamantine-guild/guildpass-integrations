@@ -40,6 +40,9 @@ npm install
 # Set up environment variables
 cp .env.example .env.local
 # Edit .env.local as needed (mock mode requires no changes)
+
+# Verify your local environment before starting Next.js
+npm run check-env
 ```
 
 ### Run in mock / demo mode
@@ -109,6 +112,10 @@ Admin actions are protected by [Sign-In with Ethereum (EIP-4361)](https://eips.e
 All configuration is read and validated at startup by [`lib/config.ts`](./lib/config.ts).  
 Invalid values produce a clear `ConfigError` in development so broken configuration is caught
 immediately rather than at runtime.
+
+Run `npm run check-env` after creating `.env.local` to validate the same app
+and wallet rules before the dev server starts. `npm run dev` also runs this
+check automatically via the `predev` script.
 
 | Variable | Required | Description |
 | ---- | ------- | ----------- |
@@ -195,6 +202,7 @@ Modules that are experimental or not yet production-ready are controlled by envi
 
 ```bash
 npm run dev        # Start Next.js dev server (http://localhost:3000)
+npm run check-env  # Validate .env.local before the dev server starts
 npm run build      # Production build
 npm run start      # Start production server (after build)
 npm run lint       # Lint via Next.js ESLint config
