@@ -340,6 +340,27 @@ export interface AdminAccessApi {
 }
 
 /**
+ * Lightweight session-status check for httpOnly-cookie auth mode (dual-mode
+ * readiness — see docs/http-only-cookie-migration.md). Never carries a
+ * bearer token; \`authenticated\` is the only field guaranteed present.
+ *
+ * @provisional \`GET /v1/auth/session\` is not yet implemented in
+ * guildpass-core. This contract lets the frontend cookie-mode path be built
+ * and tested against the mock ahead of the backend endpoint shipping.
+ */
+export interface SessionStatus {
+  authenticated: boolean
+  address?: string
+  expiresAt?: string
+}
+
+export const SessionStatusSchema = z.object({
+  authenticated: z.boolean(),
+  address: z.string().optional(),
+  expiresAt: z.string().optional(),
+})
+
+/**
  * SIWE authentication endpoints.
  */
 export interface SiweAuthApi {
@@ -361,9 +382,23 @@ export interface SiweAuthApi {
    * signalling that the user must re-sign with their wallet.
    */
   siweRefresh(refreshToken: string): Promise<SiweAuthSession>
-  /** Invalidate the current server-side session (no-op for stateless JWTs). */
-  siweLogout(token: string): Promise<void>
+  /**
+   * Invalidate the current server-side session (no-op for stateless JWTs).
+   * \`token\` is optional so cookie-auth-mode callers — which never hold a
+   * bearer token — can invoke this with no argument; the session cookie
+   * identifies the caller instead.
+   */
+  siweLogout(token?: string): Promise<void>
   verifyWallet(address: string): Promise<WalletVerification>
+  /**
+   * Lightweight session-status check for httpOnly-cookie auth mode. Returns
+   * \`{ authenticated: false }\` for "no session" (never throws for that
+   * case); network/server errors propagate so the caller can distinguish an
+   * unreachable backend from a genuinely absent session.
+   *
+   * @provisional See {@link SessionStatus}.
+   */
+  getSessionStatus(signal?: AbortSignal): Promise<SessionStatus>
 }
 
 /**

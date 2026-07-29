@@ -17,6 +17,8 @@ import {
   ResourceLookupResult,
   Role,
   Session,
+  SessionStatus,
+  SessionStatusSchema,
   SiweAuthSession,
   WalletVerification,
   BackendSession,
@@ -523,6 +525,12 @@ async function getJson<T>(path: string, options: RequestOptions = {}): Promise<T
           'Content-Type': 'application/json',
           ...(headers ?? {}),
         },
+        // Cookie mode needs the session cookie sent on cross-origin requests
+        // (e.g. NEXT_PUBLIC_CORE_API_URL on a different dev port) — the
+        // browser's 'same-origin' default excludes those. Bearer mode passes
+        // `undefined`, which is equivalent to omitting the option entirely,
+        // so its request shape is unchanged.
+        credentials: config.authMode === 'cookie' ? 'include' : undefined,
         signal,
       })
 
@@ -691,7 +699,10 @@ export class LiveAccessApi implements AccessApi {
     const headers: Record<string, string> = {
       ...(extra as Record<string, string> ?? {})
     }
-    if (this.token) {
+    // Cookie mode relies exclusively on the httpOnly session cookie (sent
+    // automatically via `credentials: 'include'` in getJson()) — never send
+    // Authorization here, even if a token happens to be held in memory.
+    if (config.authMode !== 'cookie' && this.token) {
       headers['Authorization'] = `Bearer ${this.token}`
     }
     if (this.communityId) {
@@ -1121,13 +1132,46 @@ export class LiveAccessApi implements AccessApi {
     return { isAuthenticated: true, ...data }
   }
 
-  async siweLogout(token: string): Promise<void> {
+  async siweLogout(token?: string): Promise<void> {
+    const headers: Record<string, string> = {}
+    // Guard against a falsy token producing "Bearer undefined"/"Bearer null"/
+    // "Bearer " — and never send Authorization at all in cookie mode, where
+    // the session cookie (sent via credentials: 'include') identifies the
+    // caller instead.
+    if (config.authMode !== 'cookie' && token) {
+      headers['Authorization'] = `Bearer ${token}`
+    }
     await getJson<void>('/v1/auth/siwe/logout', {
       method: 'POST',
-      headers: { Authorization: `Bearer ${token}` },
+      headers,
     }).catch(() => {
       // best-effort logout
     })
+  }
+
+  /**
+   * Lightweight session-status check for httpOnly-cookie auth mode. Never
+   * sends or receives a bearer token — the cookie is transparent to this
+   * request (`credentials: 'include'` in getJson()).
+   *
+   * "No session" (401/404) resolves to `{ authenticated: false }` rather
+   * than throwing, so callers can treat it as a steady state. Network/5xx
+   * failures propagate so a caller can distinguish "definitely signed out"
+   * from "backend unreachable."
+   */
+  async getSessionStatus(signal?: AbortSignal): Promise<SessionStatus> {
+    try {
+      return await getJson<SessionStatus>('/v1/auth/session', {
+        method: 'GET',
+        schema: SessionStatusSchema,
+        signal,
+      })
+    } catch (err) {
+      if (err instanceof ApiError && err.code === 'aborted') throw err
+      if (err instanceof AuthError) return { authenticated: false }
+      if (err instanceof ApiError && err.status === 404) return { authenticated: false }
+      throw err
+    }
   }
 
   // ── Social Graph (Connections / Blocks) ──

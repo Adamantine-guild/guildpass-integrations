@@ -41,6 +41,7 @@ import {
   ResourceLookupResult,
   Role,
   Session,
+  SessionStatus,
   SiweAuthSession,
   WalletVerification,
   WebhookEventLog,
@@ -71,12 +72,48 @@ import {
   clearPersistedState,
   LS_KEY,
 } from './mock-storage'
+import { config } from '../config'
 
 /** Read once at module load so it is stable across renders. */
 const MOCK_SESSION_STATE =
   (typeof process !== 'undefined' &&
     process.env.NEXT_PUBLIC_MOCK_SESSION_STATE) ||
   ''
+
+// ── Mock cookie-session simulation (cookie auth mode) ───────────────────────
+//
+// There is no real backend in mock mode, so a real httpOnly cookie can't be
+// set. This uses a plain, non-httpOnly document.cookie entry to simulate
+// "the browser is holding a session cookie" — an honest simulation boundary
+// (mock JS genuinely cannot set an httpOnly cookie either). It intentionally
+// never touches sessionStorage, so cookie-mode session state is provably
+// independent of the bearer-token sessionStorage path in lib/session.ts.
+// Only ever written/read when config.authMode === 'cookie', so bearer-mode
+// mock runs get zero new side effects.
+
+const MOCK_SESSION_COOKIE = 'gp_mock_session'
+
+function setMockSessionCookie(address: string, expiresAt: string): void {
+  if (typeof document === 'undefined') return
+  const value = encodeURIComponent(`${address}|${expiresAt}`)
+  document.cookie = `${MOCK_SESSION_COOKIE}=${value}; path=/; SameSite=Lax`
+}
+
+function clearMockSessionCookie(): void {
+  if (typeof document === 'undefined') return
+  document.cookie = `${MOCK_SESSION_COOKIE}=; path=/; Max-Age=0; SameSite=Lax`
+}
+
+function readMockSessionCookie(): { address: string; expiresAt: string } | null {
+  if (typeof document === 'undefined') return null
+  const row = document.cookie
+    .split('; ')
+    .find((entry) => entry.startsWith(`${MOCK_SESSION_COOKIE}=`))
+  if (!row) return null
+  const raw = decodeURIComponent(row.slice(MOCK_SESSION_COOKIE.length + 1))
+  const [address, expiresAt] = raw.split('|')
+  return address && expiresAt ? { address, expiresAt } : null
+}
 
 const DEFAULT_COMMUNITY: Community = {
   id: 'guildpass-demo',
@@ -1434,11 +1471,16 @@ export class MockAccessApi implements AccessApi {
         : new Date(Date.now() + 60 * 60 * 1000).toISOString()
 
     const refreshExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
+    const resolvedAddress = this.address ?? '0x0000000000000000000000000000000000000000'
+
+    if (config.authMode === 'cookie') {
+      setMockSessionCookie(resolvedAddress, expiresAt)
+    }
 
     return {
       isAuthenticated: true,
       token: `mock-jwt-${randomHex()}`,
-      address: this.address ?? '0x0000000000000000000000000000000000000000',
+      address: resolvedAddress,
       expiresAt,
       refreshToken: `mock-refresh-${randomHex()}`,
       refreshExpiresAt,
@@ -1462,7 +1504,17 @@ export class MockAccessApi implements AccessApi {
       })
     }
 
-    if (!refreshToken || !refreshToken.startsWith('mock-refresh-')) {
+    if (config.authMode === 'cookie') {
+      // Cookie mode has no refresh-token string for the frontend to hold —
+      // the (mock) session cookie is the only refreshability signal.
+      if (!readMockSessionCookie()) {
+        throw new ApiError({
+          status: 401,
+          code: 'unauthorized',
+          safeMessage: 'Invalid refresh token.',
+        })
+      }
+    } else if (!refreshToken || !refreshToken.startsWith('mock-refresh-')) {
       throw new ApiError({
         status: 401,
         code: 'unauthorized',
@@ -1472,19 +1524,48 @@ export class MockAccessApi implements AccessApi {
 
     const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString()
     const refreshExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
+    const resolvedAddress = this.address ?? '0x0000000000000000000000000000000000000000'
+
+    if (config.authMode === 'cookie') {
+      setMockSessionCookie(resolvedAddress, expiresAt)
+    }
 
     return {
       isAuthenticated: true,
       token: `mock-jwt-${randomHex()}`,
-      address: this.address ?? '0x0000000000000000000000000000000000000000',
+      address: resolvedAddress,
       expiresAt,
       refreshToken: `mock-refresh-${randomHex()}`,
       refreshExpiresAt,
     }
   }
 
-  async siweLogout(_token: string): Promise<void> {
+  async siweLogout(_token?: string): Promise<void> {
     await initPromise
+    if (config.authMode === 'cookie') {
+      clearMockSessionCookie()
+    }
+  }
+
+  /**
+   * Mock counterpart to LiveAccessApi.getSessionStatus(). Reads only the
+   * simulated document.cookie session marker set by siweVerify/siweRefresh —
+   * never sessionStorage — so cookie-mode session state stays deterministic
+   * and independent of the bearer-token sessionStorage path.
+   */
+  async getSessionStatus(_signal?: AbortSignal): Promise<SessionStatus> {
+    await initPromise
+    if (MOCK_SESSION_STATE === 'unauthenticated') {
+      return { authenticated: false }
+    }
+    const cookie = readMockSessionCookie()
+    if (!cookie) {
+      return { authenticated: false }
+    }
+    if (MOCK_SESSION_STATE === 'expired' || new Date(cookie.expiresAt).getTime() <= Date.now()) {
+      return { authenticated: false }
+    }
+    return { authenticated: true, address: cookie.address, expiresAt: cookie.expiresAt }
   }
 
   async verifyWallet(_address: string, _signal?: AbortSignal): Promise<WalletVerification> {

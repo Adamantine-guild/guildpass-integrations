@@ -6,6 +6,7 @@
  * - EXPECTED_API_VERSION constant presence
  */
 
+import './setup-env'
 import assert from 'node:assert'
 import { describe, it, before, after } from 'node:test'
 import { checkVersionCompatibility } from '../lib/api/version'

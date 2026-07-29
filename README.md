@@ -105,6 +105,27 @@ Admin actions are protected by [Sign-In with Ethereum (EIP-4361)](https://eips.e
 
 > In **mock mode** all three endpoints are simulated in-memory — no backend required.
 
+### Dual-mode readiness: httpOnly cookie auth (`NEXT_PUBLIC_AUTH_MODE`)
+
+`NEXT_PUBLIC_AUTH_MODE=cookie` switches the flow above to session-cookie auth
+instead of a sessionStorage-persisted bearer token — see
+[docs/http-only-cookie-migration.md](./docs/http-only-cookie-migration.md)
+for the full design and current implementation status. `bearer` (the
+default) is unchanged by this flag. In short, cookie mode:
+
+- Never reads or writes a bearer token to `sessionStorage`.
+- Never sends an `Authorization` header — the browser sends the session
+  cookie automatically (`credentials: 'include'`).
+- Hydrates session state on mount via `isSessionActive()`
+  (`GET /v1/auth/session`, mocked in mock mode) instead of reading storage.
+- Broadcasts only `signed-in`/`refreshed`/`signed-out` signals to peer tabs
+  without a real token.
+
+This is **not yet a full Phase 2 cutover** — `guildpass-core` doesn't
+implement `GET /v1/auth/session` yet (mock mode simulates it), and
+cookie-mode silent refresh does not yet use the same cross-tab Web-Locks
+coordination bearer mode has (see the doc for details).
+
 ---
 
 ## Environment Variables
@@ -121,6 +142,7 @@ check automatically via the `predev` script.
 | ---- | ------- | ----------- |
 | `NEXT_PUBLIC_MOCK_MODE` | No | Set `true` for in-memory mock API; SIWE fully simulated |
 | `NEXT_PUBLIC_DEMO_MODE` | No | Alias for `NEXT_PUBLIC_MOCK_MODE` |
+| `NEXT_PUBLIC_AUTH_MODE` | No | `bearer` (default) or `cookie` — see [Dual-mode readiness](#dual-mode-readiness-httponly-cookie-auth-next_public_auth_mode) above. Any value other than the literal `cookie` falls back to `bearer`. |
 | `NEXT_PUBLIC_CORE_API_URL` | Live mode only (validated) | Base URL of the `guildpass-core` access-api — must be a valid absolute URL in live mode |
 | `NEXT_PUBLIC_SIWE_DOMAIN` | No | Domain field in the EIP-4361 message (defaults to `localhost:3000`) |
 | `NEXT_PUBLIC_SIWE_STATEMENT` | No | Human-readable statement shown in the signed message |

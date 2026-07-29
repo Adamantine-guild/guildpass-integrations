@@ -19,6 +19,15 @@ import {
 
 export type ApiMode = 'mock' | 'live'
 
+/**
+ * 'bearer' (default) — sessionStorage-persisted token, Authorization header
+ * on every authenticated request.
+ * 'cookie' — httpOnly-cookie session (dual-mode readiness for the migration
+ * in docs/http-only-cookie-migration.md). No bearer token is ever read from
+ * or written to sessionStorage, and no Authorization header is sent.
+ */
+export type AuthMode = 'bearer' | 'cookie'
+
 export interface SiweConfig {
   domain: string
   statement: string
@@ -46,6 +55,8 @@ export interface IntegrationGatewayConfig {
 export interface AppConfig {
   /** 'mock' when NEXT_PUBLIC_MOCK_MODE or NEXT_PUBLIC_DEMO_MODE is 'true', otherwise 'live' */
   apiMode: ApiMode
+  /** 'cookie' when NEXT_PUBLIC_AUTH_MODE is exactly 'cookie', otherwise 'bearer' (default). */
+  authMode: AuthMode
   /**
    * Base URL for the guildpass-core API.
    * - In mock mode: defaults to 'http://localhost:4000' if unset.
