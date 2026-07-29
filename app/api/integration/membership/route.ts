@@ -37,7 +37,7 @@ export async function GET(req: NextRequest) {
     }
 
     // Enforce per-IP / per-wallet rate limit before any downstream call.
-    const rl = rateLimitRequest(req, address)
+    const rl = await rateLimitRequest(req, address)
     rateLimit = rl.limited ? 'limited' : 'allowed'
     if (rl.limited) {
       status = 429

@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { Copy, Check } from "lucide-react";
-import { useAccount, useConnect, useDisconnect, injected } from "wagmi";
+import { useAccount, useConnect, useDisconnect } from "wagmi";
 import { Button } from "@/components/ui/button";
 import { useSiweAuth } from "@/lib/wallet/providers";
 import { AddressText } from "./address-text";
+import { hasInjectedWallet, walletConfig } from "@/lib/wallet/config";
 
 function CopyAddressButton({ address }: { address?: string }) {
   const [copied, setCopied] = useState(false);
@@ -46,21 +47,90 @@ function CopyAddressButton({ address }: { address?: string }) {
 
 export function ConnectButton() {
   const { isConnected, address } = useAccount();
-  const { connect, isPending: isConnecting } = useConnect();
+  const { connect, connectors, isPending: isConnecting } = useConnect();
   const { disconnect } = useDisconnect();
   const { sessionStatus, isSigningIn, signIn, logout, error } = useSiweAuth();
+  const [showConnectorPicker, setShowConnectorPicker] = useState(false);
+  const [injectedAvailable, setInjectedAvailable] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    setInjectedAvailable(hasInjectedWallet());
+  }, []);
+
+  const hasMultipleConnectors = walletConfig.connectorNames.length > 1
+  const showFallbackPrompt = injectedAvailable === false && hasMultipleConnectors
+
+  function handleConnect(connectorId: string) {
+    const connector = connectors.find((c) => c.id === connectorId)
+    if (connector) {
+      connect({ connector })
+      setShowConnectorPicker(false)
+    }
+  }
+
+  function handleQuickConnect() {
+    if (injectedAvailable) {
+      const injectedConnector = connectors.find((c) => c.id === 'injected')
+      if (injectedConnector) {
+        connect({ connector: injectedConnector })
+        return
+      }
+    }
+    if (hasMultipleConnectors) {
+      setShowConnectorPicker(true)
+    }
+  }
 
   if (!isConnected) {
+    if (showConnectorPicker) {
+      return (
+        <div className="flex flex-col gap-1">
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {connectors.map((connector) => (
+              <Button
+                key={connector.id}
+                id={`wallet-connect-${connector.id}`}
+                size="sm"
+                variant={connector.id === 'injected' ? 'default' : 'outline'}
+                onClick={() => handleConnect(connector.id)}
+                disabled={isConnecting}
+                aria-busy={isConnecting}
+              >
+                {isConnecting ? "Connecting…" : connector.name}
+              </Button>
+            ))}
+            <Button
+              id="wallet-connect-cancel"
+              variant="ghost"
+              size="sm"
+              onClick={() => setShowConnectorPicker(false)}
+            >
+              Cancel
+            </Button>
+          </div>
+        </div>
+      )
+    }
+
     return (
-      <Button
-        id="wallet-connect-btn"
-        size="sm"
-        onClick={() => connect({ connector: injected() })}
-        disabled={isConnecting}
-        aria-busy={isConnecting}
-      >
-        {isConnecting ? "Connecting…" : "Connect Wallet"}
-      </Button>
+      <div className="flex flex-col gap-1">
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <Button
+            id="wallet-connect-btn"
+            size="sm"
+            onClick={handleQuickConnect}
+            disabled={isConnecting}
+            aria-busy={isConnecting}
+          >
+            {isConnecting ? "Connecting…" : showFallbackPrompt ? "Connect Wallet" : "Connect Wallet"}
+          </Button>
+        </div>
+        {showFallbackPrompt && (
+          <p className="max-w-xs text-right text-xs text-muted-foreground">
+            No injected wallet detected — another connector may be used.
+          </p>
+        )}
+      </div>
     );
   }
 

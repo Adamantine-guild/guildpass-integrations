@@ -46,6 +46,11 @@ import {
   ModerationState,
   PendingAction,
   ApprovalConfig,
+  Proposal,
+  Vote,
+  VoteChoice,
+  ProposalStatus,
+  ProposalType,
 } from './types'
 import { checkVersionCompatibility, type VersionCompatibility } from './version'
 import {
@@ -1247,6 +1252,221 @@ export class LiveAccessApi implements AccessApi {
       body: JSON.stringify({ state, ...updates }),
       headers: this.authHeaders(),
     })
+  }
+
+  // ── Governance ──
+  async listProposals(params?: { filter?: ProposalStatus | ProposalType; limit?: number; cursor?: string }, signal?: AbortSignal): Promise<Proposal[]> {
+    const qs = new URLSearchParams()
+    if (params?.filter) qs.set('filter', params.filter)
+    if (params?.limit) qs.set('limit', String(params.limit))
+    if (params?.cursor) qs.set('cursor', params.cursor)
+    const query = qs.toString()
+    const path = `/v1/governance/proposals${query ? `?${query}` : ''}`
+    try {
+      return await getJson<Proposal[]>(path, { signal, headers: this.authHeaders() })
+    } catch (err) {
+      // Graceful degradation: if governance endpoints not available, return empty list
+      if (err instanceof ApiError && err.status === 503) {
+        return []
+      }
+      throw err
+    }
+  }
+
+  async getProposal(id: string, signal?: AbortSignal): Promise<Proposal | null> {
+    const path = `/v1/governance/proposals/${encodeURIComponent(id)}`
+    try {
+      return await getJson<Proposal>(path, { signal, headers: this.authHeaders() })
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) {
+        return null
+      }
+      if (err instanceof ApiError && err.status === 503) {
+        return null
+      }
+      throw err
+    }
+  }
+
+  async getMemberVote(proposalId: string, signal?: AbortSignal): Promise<Vote | null> {
+    const path = `/v1/governance/proposals/${encodeURIComponent(proposalId)}/votes/my`
+    try {
+      return await getJson<Vote>(path, { signal, headers: this.authHeaders() })
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) {
+        return null
+      }
+      if (err instanceof ApiError && err.status === 204) {
+        // No content means no vote yet
+        return null
+      }
+      if (err instanceof ApiError && err.status === 503) {
+        return null
+      }
+      throw err
+    }
+  }
+
+  async listProposalVotes(proposalId: string, params?: { limit?: number; cursor?: string }, signal?: AbortSignal): Promise<Vote[]> {
+    const qs = new URLSearchParams()
+    if (params?.limit) qs.set('limit', String(params.limit))
+    if (params?.cursor) qs.set('cursor', params.cursor)
+    const query = qs.toString()
+    const path = `/v1/governance/proposals/${encodeURIComponent(proposalId)}/votes${query ? `?${query}` : ''}`
+    try {
+      return await getJson<Vote[]>(path, { signal, headers: this.authHeaders() })
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 503) {
+        return []
+      }
+      throw err
+    }
+  }
+
+  async castVote(proposalId: string, choice: VoteChoice): Promise<Vote> {
+    const path = `/v1/governance/proposals/${encodeURIComponent(proposalId)}/vote`
+    try {
+      return await getJson<Vote>(path, {
+        method: 'POST',
+        body: JSON.stringify({ choice }),
+        headers: this.authHeaders(),
+      })
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 503) {
+        throw new ApiError({
+          status: 503,
+          code: 'service_unavailable',
+          safeMessage: 'Governance service is temporarily unavailable.',
+          retryable: true,
+        })
+      }
+      throw err
+    }
+  }
+
+  async createProposal(proposal: Omit<Proposal, 'id' | 'createdAt' | 'status' | 'communityId' | 'votesSummary' | 'totalWeight'>): Promise<Proposal> {
+    const path = '/v1/governance/proposals'
+    try {
+      return await getJson<Proposal>(path, {
+        method: 'POST',
+        body: JSON.stringify(proposal),
+        headers: this.authHeaders(),
+      })
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 503) {
+        throw new ApiError({
+          status: 503,
+          code: 'service_unavailable',
+          safeMessage: 'Governance service is temporarily unavailable.',
+          retryable: true,
+        })
+      }
+      throw err
+    }
+  }
+
+  async updateProposal(id: string, updates: Partial<Omit<Proposal, 'id' | 'status' | 'proposer' | 'createdAt' | 'votesSummary' | 'totalWeight'>>): Promise<Proposal> {
+    const path = `/v1/governance/proposals/${encodeURIComponent(id)}`
+    try {
+      return await getJson<Proposal>(path, {
+        method: 'PATCH',
+        body: JSON.stringify(updates),
+        headers: this.authHeaders(),
+      })
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 503) {
+        throw new ApiError({
+          status: 503,
+          code: 'service_unavailable',
+          safeMessage: 'Governance service is temporarily unavailable.',
+          retryable: true,
+        })
+      }
+      throw err
+    }
+  }
+
+  async publishProposal(id: string): Promise<Proposal> {
+    const path = `/v1/governance/proposals/${encodeURIComponent(id)}/publish`
+    try {
+      return await getJson<Proposal>(path, {
+        method: 'POST',
+        body: JSON.stringify({}),
+        headers: this.authHeaders(),
+      })
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 503) {
+        throw new ApiError({
+          status: 503,
+          code: 'service_unavailable',
+          safeMessage: 'Governance service is temporarily unavailable.',
+          retryable: true,
+        })
+      }
+      throw err
+    }
+  }
+
+  async closeProposalVoting(id: string): Promise<Proposal> {
+    const path = `/v1/governance/proposals/${encodeURIComponent(id)}/close`
+    try {
+      return await getJson<Proposal>(path, {
+        method: 'POST',
+        body: JSON.stringify({}),
+        headers: this.authHeaders(),
+      })
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 503) {
+        throw new ApiError({
+          status: 503,
+          code: 'service_unavailable',
+          safeMessage: 'Governance service is temporarily unavailable.',
+          retryable: true,
+        })
+      }
+      throw err
+    }
+  }
+
+  async resolveProposal(id: string, outcome: string): Promise<Proposal> {
+    const path = `/v1/governance/proposals/${encodeURIComponent(id)}/resolve`
+    try {
+      return await getJson<Proposal>(path, {
+        method: 'POST',
+        body: JSON.stringify({ outcome }),
+        headers: this.authHeaders(),
+      })
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 503) {
+        throw new ApiError({
+          status: 503,
+          code: 'service_unavailable',
+          safeMessage: 'Governance service is temporarily unavailable.',
+          retryable: true,
+        })
+      }
+      throw err
+    }
+  }
+
+  async deleteProposal(id: string): Promise<void> {
+    const path = `/v1/governance/proposals/${encodeURIComponent(id)}`
+    try {
+      await getJson<void>(path, {
+        method: 'DELETE',
+        headers: this.authHeaders(),
+      })
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 503) {
+        throw new ApiError({
+          status: 503,
+          code: 'service_unavailable',
+          safeMessage: 'Governance service is temporarily unavailable.',
+          retryable: true,
+        })
+      }
+      throw err
+    }
   }
   
   public analytics: any = {
