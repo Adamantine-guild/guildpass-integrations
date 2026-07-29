@@ -32,6 +32,7 @@ import {
   simulateSessionExpiry,
   isUserAuthenticated,
   waitForText,
+  seedAuthSession,
 } from './helpers'
 
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3000'
@@ -418,6 +419,94 @@ test.describe('SIWE Sign-In Flow (E2E)', () => {
       expect(auth1).toBe(true)
       // Note: BroadcastChannel may not work reliably in test environments
       // This assertion documents the expected behavior
+    } finally {
+      await context.close()
+    }
+  })
+})
+
+/**
+ * Cross-tab silent-refresh race (fix/cross-tab-siwe-refresh-race).
+ *
+ * Reproduces two tabs independently reaching the proactive-renewal window
+ * for the same address at nearly the same time. Both tabs are seeded with
+ * an identical session whose access token is already expired but whose
+ * refresh token is still valid — this makes providers.tsx attempt a silent
+ * refresh immediately on mount (msUntilRenewal <= 0), with no dependence on
+ * real token TTLs or a fixed sleep, so navigating both tabs back-to-back
+ * reliably exercises the race.
+ *
+ * lib/api/mock.ts increments window.__mockSiweRefreshCalls__ on every
+ * siweRefresh() call so the test can assert on the number of *attempts*
+ * directly — mock mode makes no real network request there is nothing to
+ * intercept.
+ */
+test.describe('Cross-tab silent refresh race', () => {
+  test('two tabs racing a silent refresh perform exactly one refresh call and both stay authenticated', async ({ browser }) => {
+    const context = await browser.newContext()
+    const page1 = await context.newPage()
+    const page2 = await context.newPage()
+
+    try {
+      await injectMockWalletConnector(page1, { address: DEFAULT_ADDRESS, isConnected: true })
+      await injectMockWalletConnector(page2, { address: DEFAULT_ADDRESS, isConnected: true })
+
+      const seed = {
+        token: 'mock-jwt-pre-race',
+        address: DEFAULT_ADDRESS,
+        expiresAt: new Date(Date.now() - 1000).toISOString(),
+        refreshToken: `mock-refresh-race-${Date.now()}`,
+        refreshExpiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+      }
+      await seedAuthSession(page1, seed)
+      await seedAuthSession(page2, seed)
+
+      // Navigate both tabs back-to-back (not awaited sequentially) so their
+      // mount-time hydration effects fire the race close together.
+      await Promise.all([
+        navigateToAdmin(page1, BASE_URL),
+        navigateToAdmin(page2, BASE_URL),
+      ])
+
+      // Deterministic synchronization: poll actual session state rather than
+      // sleeping a fixed delay.
+      const waitForFreshSession = (page: Page) =>
+        page.waitForFunction(
+          () => {
+            const raw = window.sessionStorage.getItem('guildpass:siwe-session')
+            if (!raw) return false
+            const data = JSON.parse(raw)
+            return typeof data.expiresAt === 'string' && new Date(data.expiresAt).getTime() > Date.now()
+          },
+          { timeout: 15000 },
+        )
+
+      await Promise.all([waitForFreshSession(page1), waitForFreshSession(page2)])
+
+      const [session1, session2, calls1, calls2] = await Promise.all([
+        page1.evaluate(() => JSON.parse(window.sessionStorage.getItem('guildpass:siwe-session')!)),
+        page2.evaluate(() => JSON.parse(window.sessionStorage.getItem('guildpass:siwe-session')!)),
+        page1.evaluate(() => (window as any).__mockSiweRefreshCalls__ ?? 0),
+        page2.evaluate(() => (window as any).__mockSiweRefreshCalls__ ?? 0),
+      ])
+
+      // Exactly one of the two tabs actually called siweRefresh — the other
+      // detected the peer's rotation via isSessionAlreadyRefreshed and
+      // skipped its own network call.
+      expect(calls1 + calls2).toBe(1)
+
+      // The losing tab adopted the winning tab's rotated session rather than
+      // replaying the (now invalidated) refresh token or being signed out.
+      expect(session1.token).toBe(session2.token)
+      expect(session1.refreshToken).toBe(session2.refreshToken)
+      expect(session1.token).not.toBe(seed.token)
+      expect(session1.refreshToken).not.toBe(seed.refreshToken)
+      expect(new Date(session1.expiresAt).getTime()).toBeGreaterThan(Date.now())
+
+      const auth1 = await isUserAuthenticated(page1)
+      const auth2 = await isUserAuthenticated(page2)
+      expect(auth1).toBe(true)
+      expect(auth2).toBe(true)
     } finally {
       await context.close()
     }

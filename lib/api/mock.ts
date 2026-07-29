@@ -1437,6 +1437,13 @@ export class MockAccessApi implements AccessApi {
 
   async siweRefresh(refreshToken: string): Promise<SiweAuthSession> {
     await initPromise
+    // e2e instrumentation only: mock mode makes no real network request for
+    // siweRefresh, so cross-tab race tests need some observable signal for
+    // "how many refresh attempts actually happened" per tab.
+    if (typeof window !== 'undefined') {
+      (window as any).__mockSiweRefreshCalls__ =
+        ((window as any).__mockSiweRefreshCalls__ ?? 0) + 1
+    }
     if (MOCK_SESSION_STATE === 'expired' || MOCK_SESSION_STATE === 'unauthenticated') {
       throw new ApiError({
         status: 401,
