@@ -13,6 +13,7 @@ import { features } from "@/lib/features";
 import { config } from "@/lib/config";
 import { useState, useRef, useEffect } from "react";
 import { getNavAdminModules } from "@/lib/admin-modules";
+import { ThemeToggle } from "@/components/theme-toggle";
 
 const AVAILABLE_COMMUNITIES = [
   { id: 'guildpass-demo', name: 'GuildPass Demo' },
@@ -212,6 +213,7 @@ export function Nav() {
             </Link>
           ))}
           {features.multiCommunity && <DisabledCommunitySwitcher />}
+          <ThemeToggle />
           <ConnectButton />
         </nav>
       </div>
