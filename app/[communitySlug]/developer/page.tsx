@@ -3,7 +3,7 @@
 import { useAccount } from 'wagmi'
 import { useQueryClient } from '@tanstack/react-query'
 import { config } from '@/lib/config'
-import { resetMockData, applyMockScenario, setMockRoleMutationFailure } from '@/lib/api'
+import { resetMockData, applyMockScenario, setMockRoleMutationFailure, setMockMetaVersion } from '@/lib/api'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -11,12 +11,13 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useState } from 'react'
 import { SiweDebugPanel } from '@/components/developer/siwe-debug-panel'
-type Scenario = 
-  | 'active-member' 
-  | 'expired-member' 
-  | 'denied-resource' 
-  | 'admin-session-expired' 
+type Scenario =
+  | 'active-member'
+  | 'expired-member'
+  | 'denied-resource'
+  | 'admin-session-expired'
   | 'no-roles'
+  | 'multiple-roles'
   | 'multiple-communities'
 
 const SCENARIOS: { id: Scenario; label: string; description: string }[] = [
@@ -25,6 +26,7 @@ const SCENARIOS: { id: Scenario; label: string; description: string }[] = [
   { id: 'denied-resource', label: 'Denied Resource', description: 'Free tier member denied access to Alpha Docs' },
   { id: 'admin-session-expired', label: 'Admin Session Expired', description: 'Admin user to test expired SIWE session' },
   { id: 'no-roles', label: 'No Roles', description: 'Member with no roles assigned' },
+  { id: 'multiple-roles', label: 'Multiple Roles', description: 'Member with Admin, Moderator, and Member roles to verify role-aware badges, navigation, and gated content' },
   { id: 'multiple-communities', label: 'Multiple Communities', description: 'Member active across several communities' },
 ]
 
@@ -33,6 +35,8 @@ export default function DeveloperPage() {
   const queryClient = useQueryClient()
   const [customAddress, setCustomAddress] = useState<string>(address ?? '0x1234567890123456789012345678901234567890')
   const [roleMutationFailureEnabled, setRoleMutationFailureEnabled] = useState(false)
+  const [metaVersionOverride, setMetaVersionOverride] = useState<string>('')
+  const [metaVersionActive, setMetaVersionActive] = useState(false)
 
   if (config.apiMode !== 'mock') {
     return (
@@ -69,6 +73,20 @@ export default function DeveloperPage() {
     const next = !roleMutationFailureEnabled
     setMockRoleMutationFailure(next)
     setRoleMutationFailureEnabled(next)
+  }
+
+  const handleSetMetaVersion = () => {
+    if (metaVersionOverride.trim()) {
+      setMockMetaVersion(metaVersionOverride.trim())
+      setMetaVersionActive(true)
+    }
+  }
+
+  const handleClearMetaVersion = () => {
+    setMockMetaVersion(null)
+    setMetaVersionOverride('')
+    setMetaVersionActive(false)
+    queryClient.invalidateQueries()
   }
 
   return (
@@ -137,6 +155,47 @@ export default function DeveloperPage() {
             {roleMutationFailureEnabled ? 'Disable failure simulation' : 'Enable failure simulation'}
           </Button>
           {roleMutationFailureEnabled && <Badge variant="destructive">Active</Badge>}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Simulate Backend Version Mismatch</CardTitle>
+          <CardDescription>
+            Override the mock backend's advertised API version to test the
+            &quot;backend version mismatch&quot; warning UI.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4">
+          <div className="grid gap-2">
+            <Label htmlFor="metaVersion">Mock Backend Version (semver)</Label>
+            <div className="flex gap-3">
+              <Input
+                id="metaVersion"
+                value={metaVersionOverride}
+                onChange={(e) => setMetaVersionOverride(e.target.value)}
+                placeholder="e.g. 2.0.0"
+                className="flex-1"
+              />
+              <Button variant="outline" onClick={handleSetMetaVersion}>
+                Set
+              </Button>
+            </div>
+          </div>
+          {metaVersionActive && (
+            <div className="flex items-center gap-3">
+              <Badge variant="destructive">
+                Backend version set to {metaVersionOverride}
+              </Badge>
+              <Button variant="ghost" size="sm" onClick={handleClearMetaVersion}>
+                Reset to default
+              </Button>
+            </div>
+          )}
+          <p className="text-sm text-muted-foreground">
+            Set the version to a different major (e.g. 2.0.0) to trigger the
+            mismatch warning. Reload the app after setting to see the warning UI.
+          </p>
         </CardContent>
       </Card>
     </div>

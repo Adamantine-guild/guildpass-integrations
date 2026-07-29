@@ -90,11 +90,14 @@ export function LoadingState({ message = "Loading…" }: { message?: string }) {
 export function ErrorState({
   title = "Something went wrong",
   message,
-  onRetry
+  onRetry,
+  retrying = false
 }: {
   title?: string
   message?: string
   onRetry?: () => void
+  /** Disables the retry button and relabels it while a retry is already in flight. */
+  retrying?: boolean
 }) {
   return (
     <StateShell
@@ -104,8 +107,8 @@ export function ErrorState({
       role="alert"
       ariaLive="assertive"
       actions={onRetry && (
-        <Button size="sm" variant="outline" onClick={onRetry}>
-          Try again
+        <Button size="sm" variant="outline" onClick={onRetry} disabled={retrying}>
+          {retrying ? "Retrying…" : "Try again"}
         </Button>
       )}
     />

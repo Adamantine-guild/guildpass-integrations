@@ -7,7 +7,7 @@ import { AuthError } from '@/lib/api/live';
 import { isApiError } from '@/lib/api/errors';
 import { queryKeys } from '@/lib/query';
 import { applyOptimisticProfile } from '@/lib/api/optimistic';
-import { validateProfile, type ProfileValidationErrors } from '@/lib/validation/profile';
+import { validateProfile, mapServerValidationErrors, type ProfileValidationErrors } from '@/lib/validation/profile';
 import {
   clearProfileDraft,
   loadProfileDraft,
@@ -309,6 +309,12 @@ export function ProfileEditor({ address }: { address: string }) {
     onError: (err, _next, context) => {
       qc.setQueryData(queryKeys.profile.byAddress(address), context?.previous);
       setRollbackMessage(`Change reverted: ${safeErrorMessage(err)}`);
+
+      const serverErrors = mapServerValidationErrors(err);
+      if (Object.keys(serverErrors).length > 0) {
+        setErrors(serverErrors);
+      }
+
       if (err instanceof AuthError) markExpired();
     },
 

@@ -40,39 +40,43 @@ const mockReactQuery = {
   }),
 }
 
-const reactQuery = require('@tanstack/react-query') as ReactQueryModule
-const originalUseInfiniteQuery = reactQuery.useInfiniteQuery
-const originalUseMutation = reactQuery.useMutation
-const originalUseQueryClient = reactQuery.useQueryClient
+const reactQueryPath = require.resolve('@tanstack/react-query')
+const providersPath = require.resolve('../lib/wallet/providers')
+const wagmiPath = require.resolve('wagmi')
 
-;(reactQuery as unknown as ReactQueryModule).useInfiniteQuery = mockReactQuery.useInfiniteQuery as any
-;(reactQuery as unknown as ReactQueryModule).useMutation = mockReactQuery.useMutation as any
-;(reactQuery as unknown as ReactQueryModule).useQueryClient = mockReactQuery.useQueryClient as any
+require.cache[reactQueryPath] = { id: reactQueryPath, loaded: true, exports: mockReactQuery } as any
 
-const providers = require('../lib/wallet/providers') as ProvidersModule
-const wagmi = require('wagmi') as WagmiModule
+require.cache[providersPath] = {
+  id: providersPath,
+  loaded: true,
+  exports: {
+    useSiweAuth: () => ({
+      authSession: { token: 'test-token' },
+      isAuthenticated: true,
+      sessionStatus: 'authenticated',
+      status: 'authenticated',
+      timeLeft: 3600,
+      isSigningIn: false,
+      error: null,
+      signIn: async () => {},
+      login: async () => {},
+      logout: async () => {},
+      markExpired: () => {},
+      registerPendingRetry: () => {},
+    }),
+  },
+} as any
 
-const originalUseSiweAuth = providers.useSiweAuth
-const originalUseAccount = wagmi.useAccount
-
-;(providers as unknown as ProvidersModule).useSiweAuth = (() => ({
-  authSession: { token: 'test-token' },
-  isAuthenticated: true,
-  sessionStatus: 'authenticated',
-  status: 'authenticated',
-  timeLeft: 3600,
-  isSigningIn: false,
-  error: null,
-  signIn: async () => {},
-  login: async () => {},
-  logout: async () => {},
-  markExpired: () => {},
-})) as ProvidersModule['useSiweAuth']
-
-;(wagmi as unknown as WagmiModule).useAccount = (() => ({
-  address: ADDRESS,
-  isConnected: true,
-})) as WagmiModule['useAccount']
+require.cache[wagmiPath] = {
+  id: wagmiPath,
+  loaded: true,
+  exports: {
+    useAccount: () => ({
+      address: ADDRESS,
+      isConnected: true,
+    }),
+  },
+} as any
 
 const adminGuardPath = require.resolve('../components/admin-guard')
 require.cache[adminGuardPath] = {
@@ -99,12 +103,4 @@ describe('MembersPage empty state', () => {
     assert.doesNotMatch(html, /Member List/)
     assert.doesNotMatch(html, /Page 1 of/)
   })
-})
-
-after(() => {
-  (reactQuery as unknown as ReactQueryModule).useInfiniteQuery = originalUseInfiniteQuery
-  (reactQuery as unknown as ReactQueryModule).useMutation = originalUseMutation
-  (reactQuery as unknown as ReactQueryModule).useQueryClient = originalUseQueryClient
-  ;(providers as unknown as ProvidersModule).useSiweAuth = originalUseSiweAuth
-  ;(wagmi as unknown as WagmiModule).useAccount = originalUseAccount
 })

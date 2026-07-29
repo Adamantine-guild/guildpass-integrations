@@ -1,52 +1,96 @@
-'use client';
+'use client'
 
-import { useEffect } from 'react';
+import { useEffect } from 'react'
+import { Button } from '@/components/ui/button'
+import {
+  categorizeError,
+  isApiError,
+  type ErrorCategory,
+} from '@/lib/api/errors'
 
-/**
- * Admin-route error boundary (Next.js App Router convention).
- *
- * Catches rendering errors thrown by any component within the admin
- * segment (members, policies, settings, analytics) and displays a
- * scoped, on-brand fallback instead of a blank crash page.
- *
- * The boundary lives *inside* the admin layout, so the site nav and
- * root providers remain functional when a widget crashes.
- */
-export default function AdminError({
-  error,
-  reset,
-}: {
-  error: Error & { digest?: string };
-  reset: () => void;
-}) {
+interface AdminErrorPageProps {
+  error: Error & { digest?: string }
+  reset: () => void
+}
+
+const categoryMeta: Record<ErrorCategory, { title: string; message: string; retryable: boolean }> =
+  {
+    network: {
+      title: 'Network issue',
+      message:
+        'Could not reach the admin server. Please check your connection and try again.',
+      retryable: true,
+    },
+    auth: {
+      title: 'Admin session expired',
+      message:
+        'Your admin session has expired or you do not have permission. Please re-authenticate with your wallet.',
+      retryable: false,
+    },
+    validation: {
+      title: 'Invalid response',
+      message:
+        'The server returned an unexpected response. This may be a temporary issue.',
+      retryable: true,
+    },
+    unknown: {
+      title: 'Something went wrong',
+      message: 'An unexpected error occurred in the admin area. Please try again.',
+      retryable: true,
+    },
+  }
+
+export default function AdminErrorPage({ error, reset }: AdminErrorPageProps) {
+  const category = categorizeError(error)
+  const meta = categoryMeta[category]
+
   useEffect(() => {
-    // Preserve full error visibility in development console/logs.
-    console.error('[Admin route error]', error);
-  }, [error]);
+    console.error('[Admin Error]', {
+      category,
+      digest: error.digest,
+      message: error.message,
+      ...(isApiError(error) && { code: error.code, status: error.status }),
+    })
+  }, [error, category])
 
   return (
-    <div
-      role="alert"
-      aria-live="assertive"
-      className="rounded-md border border-destructive/30 bg-destructive/5 p-6 space-y-3"
-    >
-      <div>
-        <h2 className="text-sm font-medium text-destructive">
-          Admin section unavailable
-        </h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          An unexpected error occurred while rendering this admin section.
-          You can try reloading it — if the problem persists, please contact
-          support.
-        </p>
-      </div>
+    <div className="mx-auto max-w-xl space-y-4 rounded-md border border-destructive/30 bg-destructive/5 p-6">
+      <h2 className="text-lg font-semibold text-destructive">{meta.title}</h2>
+      <p className="text-sm text-muted-foreground">{meta.message}</p>
 
-      <button
-        onClick={reset}
-        className="inline-flex items-center rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-      >
-        Reload this section
-      </button>
+      {isApiError(error) && error.path && (
+        <p className="text-xs text-muted-foreground/60">
+          Endpoint: <code className="rounded bg-muted px-1 py-0.5">{error.path}</code>
+        </p>
+      )}
+
+      <div className="flex flex-wrap items-center gap-2 pt-1">
+        {meta.retryable && (
+          <Button size="sm" variant="outline" onClick={reset}>
+            Try again
+          </Button>
+        )}
+
+        {category === 'auth' && (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              window.location.href = `/${window.location.pathname.split('/')[1]}/admin`
+            }}
+          >
+            Return to admin home
+          </Button>
+        )}
+
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => window.location.reload()}
+        >
+          Reload page
+        </Button>
+      </div>
     </div>
-  );
+  )
 }

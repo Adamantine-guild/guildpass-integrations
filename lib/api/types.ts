@@ -8,6 +8,12 @@
 import { z } from 'zod';
 import { ApiError } from './errors'
 
+/**
+ * The API contract version this frontend build expects the backend to
+ * implement. Generated from test/fixtures/openapi.json info.version.
+ */
+export const EXPECTED_API_VERSION = "1.0.0"
+
 export type ResourceLookupResult =
   | { status: 'found'; data: Resource; source: 'direct' | 'fallback' }
   | { status: 'not_found' }
@@ -185,6 +191,7 @@ export interface MemberRow {
   roles: Role[]
   tier: MembershipTier
   active: boolean
+  displayName?: string
 }
 
 export const MemberRowSchema = z.object({
@@ -192,6 +199,7 @@ export const MemberRowSchema = z.object({
   roles: z.array(RoleSchema),
   tier: MembershipTierSchema,
   active: z.boolean(),
+  displayName: z.string().optional(),
 })
 
 export interface MemberGrowthDataPoint {
@@ -311,6 +319,18 @@ export type PenaltyType = 'warning' | 'suspension' | 'permanent_ban'
 
 export const PenaltyTypeSchema = z.enum(['warning', 'suspension', 'permanent_ban'])
 
+export interface MetaResponse {
+  version: string
+  commit?: string
+  uptime?: number
+}
+
+export const MetaResponseSchema = z.object({
+  version: z.string(),
+  commit: z.string().optional(),
+  uptime: z.number().optional(),
+})
+
 export interface ModerationReport {
   id: string
   reporterAddress: string
@@ -366,6 +386,31 @@ export interface WebhookEventLog {
   fullPayload?: Record<string, unknown>;
   /** True when this entry was injected via the replay/debug tool rather than ingested from a real webhook. */
   isReplay?: boolean;
+}
+
+export interface ApprovalConfig {
+  assignRole: number
+  removeRole: number
+  updatePolicy: number
+}
+
+export type PendingActionType = 'assignRole' | 'removeRole' | 'updatePolicy'
+
+export interface PendingActionPayload {
+  address?: string
+  role?: string
+  policy?: AccessPolicy
+}
+
+export interface PendingAction {
+  id: string
+  type: PendingActionType
+  payload: PendingActionPayload
+  proposer: string
+  requiredApprovals: number
+  currentApprovals: string[]
+  status: 'pending' | 'approved' | 'rejected' | 'executed'
+  createdAt: string
 }
 
 export interface WalletVerification {
@@ -591,6 +636,12 @@ export interface MemberAccessApi {
    */
   updateProfile(profile: MemberProfile): Promise<void>
 
+  /**
+   * Fetch backend metadata including the API contract version.
+   * Used by the startup version-compatibility check.
+   */
+  getMeta(signal?: AbortSignal): Promise<MetaResponse>
+
   // ── Social Graph (Connections / Blocks) ──
   getConnections(address: string, signal?: AbortSignal): Promise<Connection[]>
   getPrivacySettings(address: string, signal?: AbortSignal): Promise<MemberPrivacySettings>
@@ -626,10 +677,14 @@ export interface AdminAccessApi {
    * @provisional Calls `GET /v1/admin/analytics` — endpoint not yet live in
    * guildpass-core. Contract tracked in issue #157; pending backend confirmation.
    */
-  getAnalyticsSummary(signal?: AbortSignal): Promise<AnalyticsSummary>
-  assignRole(address: string, role: Role): Promise<void>
-  removeRole(address: string, role: Role): Promise<void>
-  updatePolicy(policy: AccessPolicy): Promise<void>
+  getPendingActions(): Promise<PendingAction[]>
+  approveAction(id: string): Promise<void>
+  rejectAction(id: string): Promise<void>
+  updateApprovalConfig(config: ApprovalConfig): Promise<void>
+  
+  assignRole(address: string, role: Role): Promise<{ status: 'executed' | 'pending'; pendingActionId?: string }>
+  removeRole(address: string, role: Role): Promise<{ status: 'executed' | 'pending'; pendingActionId?: string }>
+  updatePolicy(policy: AccessPolicy): Promise<{ status: 'executed' | 'pending'; pendingActionId?: string }>
 
   // ── Moderation Queue ──
   listReports(signal?: AbortSignal): Promise<ModerationReport[]>

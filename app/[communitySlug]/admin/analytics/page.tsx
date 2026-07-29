@@ -5,14 +5,10 @@ import { useQuery } from "@tanstack/react-query";
 import { getApi } from "@/lib/api";
 import { useParams } from "next/navigation";
 import { isApiError } from "@/lib/api/errors";
-import {
-  computeAnalyticsSummary,
-  fetchAllMembers,
-  type ComputedAnalyticsSummary,
-  type RoleDistributionEntry,
-  type SignupsDataPoint,
-  type TierDistributionEntry,
-} from "@/lib/api/analytics";
+import type { 
+  MemberGrowthDataPoint,
+  ResourceAccessCount
+} from "@/lib/api/types";
 import { queryKeys } from "@/lib/query";
 import { FeatureGate } from "@/components/feature-gate";
 import { AdminGuard } from "@/components/admin-guard";
@@ -57,49 +53,51 @@ function StatCard({
   );
 }
 
-// ── Signups-over-time bar chart (SVG, no external dependencies) ──────────────
+// ── Membership Growth chart (SVG) ──────────────────────────────────────────────
 
-function SignupsChart({ data }: { data: SignupsDataPoint[] }) {
-  if (data.length === 0) {
+function MembershipGrowthChart({ data }: { data: MemberGrowthDataPoint[] }) {
+  if (!data || data.length === 0) {
     return (
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">New Members Over Time</CardTitle>
+          <CardTitle className="text-base">Membership Growth Over Time</CardTitle>
         </CardHeader>
         <CardContent>
           <EmptyState
-            title="No signups recorded yet"
-            message="This chart is built from membership.created events in the admin event log — it will fill in as they occur."
+            title="No growth data available"
+            message="Check back later once the community has some activity."
           />
         </CardContent>
       </Card>
     );
   }
 
-  const maxCount = Math.max(...data.map((d) => d.count), 1);
+  const maxCount = Math.max(...data.map((d) => d.newMembers), 1);
   const chartHeight = 80;
   const barWidth = 16;
   const gap = 6;
   const totalWidth = data.length * (barWidth + gap) - gap;
   const labelEvery = Math.max(1, Math.ceil(data.length / 8));
-  const totalSignups = data.reduce((sum, d) => sum + d.count, 0);
-
+  
+  // Total members at the most recent point
+  const currentTotal = data[data.length - 1].totalMembers;
+  
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">New Members Over Time</CardTitle>
+        <CardTitle className="text-base">Membership Growth Over Time</CardTitle>
       </CardHeader>
       <CardContent>
         <div className="overflow-x-auto">
           <svg
             viewBox={`0 0 ${totalWidth} ${chartHeight + 20}`}
-            aria-label="Bar chart of new members per day, derived from membership.created events"
+            aria-label="Bar chart of membership growth"
             role="img"
             className="w-full"
             style={{ minWidth: totalWidth }}
           >
             {data.map((point, i) => {
-              const barH = Math.max(2, (point.count / maxCount) * chartHeight);
+              const barH = Math.max(2, (point.newMembers / maxCount) * chartHeight);
               const x = i * (barWidth + gap);
               const y = chartHeight - barH;
               const showLabel = i % labelEvery === 0;
@@ -113,7 +111,7 @@ function SignupsChart({ data }: { data: SignupsDataPoint[] }) {
                     height={barH}
                     rx={1}
                     className="fill-primary"
-                    aria-label={`${point.date}: ${point.count} new member${point.count === 1 ? "" : "s"}`}
+                    aria-label={`${point.date}: ${point.newMembers} new member${point.newMembers === 1 ? "" : "s"} (Total: ${point.totalMembers})`}
                   />
                   {showLabel && (
                     <text
@@ -132,9 +130,9 @@ function SignupsChart({ data }: { data: SignupsDataPoint[] }) {
           </svg>
         </div>
         <p className="mt-2 text-xs text-muted-foreground">
-          Total signups shown:{" "}
+          Total members shown:{" "}
           <span className="font-medium text-foreground">
-            {totalSignups.toLocaleString()}
+            {currentTotal.toLocaleString()}
           </span>
         </p>
       </CardContent>
@@ -142,7 +140,7 @@ function SignupsChart({ data }: { data: SignupsDataPoint[] }) {
   );
 }
 
-// ── Distribution bars (role / tier) ───────────────────────────────────────────
+// ── Distribution bars (role / access) ─────────────────────────────────────────
 
 function DistributionBars({
   title,
@@ -151,6 +149,7 @@ function DistributionBars({
   title: string;
   items: { label: string; count: number }[];
 }) {
+  if (!items || items.length === 0) return null;
   const max = Math.max(...items.map((i) => i.count), 1);
 
   return (
@@ -186,12 +185,78 @@ function DistributionBars({
   );
 }
 
-function roleItems(distribution: RoleDistributionEntry[]) {
-  return distribution.map((entry) => ({ label: entry.role, count: entry.count }));
-}
+// ── Resource Access Breakdown ─────────────────────────────────────────────────
 
-function tierItems(distribution: TierDistributionEntry[]) {
-  return distribution.map((entry) => ({ label: entry.tier, count: entry.count }));
+function ResourceAccessBars({
+  accessData,
+}: {
+  accessData: ResourceAccessCount[];
+}) {
+  if (!accessData || accessData.length === 0) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Gated Resource Access</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <EmptyState
+            title="No resource data"
+            message="No access attempts have been logged yet."
+          />
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Gated Resource Access</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {accessData.map((resource) => {
+          const total = resource.accessCount + resource.deniedCount;
+          const allowedPct = total > 0 ? (resource.accessCount / total) * 100 : 0;
+          const deniedPct = total > 0 ? (resource.deniedCount / total) * 100 : 0;
+          
+          return (
+            <div key={resource.resourceId} className="space-y-1">
+              <div className="flex items-center justify-between text-sm">
+                <span className="font-medium text-foreground">
+                  {resource.resourceTitle}
+                </span>
+                <span className="text-xs text-muted-foreground tabular-nums">
+                  {total} attempts
+                </span>
+              </div>
+              
+              <div className="flex h-2 w-full overflow-hidden rounded-full bg-muted">
+                <div 
+                  className="bg-green-500" 
+                  style={{ width: `${allowedPct}%` }}
+                  title={`${resource.accessCount} allowed`}
+                />
+                <div 
+                  className="bg-red-500" 
+                  style={{ width: `${deniedPct}%` }}
+                  title={`${resource.deniedCount} denied`}
+                />
+              </div>
+              
+              <div className="flex items-center justify-between text-xs text-muted-foreground mt-1">
+                <span className="text-green-600 dark:text-green-400">
+                  {resource.accessCount} allowed
+                </span>
+                <span className="text-red-600 dark:text-red-400">
+                  {resource.deniedCount} denied
+                </span>
+              </div>
+            </div>
+          );
+        })}
+      </CardContent>
+    </Card>
+  );
 }
 
 // ── Session-expired re-auth helper ────────────────────────────────────────────
@@ -226,21 +291,28 @@ function AnalyticsContent() {
   const communitySlug = (params?.communitySlug as string) || 'guildpass-demo';
 
   const {
-    data: summary,
+    data: analyticsData,
     isLoading,
     isError,
     error,
     refetch,
-  } = useQuery<ComputedAnalyticsSummary>({
+  } = useQuery({
     queryKey: [...queryKeys.analytics.summary(communitySlug), address, authSession?.token ?? "anonymous"],
     queryFn: async ({ signal }) => {
       try {
         const api = getApi(address, authSession?.token, communitySlug);
-        const [members, events] = await Promise.all([
-          fetchAllMembers(api, signal),
-          api.listWebhookEvents(signal),
+        const [memberGrowth, roleDistribution, accessAttempts] = await Promise.all([
+          (api as any).analytics.getMembershipTrend(signal),
+          (api as any).analytics.getRoleDistribution(signal),
+          (api as any).analytics.getAccessAttempts(signal)
         ]);
-        return computeAnalyticsSummary(members, events);
+        
+        return {
+          memberGrowth,
+          roleDistribution,
+          accessAttempts,
+          generatedAt: new Date().toISOString()
+        };
       } catch (err) {
         if (isApiError(err) && err.code === "aborted") throw err;
         if (isApiError(err) && err.code === "unauthorized") {
@@ -269,8 +341,7 @@ function AnalyticsContent() {
           Analytics
         </h1>
         <p className="text-sm text-muted-foreground">
-          Community growth and membership overview, computed from live member
-          and event data — no dedicated analytics backend required.
+          Community growth, role breakdown, and resource access trends powered by a pluggable data source.
         </p>
       </div>
 
@@ -287,57 +358,26 @@ function AnalyticsContent() {
           message={safeErrorMessage(error)}
           onRetry={() => refetch()}
         />
-      ) : summary ? (
+      ) : analyticsData ? (
         <>
-          {/* KPI summary cards */}
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-            <StatCard
-              label="Total Members"
-              value={summary.totalMembers.toLocaleString()}
-            />
-            <StatCard
-              label="Active Members"
-              value={summary.activeMembers.toLocaleString()}
-              description={
-                summary.totalMembers > 0
-                  ? `${((summary.activeMembers / summary.totalMembers) * 100).toFixed(0)}% of total`
-                  : undefined
-              }
-            />
-            <StatCard
-              label="Signups Recorded"
-              value={summary.signupsOverTime
-                .reduce((sum, d) => sum + d.count, 0)
-                .toLocaleString()}
-              description="From membership.created events"
-            />
-            <StatCard
-              label="Admins"
-              value={
-                summary.roleDistribution.find((r) => r.role === "admin")?.count ?? 0
-              }
-            />
-          </div>
+          {/* Membership Growth chart */}
+          <MembershipGrowthChart data={analyticsData.memberGrowth ?? []} />
 
-          {/* Signups-over-time chart */}
-          <SignupsChart data={summary.signupsOverTime} />
-
-          {/* Role and tier distribution */}
+          {/* Role and Access Attempts distribution */}
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <DistributionBars
               title="Role Distribution"
-              items={roleItems(summary.roleDistribution)}
+              items={(analyticsData.roleDistribution ?? []).map(r => ({ label: r.role, count: r.count }))}
             />
-            <DistributionBars
-              title="Tier Distribution"
-              items={tierItems(summary.tierDistribution)}
+            <ResourceAccessBars 
+              accessData={analyticsData.accessAttempts ?? []}
             />
           </div>
 
           {/* Generated-at footer */}
           <p className="text-right text-xs text-muted-foreground">
             Generated{" "}
-            {new Date(summary.generatedAt).toLocaleString(undefined, {
+            {new Date(analyticsData.generatedAt).toLocaleString(undefined, {
               dateStyle: "medium",
               timeStyle: "short",
             })}

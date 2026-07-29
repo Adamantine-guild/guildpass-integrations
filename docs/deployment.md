@@ -25,8 +25,15 @@ key.
 If you run **more than one instance** (horizontal scaling, containers behind a
 load balancer) or a **serverless / edge** runtime, each process keeps its own
 counters, so the effective limit is multiplied by the number of instances and
-state is lost on cold starts. To keep a true global limit, replace the in-memory
-`Map` store in `lib/rate-limit.ts` with a shared backend:
+state is lost on cold starts. To keep a true global limit, implement the
+`RateLimitStore` interface exported from `lib/rate-limit.ts` against a shared
+backend and inject it into `rateLimitRequest()`:
+
+```ts
+export interface RateLimitStore {
+  take(key: string, now: number): Promise<{ tokens: number; consumed: boolean }>
+}
+```
 
 - **Redis (recommended):** `@upstash/ratelimit` + `@upstash/redis`, or
   `ioredis` with a Lua token-bucket script for atomic decrement.
@@ -34,8 +41,60 @@ state is lost on cold starts. To keep a true global limit, replace the in-memory
   guarded by a transaction.
 - **Edge KV:** `@vercel/kv` or Cloudflare Workers KV with a TTL-backed counter.
 
-The `rateLimitRequest()` signature stays the same — only the bucket store
-behind `getBucket()` / `take()` needs to be swapped for a shared implementation.
+**`take()` must be atomic.** Two separate remote calls — a `GET` to read the
+current bucket followed by a client-side computation and a `SET` to write it
+back — are **not sufficient**, even though each call is individually async.
+Two concurrent callers (two instances, or two in-flight requests racing
+across an `await` on one instance) can both `GET` the same starting state,
+compute independently, and both `SET` — silently losing one of the two token
+consumptions. That race defeats the entire purpose of a shared store. A real
+implementation must push the read-refill-consume-write into a single atomic
+operation on the backend: a Redis Lua script (`EVAL`) or `MULTI`/`EXEC`
+transaction, a database transaction, or an equivalent atomic primitive.
+
+Example wiring for the gateway routes, once a `RedisRateLimitStore` exists:
+
+```ts
+// lib/rate-limit-redis.ts (illustrative — not part of this repo)
+import { RateLimitStore } from '@/lib/rate-limit'
+import { redis } from '@/lib/redis-client'
+
+const TAKE_SCRIPT = `
+  -- KEYS[1] = bucket key, ARGV[1] = now (ms),
+  -- ARGV[2] = maxTokens, ARGV[3] = refillPerMs
+  -- Reads, refills, conditionally decrements, and writes back atomically.
+  ...
+`
+
+export class RedisRateLimitStore implements RateLimitStore {
+  constructor(
+    private readonly maxTokens: number,
+    private readonly refillPerMs: number,
+  ) {}
+
+  async take(key: string, now: number) {
+    const [tokens, consumed] = await redis.eval(
+      TAKE_SCRIPT,
+      [key],
+      [now, this.maxTokens, this.refillPerMs],
+    )
+    return { tokens, consumed: consumed === 1 }
+  }
+}
+```
+
+```ts
+// app/api/integration/membership/route.ts
+import { rateLimitRequest } from '@/lib/rate-limit'
+import { sharedRateLimitStore } from '@/lib/rate-limit-redis-instance'
+
+const rl = await rateLimitRequest(req, address, sharedRateLimitStore)
+```
+
+`rateLimitRequest()` is `async` and accepts the store as an optional third
+argument, defaulting to the built-in `InMemoryRateLimitStore` — existing
+callers that omit the argument keep today's single-instance behavior
+unchanged.
 
 ## Troubleshooting
 

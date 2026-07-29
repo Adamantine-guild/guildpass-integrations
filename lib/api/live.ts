@@ -10,6 +10,8 @@ import {
   MemberRow,
   Membership,
   MembershipTier,
+  MetaResponse,
+  MetaResponseSchema,
   PaginatedMembers,
   Resource,
   ResourceLookupResult,
@@ -40,7 +42,10 @@ import {
   ModerationReport,
   ModerationReportSchema,
   ModerationState,
+  PendingAction,
+  ApprovalConfig,
 } from './types'
+import { checkVersionCompatibility, type VersionCompatibility } from './version'
 import {
   mapCommunity,
   mapMembership,
@@ -51,7 +56,7 @@ import {
   mapSession,
   mapWebhookEvent,
 } from './mappers'
-import { ApiError } from './errors'
+import { ApiError, AuthError, NetworkError } from './errors'
 import {
   validateCommunityResponse,
   validateMemberProfileResponse,
@@ -65,8 +70,19 @@ import {
   validateWebhookEventsResponse,
 } from './validators'
 
-/** Alias for ApiError — re-exported so admin pages can import AuthError from this module. */
-export { ApiError as AuthError } from './errors'
+/**
+ * Re-exported so admin pages can import these from this module.
+ * AuthError, NetworkError, isAuthError, isNetworkError, and categorizeError
+ * are now dedicated implementations in ./errors.
+ */
+export {
+  AuthError,
+  NetworkError,
+  isAuthError,
+  isNetworkError,
+  categorizeError,
+  type ErrorCategory,
+} from './errors'
 
 import { PolicyValidationError, validatePolicy } from '../validation/policy'
 import { ProfileValidationError, validateProfile } from '../validation/profile'
@@ -223,7 +239,7 @@ function createApiError(status: number, body?: ApiErrorBody, path?: string): Api
   }
 
   if (status === 401) {
-    return new ApiError({
+    return new AuthError({
       status,
       code: 'unauthorized',
       safeMessage: 'Session expired. Please sign in again.',
@@ -232,7 +248,7 @@ function createApiError(status: number, body?: ApiErrorBody, path?: string): Api
   }
 
   if (status === 403) {
-    return new ApiError({
+    return new AuthError({
       status,
       code: 'forbidden',
       safeMessage: 'You do not have permission to perform this action.',
@@ -526,10 +542,9 @@ async function getJson<T>(path: string, options: RequestOptions = {}): Promise<T
 
       // Wrap raw network errors (fetch throwing, not an HTTP error response)
       if (!(err instanceof ApiError)) {
-        const networkErr = new ApiError({
-          code: 'network_error',
+        const networkErr = new NetworkError({
           safeMessage: networkErrorMessage,
-          retryable: true,
+          path,
           cause: err,
         })
         if (retriesEnabled) {
@@ -602,11 +617,70 @@ function parseJsonResponse<T>(text: string, path?: string): T {
 // ── LiveAccessApi ─────────────────────────────────────────────────────────────
 
 export class LiveAccessApi implements AccessApi {
+  /** Resolved after the first successful version-compatibility check. */
+  #versionCheckResult: VersionCompatibility | null = null
+  #versionCheckPromise: Promise<VersionCompatibility> | null = null
+
   constructor(
     private readonly address?: string,
     private readonly token?: string,
     private readonly communityId?: string,
   ) { }
+
+  /**
+   * Returns the result of the startup version-compatibility check, or
+   * `null` if the check has not yet completed.
+   */
+  get versionCompatibility(): VersionCompatibility | null {
+    return this.#versionCheckResult
+  }
+
+  /**
+   * Perform a one-time version-compatibility check against the backend's
+   * `/v1/meta` endpoint. Resolves with the compatibility result. Subsequent
+   * calls return the cached result.
+   */
+  async checkVersion(): Promise<VersionCompatibility> {
+    if (this.#versionCheckResult) {
+      return this.#versionCheckResult
+    }
+    if (this.#versionCheckPromise) {
+      return this.#versionCheckPromise
+    }
+
+    this.#versionCheckPromise = this.#performVersionCheck()
+    try {
+      this.#versionCheckResult = await this.#versionCheckPromise
+    } finally {
+      this.#versionCheckPromise = null
+    }
+    return this.#versionCheckResult!
+  }
+
+  async #performVersionCheck(): Promise<VersionCompatibility> {
+    try {
+      const meta = await this.getMeta()
+      return checkVersionCompatibility(meta.version)
+    } catch (err) {
+      return {
+        compatible: false,
+        expectedVersion: '',
+        backendVersion: '',
+        reason:
+          err instanceof Error
+            ? `Could not reach backend /v1/meta endpoint: ${err.message}`
+            : 'Could not reach backend /v1/meta endpoint.',
+      }
+    }
+  }
+
+  async getMeta(signal?: AbortSignal): Promise<MetaResponse> {
+    return getJson<MetaResponse>('/v1/meta', {
+      schema: MetaResponseSchema,
+      headers: this.authHeaders(),
+      signal,
+    })
+  }
 
   private authHeaders(extra?: HeadersInit): HeadersInit {
     const headers: Record<string, string> = {
@@ -854,6 +928,19 @@ export class LiveAccessApi implements AccessApi {
     return raw.map(mapWebhookEvent)
   }
 
+  async listAdminEvents(params?: any): Promise<any> {
+    const searchParams = new URLSearchParams()
+    if (params?.types) params.types.forEach((t: string) => searchParams.append('types', t))
+    if (params?.startDate) searchParams.set('startDate', params.startDate)
+    if (params?.endDate) searchParams.set('endDate', params.endDate)
+    if (params?.page) searchParams.set('page', params.page.toString())
+    if (params?.limit) searchParams.set('limit', params.limit.toString())
+    
+    return await getJson<any>(`/v1/admin/events/paginated?${searchParams.toString()}`, {
+      headers: this.authHeaders(),
+    })
+  }
+
   subscribeWebhookEvents(
     onEvent: (event: WebhookEventLog) => void,
     onError?: (error: unknown) => void,
@@ -929,15 +1016,32 @@ export class LiveAccessApi implements AccessApi {
     })
   }
 
-  async assignRole(address: string, role: Role): Promise<void> {
+  async getPendingActions(): Promise<PendingAction[]> {
+    throw new Error("Pending actions are not yet supported by guildpass-core.")
+  }
+
+  async approveAction(id: string): Promise<void> {
+    throw new Error("Pending actions are not yet supported by guildpass-core.")
+  }
+
+  async rejectAction(id: string): Promise<void> {
+    throw new Error("Pending actions are not yet supported by guildpass-core.")
+  }
+
+  async updateApprovalConfig(config: ApprovalConfig): Promise<void> {
+    throw new Error("Pending actions are not yet supported by guildpass-core.")
+  }
+
+  async assignRole(address: string, role: Role): Promise<{ status: 'executed' | 'pending'; pendingActionId?: string }> {
     await getJson<void>(`/v1/members/${encodeURIComponent(address)}/roles`, {
       method: 'POST',
       headers: this.authHeaders(),
       body: JSON.stringify({ role }),
     })
+    return { status: 'executed' }
   }
 
-  async removeRole(address: string, role: Role): Promise<void> {
+  async removeRole(address: string, role: Role): Promise<{ status: 'executed' | 'pending'; pendingActionId?: string }> {
     await getJson<void>(
       `/v1/members/${encodeURIComponent(address)}/roles/${encodeURIComponent(role)}`,
       {
@@ -945,9 +1049,10 @@ export class LiveAccessApi implements AccessApi {
         headers: this.authHeaders(),
       },
     )
+    return { status: 'executed' }
   }
 
-  async updatePolicy(policy: AccessPolicy): Promise<void> {
+  async updatePolicy(policy: AccessPolicy): Promise<{ status: 'executed' | 'pending'; pendingActionId?: string }> {
     const result = validatePolicy(policy)
 
     if (!result.valid) {
@@ -964,6 +1069,7 @@ export class LiveAccessApi implements AccessApi {
         updated_at: result.value.updatedAt,
       }),
     })
+    return { status: 'executed' }
   }
 
   async getNonce(address: string): Promise<string> {
@@ -1097,5 +1203,29 @@ export class LiveAccessApi implements AccessApi {
       body: JSON.stringify({ state, ...updates }),
       headers: this.authHeaders(),
     })
+  }
+  
+  public analytics: any = {
+    getMembershipTrend: async (signal?: AbortSignal) => {
+      const summary = await this.getAnalyticsSummary(signal);
+      return summary.memberGrowth;
+    },
+    getRoleDistribution: async (signal?: AbortSignal) => {
+      // NOTE: getAnalyticsSummary currently doesn't provide roleDistribution,
+      // but to satisfy the new interface without breaking the backend contract immediately,
+      // we'll fetch members and compute it like we used to.
+      // In a real live app, the backend would be updated to provide this in getAnalyticsSummary.
+      const members = await this.listMembers({}, signal);
+      const memberArray = Array.isArray(members) ? members : members.members;
+      const ALL_ROLES: import('./types').Role[] = ['member', 'moderator', 'admin'];
+      return ALL_ROLES.map(role => ({
+        role,
+        count: memberArray.filter(m => m.roles.includes(role)).length
+      }));
+    },
+    getAccessAttempts: async (signal?: AbortSignal) => {
+      const summary = await this.getAnalyticsSummary(signal);
+      return summary.resourceAccess;
+    }
   }
 }
