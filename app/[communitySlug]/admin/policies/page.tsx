@@ -364,6 +364,11 @@ export default function PoliciesPage() {
     onSuccess: (data, policy, context) => {
       if (data.status === 'pending') {
         qc.setQueryData(queryKeys.policies.all(communitySlug), context?.previousPolicies);
+        addToast({
+          tone: "warning",
+          title: "Approval Required",
+          description: `Policy update for "${policy.resourceId}" has been proposed for approval.`,
+        });
         setSuccessMessage(`Policy update for "${policy.resourceId}" proposed for approval.`);
         clearPolicyDraft(policy.resourceId);
         clearPolicyDraft("");
@@ -373,6 +378,11 @@ export default function PoliciesPage() {
         return;
       }
 
+      addToast({
+        tone: "success",
+        title: `Policy saved for "${policy.resourceId}"`,
+        description: `The policy was saved successfully.`,
+      });
       setSuccessMessage(`Policy saved for ${policy.resourceId}.`);
       setFormErrors((current) => ({
         ...current,
@@ -448,6 +458,13 @@ export default function PoliciesPage() {
           .finally(() => {
             setIsLoadingConflictData(false);
           });
+      } else if (!(err instanceof AuthError)) {
+        // Non-auth, non-conflict errors — show a toast with the error message
+        addToast({
+          tone: "error",
+          title: "Failed to save policy",
+          description: safeErrorMessage(err),
+        });
       }
 
       if (policy?.resourceId) {
