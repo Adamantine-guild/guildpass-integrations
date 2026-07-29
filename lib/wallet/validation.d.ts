@@ -3,7 +3,7 @@ export const SUPPORTED_CHAIN_NAMES: readonly ['mainnet', 'base', 'sepolia']
 
 export type SupportedWalletChainName = (typeof SUPPORTED_CHAIN_NAMES)[number]
 
-export const SUPPORTED_CONNECTOR_NAMES: readonly ['injected']
+export const SUPPORTED_CONNECTOR_NAMES: readonly ['injected', 'walletConnect']
 export type WalletConnectorName = (typeof SUPPORTED_CONNECTOR_NAMES)[number]
 
 export const CONNECTOR_DOCS_URL: string
