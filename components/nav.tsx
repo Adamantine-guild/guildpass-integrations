@@ -13,6 +13,7 @@ import { features } from "@/lib/features";
 import { config } from "@/lib/config";
 import { useState, useRef, useEffect } from "react";
 import { getNavAdminModules } from "@/lib/admin-modules";
+import { ThemeToggle } from "@/components/theme-toggle";
 
 const AVAILABLE_COMMUNITIES = [
   { id: 'guildpass-demo', name: 'GuildPass Demo' },
@@ -164,7 +165,6 @@ export function Nav() {
 
   const items = [
     { href: `${prefix}/dashboard` as Route, label: "Dashboard", enabled: true },
-    { href: `/analytics` as Route, label: "Analytics", enabled: true },
     ...adminNavItems.map((item) => ({ ...item, enabled: true })),
     {
       href: `${prefix}/resources/alpha` as Route,
@@ -213,6 +213,7 @@ export function Nav() {
             </Link>
           ))}
           {features.multiCommunity && <DisabledCommunitySwitcher />}
+          <ThemeToggle />
           <ConnectButton />
         </nav>
       </div>
