@@ -20,6 +20,7 @@ import {
   EmptyState,
   safeErrorMessage,
 } from "@/components/ui/api-states";
+import { AnalyticsSkeleton } from "@/components/admin/analytics-skeleton";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 
@@ -351,7 +352,7 @@ function AnalyticsContent() {
       {isSessionExpired ? (
         <SessionExpiredState />
       ) : isLoading ? (
-        <LoadingState message="Loading analytics…" />
+        <AnalyticsSkeleton />
       ) : isError && !(isApiError(error) && error.code === "aborted") ? (
         <ErrorState
           title="Error loading analytics"

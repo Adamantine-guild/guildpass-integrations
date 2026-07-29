@@ -16,6 +16,7 @@ import {
   LoadingState,
   safeErrorMessage,
 } from "@/components/ui/api-states";
+import { RewardsSkeleton } from "@/components/admin/rewards-skeleton";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -205,7 +206,7 @@ function RewardsContent() {
       {isSessionExpired ? (
         <SessionExpiredState />
       ) : isLoading ? (
-        <LoadingState message="Loading rewards…" />
+        <RewardsSkeleton />
       ) : isError && !(isApiError(error) && error.code === "aborted") ? (
         <ErrorState
           title="Error loading rewards"
