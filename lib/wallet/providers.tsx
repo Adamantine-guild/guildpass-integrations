@@ -322,6 +322,7 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
         cancelRenewal();
         clearAuthSession();
         dispatch({ type: "clear" });
+        disconnect();
       }
     };
 
@@ -329,7 +330,7 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
       channel.close();
       channelRef.current = null;
     };
-  }, [address, cancelRenewal, scheduleRenewal]);
+  }, [address, cancelRenewal, scheduleRenewal, disconnect]);
 
   // ── Invalidation event from same tab (lib/session.ts fires this) ───────────
 
