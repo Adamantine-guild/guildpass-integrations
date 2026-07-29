@@ -503,10 +503,7 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
         cancelRenewal();
         clearAuthSession();
         dispatch({ type: "clear" });
-        return;
-      }
-      if (!isValidBroadcastSession(session, config.authMode)) {
-        return;
+        disconnect();
       }
       // If a wallet is currently connected in this tab, discard sessions for other addresses
       if (address && session.address.toLowerCase() !== address.toLowerCase()) {
@@ -571,7 +568,7 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
     return () => {
       unsubscribeStorage();
     };
-  }, [address, broadcast, cancelRenewal, scheduleRenewal]);
+  }, [address, cancelRenewal, scheduleRenewal, disconnect]);
 
   // ── Invalidation event from same tab (lib/session.ts fires this) ───────────
 
