@@ -61,6 +61,7 @@ function setEnv(overrides: Record<string, string | undefined>): void {
   const walletKeys = [
     'NEXT_PUBLIC_WALLET_CHAINS',
     'NEXT_PUBLIC_WALLET_CONNECTORS',
+    'NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID',
     'NEXT_PUBLIC_WALLET_RPC_MAINNET',
     'NEXT_PUBLIC_WALLET_RPC_BASE',
     'NEXT_PUBLIC_WALLET_RPC_SEPOLIA',
@@ -382,6 +383,38 @@ describe('NEXT_PUBLIC_WALLET_CONNECTORS — valid connector', () => {
     const config = loadWalletConfig()
     assert.deepEqual(config.connectorNames, ['injected'])
     assert.equal(config.connectors.length, 1)
+  })
+
+  test('accepts "walletConnect" explicitly and reflects it in connectorNames', () => {
+    setEnv({
+      NEXT_PUBLIC_WALLET_CONNECTORS: 'walletConnect',
+      NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID: 'test-project-id',
+    })
+    const config = loadWalletConfig()
+    assert.deepEqual(config.connectorNames, ['walletConnect'])
+    assert.equal(config.connectors.length, 1)
+  })
+
+  test('accepts "injected,walletConnect" combined', () => {
+    setEnv({
+      NEXT_PUBLIC_WALLET_CONNECTORS: 'injected,walletConnect',
+      NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID: 'test-project-id',
+    })
+    const config = loadWalletConfig()
+    assert.deepEqual(config.connectorNames, ['injected', 'walletConnect'])
+    assert.equal(config.connectors.length, 2)
+  })
+
+  test('rejects walletConnect without NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID', () => {
+    setEnv({ NEXT_PUBLIC_WALLET_CONNECTORS: 'walletConnect' })
+    assert.throws(
+      () => loadWalletConfig(),
+      (err: Error) => {
+        assert.equal(err.name, 'ConfigError')
+        assert.ok(err.message.includes('NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID'))
+        return true
+      },
+    )
   })
 })
 

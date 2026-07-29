@@ -11,6 +11,7 @@ import {
   parseConnectorNames as parseConnectorNamesCsv,
   parseWalletChainNames,
   rpcEnvNameFromChainName,
+  splitCsv,
   validateBrowserUrl,
   type SupportedWalletChainName,
   type WalletConnectorName,
@@ -134,7 +135,7 @@ function buildConnectors(connectorNames: readonly WalletConnectorName[]): Create
       case 'walletConnect': {
         const projectId = env('NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID')
         if (!projectId) {
-          fail(
+          throw new ConfigError(
             'NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID is required when using the walletConnect connector.',
           )
         }

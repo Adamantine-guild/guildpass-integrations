@@ -58,6 +58,17 @@ describe('NEXT_PUBLIC_WALLET_CONNECTORS parsing', () => {
     )
   })
 
+  test('accepts the supported "walletConnect" value', () => {
+    assert.deepEqual(parseConnectorNames('walletConnect'), ['walletConnect'])
+  })
+
+  test('accepts "injected,walletConnect" combined', () => {
+    assert.deepEqual(parseConnectorNames('injected,walletConnect'), [
+      'injected',
+      'walletConnect',
+    ])
+  })
+
   test('unsupportedConnectorMessage interpolates the supported list', () => {
     const message = unsupportedConnectorMessage('safe')
     assert.match(message, /"safe"/)
