@@ -57,6 +57,12 @@ import {
   ApprovalConfig,
   PendingActionType,
   PendingActionPayload,
+  Proposal,
+  Vote,
+  VoteChoice,
+  VotesSummary,
+  ProposalStatus,
+  ProposalType,
 } from './types'
 import { ApiError } from './errors'
 import {
@@ -412,6 +418,8 @@ export interface CommunityState {
   webhookEvents: WebhookEventLog[]
   memberStore: Record<string, { membership: Membership; roles: Role[]; profile: MemberProfile }>
   pendingActions: PendingAction[]
+  proposals: Record<string, Proposal>
+  votes: Record<string, Vote>  // Maps vote ID to Vote
 }
 
 export let communityStates: Record<string, CommunityState> = {}
@@ -431,6 +439,8 @@ export function getCommunityState(communityId: string = 'guildpass-demo'): Commu
         ])
       ),
       pendingActions: [],
+      proposals: {},
+      votes: {},
     }
   }
   return communityStates[normalizedId]
@@ -1638,6 +1648,371 @@ export class MockAccessApi implements AccessApi {
     }
   }
 
+  // ── Governance ──
+  async listProposals(params?: { filter?: ProposalStatus | ProposalType; limit?: number; cursor?: string }, _signal?: AbortSignal): Promise<Proposal[]> {
+    await initPromise
+    const state = getCommunityState(this.communityId)
+    let proposals = Object.values(state.proposals)
+
+    if (params?.filter) {
+      // Filter by status or type
+      const isStatus = ['draft', 'active', 'closed', 'resolved'].includes(params.filter)
+      if (isStatus) {
+        proposals = proposals.filter(p => p.status === params.filter)
+      } else {
+        proposals = proposals.filter(p => p.type === params.filter)
+      }
+    }
+
+    // Sort by creation date, newest first
+    proposals.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+
+    const limit = params?.limit ?? 20
+    const cursor = params?.cursor ? parseInt(params.cursor, 10) : 0
+    return proposals.slice(cursor, cursor + limit)
+  }
+
+  async getProposal(id: string, _signal?: AbortSignal): Promise<Proposal | null> {
+    await initPromise
+    const state = getCommunityState(this.communityId)
+    return state.proposals[id] ?? null
+  }
+
+  async getMemberVote(proposalId: string, _signal?: AbortSignal): Promise<Vote | null> {
+    await initPromise
+    if (!this.address) return null
+
+    const state = getCommunityState(this.communityId)
+    const vote = Object.values(state.votes).find(
+      v => v.proposalId === proposalId && v.voter.toLowerCase() === this.address!.toLowerCase()
+    )
+    return vote ?? null
+  }
+
+  async listProposalVotes(proposalId: string, params?: { limit?: number; cursor?: string }, _signal?: AbortSignal): Promise<Vote[]> {
+    await initPromise
+    const state = getCommunityState(this.communityId)
+    let votes = Object.values(state.votes).filter(v => v.proposalId === proposalId)
+
+    // Sort by vote time, newest first
+    votes.sort((a, b) => new Date(b.votedAt).getTime() - new Date(a.votedAt).getTime())
+
+    const limit = params?.limit ?? 20
+    const cursor = params?.cursor ? parseInt(params.cursor, 10) : 0
+    return votes.slice(cursor, cursor + limit)
+  }
+
+  async castVote(proposalId: string, choice: VoteChoice): Promise<Vote> {
+    await initPromise
+    if (MOCK_SESSION_STATE === 'expired') throwMockUnauthorized()
+    if (!this.address) {
+      throw new ApiError({
+        status: 403,
+        code: 'forbidden',
+        safeMessage: 'Must be authenticated to vote.',
+      })
+    }
+
+    const state = getCommunityState(this.communityId)
+    const proposal = state.proposals[proposalId]
+
+    if (!proposal) {
+      throw new ApiError({
+        status: 404,
+        code: 'not_found',
+        safeMessage: 'Proposal not found.',
+      })
+    }
+
+    if (proposal.status !== 'active') {
+      throw new ApiError({
+        status: 400,
+        code: 'invalid_state',
+        safeMessage: 'Voting is not currently open for this proposal.',
+      })
+    }
+
+    // Check if already voted
+    const existingVoteId = Object.entries(state.votes).find(
+      ([_, v]) => v.proposalId === proposalId && v.voter.toLowerCase() === this.address!.toLowerCase()
+    )?.[0]
+
+    // Get voter's weight based on tier/role
+    const memberData = state.memberStore[this.address]
+    const tier = memberData?.membership.tier ?? 'free'
+    const role = memberData?.roles[0] ?? 'member'
+
+    // Simple weight: free=1, standard=2, pro=3 (tier) × member=1, moderator=2, admin=3 (role)
+    const tierWeight: Record<MembershipTier, number> = { free: 1, standard: 2, pro: 3 }
+    const roleMultiplier: Record<Role, number> = { member: 1, moderator: 2, admin: 3 }
+    const weight = tierWeight[tier] * roleMultiplier[role]
+
+    const vote: Vote = {
+      id: existingVoteId || `vote_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+      proposalId,
+      voter: this.address,
+      choice,
+      weight,
+      voterContext: { tier, role },
+      votedAt: new Date().toISOString(),
+    }
+
+    // Update proposal vote summary
+    if (existingVoteId) {
+      const oldVote = state.votes[existingVoteId]
+      // Remove old vote from summary
+      proposal.votesSummary.totalVotes--
+      proposal.votesSummary.weightsFor -= oldVote.choice === 'for' ? oldVote.weight : 0
+      proposal.votesSummary.weightsAgainst -= oldVote.choice === 'against' ? oldVote.weight : 0
+      proposal.votesSummary.weightsAbstain -= oldVote.choice === 'abstain' ? oldVote.weight : 0
+    }
+
+    // Add new vote to summary
+    proposal.votesSummary.totalVotes++
+    if (choice === 'for') proposal.votesSummary.weightsFor += weight
+    else if (choice === 'against') proposal.votesSummary.weightsAgainst += weight
+    else proposal.votesSummary.weightsAbstain += weight
+
+    // Recalculate percentages
+    if (proposal.totalWeight > 0) {
+      proposal.votesSummary.percentFor = Math.round((proposal.votesSummary.weightsFor / proposal.totalWeight) * 100)
+      proposal.votesSummary.percentAgainst = Math.round((proposal.votesSummary.weightsAgainst / proposal.totalWeight) * 100)
+    }
+
+    state.votes[vote.id] = vote
+    schedulePersist()
+
+    return vote
+  }
+
+  async createProposal(proposal: Omit<Proposal, 'id' | 'createdAt' | 'status' | 'communityId' | 'votesSummary' | 'totalWeight'>): Promise<Proposal> {
+    await initPromise
+    if (MOCK_SESSION_STATE === 'expired') throwMockUnauthorized()
+
+    // Check if user is admin
+    if (!this.address || !getCommunityState(this.communityId).memberStore[this.address]?.roles.includes('admin')) {
+      throw new ApiError({
+        status: 403,
+        code: 'forbidden',
+        safeMessage: 'Only admins can create proposals.',
+      })
+    }
+
+    const state = getCommunityState(this.communityId)
+
+    // Calculate total weight (sum of all member weights)
+    let totalWeight = 0
+    Object.values(state.memberStore).forEach(member => {
+      const tierWeight: Record<MembershipTier, number> = { free: 1, standard: 2, pro: 3 }
+      const roleMultiplier: Record<Role, number> = { member: 1, moderator: 2, admin: 3 }
+      const weight = tierWeight[member.membership.tier] * roleMultiplier[member.roles[0] ?? 'member']
+      totalWeight += weight
+    })
+
+    const newProposal: Proposal = {
+      id: `prop_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+      communityId: this.communityId,
+      ...proposal,
+      status: 'draft',
+      createdAt: new Date().toISOString(),
+      votesSummary: {
+        totalVotes: 0,
+        weightsFor: 0,
+        weightsAgainst: 0,
+        weightsAbstain: 0,
+      },
+      totalWeight,
+    }
+
+    state.proposals[newProposal.id] = newProposal
+    schedulePersist()
+
+    return newProposal
+  }
+
+  async updateProposal(id: string, updates: Partial<Omit<Proposal, 'id' | 'status' | 'proposer' | 'createdAt' | 'votesSummary' | 'totalWeight'>>): Promise<Proposal> {
+    await initPromise
+    if (MOCK_SESSION_STATE === 'expired') throwMockUnauthorized()
+
+    if (!this.address || !getCommunityState(this.communityId).memberStore[this.address]?.roles.includes('admin')) {
+      throw new ApiError({
+        status: 403,
+        code: 'forbidden',
+        safeMessage: 'Only admins can update proposals.',
+      })
+    }
+
+    const state = getCommunityState(this.communityId)
+    const proposal = state.proposals[id]
+
+    if (!proposal) {
+      throw new ApiError({
+        status: 404,
+        code: 'not_found',
+        safeMessage: 'Proposal not found.',
+      })
+    }
+
+    if (proposal.status === 'active' || proposal.status === 'resolved') {
+      throw new ApiError({
+        status: 400,
+        code: 'invalid_state',
+        safeMessage: 'Cannot update an active or resolved proposal.',
+      })
+    }
+
+    Object.assign(proposal, updates)
+    schedulePersist()
+
+    return proposal
+  }
+
+  async publishProposal(id: string): Promise<Proposal> {
+    await initPromise
+    if (MOCK_SESSION_STATE === 'expired') throwMockUnauthorized()
+
+    if (!this.address || !getCommunityState(this.communityId).memberStore[this.address]?.roles.includes('admin')) {
+      throw new ApiError({
+        status: 403,
+        code: 'forbidden',
+        safeMessage: 'Only admins can publish proposals.',
+      })
+    }
+
+    const state = getCommunityState(this.communityId)
+    const proposal = state.proposals[id]
+
+    if (!proposal) {
+      throw new ApiError({
+        status: 404,
+        code: 'not_found',
+        safeMessage: 'Proposal not found.',
+      })
+    }
+
+    if (proposal.status !== 'draft') {
+      throw new ApiError({
+        status: 400,
+        code: 'invalid_state',
+        safeMessage: 'Only draft proposals can be published.',
+      })
+    }
+
+    proposal.status = 'active'
+    schedulePersist()
+
+    return proposal
+  }
+
+  async closeProposalVoting(id: string): Promise<Proposal> {
+    await initPromise
+    if (MOCK_SESSION_STATE === 'expired') throwMockUnauthorized()
+
+    if (!this.address || !getCommunityState(this.communityId).memberStore[this.address]?.roles.includes('admin')) {
+      throw new ApiError({
+        status: 403,
+        code: 'forbidden',
+        safeMessage: 'Only admins can close voting.',
+      })
+    }
+
+    const state = getCommunityState(this.communityId)
+    const proposal = state.proposals[id]
+
+    if (!proposal) {
+      throw new ApiError({
+        status: 404,
+        code: 'not_found',
+        safeMessage: 'Proposal not found.',
+      })
+    }
+
+    if (proposal.status !== 'active') {
+      throw new ApiError({
+        status: 400,
+        code: 'invalid_state',
+        safeMessage: 'Only active proposals can be closed.',
+      })
+    }
+
+    proposal.status = 'closed'
+    schedulePersist()
+
+    return proposal
+  }
+
+  async resolveProposal(id: string, outcome: string): Promise<Proposal> {
+    await initPromise
+    if (MOCK_SESSION_STATE === 'expired') throwMockUnauthorized()
+
+    if (!this.address || !getCommunityState(this.communityId).memberStore[this.address]?.roles.includes('admin')) {
+      throw new ApiError({
+        status: 403,
+        code: 'forbidden',
+        safeMessage: 'Only admins can resolve proposals.',
+      })
+    }
+
+    const state = getCommunityState(this.communityId)
+    const proposal = state.proposals[id]
+
+    if (!proposal) {
+      throw new ApiError({
+        status: 404,
+        code: 'not_found',
+        safeMessage: 'Proposal not found.',
+      })
+    }
+
+    proposal.status = 'resolved'
+    proposal.payload = { ...proposal.payload, outcome, resolvedAt: new Date().toISOString() }
+    schedulePersist()
+
+    return proposal
+  }
+
+  async deleteProposal(id: string): Promise<void> {
+    await initPromise
+    if (MOCK_SESSION_STATE === 'expired') throwMockUnauthorized()
+
+    if (!this.address || !getCommunityState(this.communityId).memberStore[this.address]?.roles.includes('admin')) {
+      throw new ApiError({
+        status: 403,
+        code: 'forbidden',
+        safeMessage: 'Only admins can delete proposals.',
+      })
+    }
+
+    const state = getCommunityState(this.communityId)
+    const proposal = state.proposals[id]
+
+    if (!proposal) {
+      throw new ApiError({
+        status: 404,
+        code: 'not_found',
+        safeMessage: 'Proposal not found.',
+      })
+    }
+
+    if (proposal.status !== 'draft') {
+      throw new ApiError({
+        status: 400,
+        code: 'invalid_state',
+        safeMessage: 'Only draft proposals can be deleted.',
+      })
+    }
+
+    delete state.proposals[id]
+    // Also delete any votes on this proposal
+    Object.keys(state.votes).forEach(voteId => {
+      if (state.votes[voteId].proposalId === id) {
+        delete state.votes[voteId]
+      }
+    })
+    schedulePersist()
+  }
+
+  public analytics: import('./types').AnalyticsDataSource = {
   public analytics: any = {
     getMembershipTrend: async (_signal?: AbortSignal) => {
       await initPromise;
