@@ -20,6 +20,8 @@
     "../components/ui/skeleton.tsx",
     "../components/ui/card.tsx",
     "../components/dashboard/membership-card-skeleton.tsx",
+    "../components/admin/analytics-skeleton.tsx",
+    "../components/admin/rewards-skeleton.tsx",
     "../lib/api/mappers.ts",
     "../lib/api/optimistic.ts",
     "../lib/api/types.ts",
