@@ -394,7 +394,37 @@ export interface ApprovalConfig {
   updatePolicy: number
 }
 
+/**
+ * {@link Community} as actually returned in mock mode, which additionally
+ * carries multi-admin approval thresholds. Kept separate from the
+ * auto-generated `Community` interface (test/fixtures/openapi.json) rather
+ * than added to it directly, since `approvalConfig` isn't part of the
+ * OpenAPI schema yet.
+ */
+export interface CommunityWithApprovalConfig extends Community {
+  approvalConfig?: ApprovalConfig
+}
+
 export type PendingActionType = 'assignRole' | 'removeRole' | 'updatePolicy'
+
+/**
+ * Result of an admin write mutation (assignRole/removeRole/updatePolicy).
+ *
+ * - 'executed' — applied immediately.
+ * - 'pending'  — multi-admin approval threshold not yet met (see
+ *   {@link ApprovalConfig} / {@link PendingActionType}); unrelated to
+ *   connectivity.
+ * - 'queued'   — the caller was offline or the request failed with a network
+ *   error; the mutation was persisted to the durable offline mutation queue
+ *   (see lib/offline/mutation-queue.ts) instead of failing, and will be
+ *   replayed automatically once the app is back online.
+ */
+export type MutationResultStatus = 'executed' | 'pending' | 'queued'
+
+export interface MutationResult {
+  status: MutationResultStatus
+  pendingActionId?: string
+}
 
 export interface PendingActionPayload {
   address?: string
@@ -790,6 +820,22 @@ export interface MemberAccessApi {
   rejectConnectionRequest(targetAddress: string): Promise<void>
 }
 
+export interface RoleDistributionEntry {
+  role: Role
+  count: number
+}
+
+/**
+ * Analytics surface exposed on {@link AdminAccessApi}. Both LiveAccessApi
+ * and MockAccessApi implement this as a plain object of async methods
+ * (see lib/api/live.ts / lib/api/mock.ts's `analytics` field).
+ */
+export interface AnalyticsDataSource {
+  getMembershipTrend(signal?: AbortSignal): Promise<MemberGrowthDataPoint[]>
+  getRoleDistribution(signal?: AbortSignal): Promise<RoleDistributionEntry[]>
+  getAccessAttempts(signal?: AbortSignal): Promise<ResourceAccessCount[]>
+}
+
 /**
  * Authenticated admin queries and mutations.
  * These methods require a valid SIWE token context.
@@ -797,6 +843,8 @@ export interface MemberAccessApi {
 export interface AdminAccessApi {
   // ── Admin queries & mutations (require a valid SIWE token context) ────────
   listWebhookEvents(signal?: AbortSignal): Promise<WebhookEventLog[]>
+  /** Paginated/filterable variant of listWebhookEvents used by app/admin/events. */
+  listAdminEvents(params?: AdminEventFilterParams): Promise<Paginated<WebhookEvent>>
   /**
    * Subscribe to the admin webhook event stream.
    *
@@ -818,16 +866,16 @@ export interface AdminAccessApi {
   approveAction(id: string): Promise<void>
   rejectAction(id: string): Promise<void>
   updateApprovalConfig(config: ApprovalConfig): Promise<void>
-  
-  assignRole(address: string, role: Role): Promise<{ status: 'executed' | 'pending'; pendingActionId?: string }>
-  removeRole(address: string, role: Role): Promise<{ status: 'executed' | 'pending'; pendingActionId?: string }>
-  updatePolicy(policy: AccessPolicy): Promise<{ status: 'executed' | 'pending'; pendingActionId?: string }>
+
+  assignRole(address: string, role: Role): Promise<MutationResult>
+  removeRole(address: string, role: Role): Promise<MutationResult>
+  updatePolicy(policy: AccessPolicy): Promise<MutationResult>
 
   // ── Moderation Queue ──
   listReports(signal?: AbortSignal): Promise<ModerationReport[]>
   getReport(id: string, signal?: AbortSignal): Promise<ModerationReport | null>
   updateReportState(id: string, state: ModerationState, updates?: Partial<ModerationReport>): Promise<void>
-  
+
   // ── Governance (requires SIWE auth for voting/proposals) ──
   listProposals(params?: { filter?: ProposalStatus | ProposalType; limit?: number; cursor?: string }, signal?: AbortSignal): Promise<Proposal[]>
   getProposal(id: string, signal?: AbortSignal): Promise<Proposal | null>
@@ -840,7 +888,7 @@ export interface AdminAccessApi {
   closeProposalVoting(id: string): Promise<Proposal>
   resolveProposal(id: string, outcome: string): Promise<Proposal>
   deleteProposal(id: string): Promise<void>
-  
+
   // Analytics
   analytics: AnalyticsDataSource
 }

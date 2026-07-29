@@ -5,6 +5,7 @@ import { Nav } from '@/components/nav'
 import { SwRegistrar } from '@/components/sw-registrar'
 import { BackendHealthCheck } from '@/components/backend-health-check'
 import { SyncStatusBanner } from '@/components/ui/sync-status-banner'
+import { MutationQueueSync } from '@/components/offline/mutation-queue-sync'
 import { ThemeProvider } from '@/components/theme-provider'
 export const metadata: Metadata = {
   title: {
@@ -38,6 +39,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <BackendHealthCheck />
             {/* Offline/Degraded status banner */}
             <SyncStatusBanner className="mb-4 w-full" />
+            {/* Drains the durable offline mutation queue on reconnect and
+                hosts the conflict dialog for replayed policy updates */}
+            <MutationQueueSync />
             <Nav />
             <main className="mx-auto max-w-6xl px-4 py-6">{children}</main>
           </RootProviders>
