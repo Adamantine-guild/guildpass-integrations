@@ -5,6 +5,7 @@ import { Nav } from "@/components/nav";
 import { PortfolioChart, type Timeframe } from "@/components/analytics/PortfolioChart";
 import { AssetBreakdown } from "@/components/analytics/AssetBreakdown";
 import { YieldPerformanceSummary } from "@/components/analytics/YieldPerformanceSummary";
+import { ResponsiveTable } from '@/components/ui/responsive-table';
 import {
   BarChart3,
   TrendingUp,
@@ -215,7 +216,7 @@ export default function AnalyticsPage() {
               No active strategies found for this account.
             </div>
           ) : (
-            <div className="overflow-x-auto">
+            <ResponsiveTable>
               <table className="w-full text-left text-xs" data-testid="strategy-pools-table">
                 <thead>
                   <tr className="border-b border-zinc-200 dark:border-zinc-800 text-zinc-500 dark:text-zinc-400 uppercase tracking-wider font-semibold">
@@ -231,7 +232,7 @@ export default function AnalyticsPage() {
                 <tbody className="divide-y divide-zinc-100 dark:divide-zinc-900">
                   {pools.map((pool) => (
                     <tr key={pool.id} className="hover:bg-zinc-50/50 dark:hover:bg-zinc-900/50 transition-colors">
-                      <td className="py-3 px-3 font-semibold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
+                      <td data-label="Strategy / Pool" className="py-3 px-3 font-semibold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
                         {pool.name}
                         {pool.status === "Boosting" && (
                           <span className="rounded bg-amber-100 dark:bg-amber-950/80 px-1.5 py-0.5 text-[10px] font-bold text-amber-700 dark:text-amber-400">
@@ -239,20 +240,20 @@ export default function AnalyticsPage() {
                           </span>
                         )}
                       </td>
-                      <td className="py-3 px-3 text-zinc-500 dark:text-zinc-400">{pool.category}</td>
-                      <td className="py-3 px-3 text-right font-semibold text-zinc-900 dark:text-zinc-100">
+                      <td data-label="Category" className="py-3 px-3 text-zinc-500 dark:text-zinc-400">{pool.category}</td>
+                      <td data-label="Staked Balance" className="py-3 px-3 text-right font-semibold text-zinc-900 dark:text-zinc-100">
                         {formatCurrency(pool.stakedBalance)}
                       </td>
-                      <td className="py-3 px-3 text-right font-semibold text-emerald-600 dark:text-emerald-400">
+                      <td data-label="Current APY" className="py-3 px-3 text-right font-semibold text-emerald-600 dark:text-emerald-400">
                         {pool.apy}%
                       </td>
-                      <td className="py-3 px-3 text-right font-medium text-emerald-600 dark:text-emerald-400">
+                      <td data-label="30D Returns" className="py-3 px-3 text-right font-medium text-emerald-600 dark:text-emerald-400">
                         +{formatCurrency(pool.return30D)}
                       </td>
-                      <td className="py-3 px-3 text-right font-bold text-zinc-900 dark:text-zinc-100">
+                      <td data-label="Unclaimed Yield" className="py-3 px-3 text-right font-bold text-zinc-900 dark:text-zinc-100">
                         {formatCurrency(pool.unclaimedYield)}
                       </td>
-                      <td className="py-3 px-3 text-right">
+                      <td data-label="Action" className="py-3 px-3 text-right">
                         <button
                           type="button"
                           onClick={() => handleClaimPool(pool.id)}
@@ -271,7 +272,7 @@ export default function AnalyticsPage() {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </ResponsiveTable>
           )}
         </div>
       </main>

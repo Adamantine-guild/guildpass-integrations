@@ -8,6 +8,7 @@ import { useParams } from 'next/navigation';
 import { config } from '@/lib/config';
 import { isApiError } from '@/lib/api/errors';
 import { queryKeys } from '@/lib/query';
+import { ResponsiveTable } from '@/components/ui/responsive-table';
 import { EmptyState, ErrorState, LoadingState, safeErrorMessage } from '@/components/ui/api-states';
 import { AddressText } from '@/components/wallet/address-text';
 import { AdminGuard } from '@/components/admin-guard';
@@ -284,7 +285,7 @@ function WebhookLogsContent() {
         />
       ) : (
         <div className="border border-border rounded-lg overflow-hidden bg-card">
-          <div className="overflow-x-auto">
+          <ResponsiveTable>
             <table className="min-w-full divide-y divide-border text-left text-sm">
               <thead className="bg-muted text-muted-foreground uppercase text-xs font-semibold tracking-wider">
                 <tr>
@@ -304,17 +305,17 @@ function WebhookLogsContent() {
                       className="hover:bg-muted/50 transition-colors cursor-pointer"
                       onClick={() => toggleExpand(evt.id)}
                     >
-                      <td className="px-6 py-4 whitespace-nowrap text-muted-foreground">
+                      <td data-label="" className="px-6 py-4 whitespace-nowrap text-muted-foreground">
                         <span className="inline-block transition-transform duration-200"
                           style={{ transform: expandedId === evt.id ? 'rotate(90deg)' : 'rotate(0deg)' }}
                         >
                           ▶
                         </span>
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-muted-foreground font-mono text-xs">
+                      <td data-label="Timestamp" className="px-6 py-4 whitespace-nowrap text-muted-foreground font-mono text-xs">
                         {new Date(evt.timestamp).toLocaleString()}
                       </td>
-                      <td className="px-6 py-4 font-semibold font-mono text-xs text-foreground">
+                      <td data-label="Event Type" className="px-6 py-4 font-semibold font-mono text-xs text-foreground">
                         <div className="flex items-center gap-2">
                           <span>{evt.eventType}</span>
                           {evt.isReplay && (
@@ -324,7 +325,7 @@ function WebhookLogsContent() {
                           )}
                         </div>
                       </td>
-                      <td className="px-6 py-4 text-muted-foreground font-mono text-xs">
+                      <td data-label="Target" className="px-6 py-4 text-muted-foreground font-mono text-xs">
                         <AddressText
                           address={evt.affectedIdentifier}
                           label="Target address or resource"
@@ -332,7 +333,7 @@ function WebhookLogsContent() {
                           className="text-muted-foreground"
                         />
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
+                      <td data-label="Status" className="px-6 py-4 whitespace-nowrap">
                         <span
                           className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold tracking-wide uppercase ${
                             evt.status === 'success'
@@ -345,11 +346,11 @@ function WebhookLogsContent() {
                           {evt.status}
                         </span>
                       </td>
-                      <td className="px-6 py-4 text-muted-foreground text-xs max-w-xs truncate font-mono">
+                      <td data-label="Payload" className="px-6 py-4 text-muted-foreground text-xs max-w-xs truncate font-mono">
                         {JSON.stringify(evt.payloadSummary)}
                       </td>
                       {isMockMode && (
-                        <td className="px-6 py-4 whitespace-nowrap">
+                        <td data-label="Actions" className="px-6 py-4 whitespace-nowrap">
                           <Button
                             size="sm"
                             variant="outline"
@@ -376,7 +377,7 @@ function WebhookLogsContent() {
                 ))}
               </tbody>
             </table>
-          </div>
+          </ResponsiveTable>
         </div>
       )}
     </div>
