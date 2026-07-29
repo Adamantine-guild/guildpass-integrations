@@ -16,6 +16,7 @@ This document contains the results of an accessibility audit of the GuildPass in
 | Bulk Action Toolbar            | Missing live region for selection count, missing aria-disabled/aria-busy on buttons, missing live region for action results | Medium | ✅ Fixed |
 | Scenario Selector              | Missing explicit control label, missing region landmark, missing aria-busy/aria-disabled on action buttons, missing live region on status feedback | Medium | ✅ Fixed |
 | SIWE Debug Panel               | Missing aria-controls on toggle button, missing role="status" and aria-live="polite" on dynamic debug store updates | Medium | ✅ Fixed |
+| PolicyConflictDialog           | Missing aria-modal, focus trap, Escape key handler, and focus restoration | High | ✅ Fixed |
 
 ## WCAG 2.1 AA Checks
 
@@ -65,5 +66,11 @@ Automated accessibility checks can be run via `npm run test:accessibility`
 **After:** Added `aria-controls="siwe-debug-content"` and descriptive `aria-label` to toggle button, and added `id="siwe-debug-content"`, `role="status"`, `aria-live="polite"` to `CardContent`.
 **File:** components/developer/siwe-debug-panel.tsx
 **Severity:** Medium
+
+### 6. PolicyConflictDialog: Missing Modal Dialog Accessibility (Issue #297)
+**Before:** The conflict dialog had `role="dialog"` but lacked `aria-modal="true"`, a focus trap, an Escape key handler, auto-focus on mount, and focus restoration on close.
+**After:** Added `aria-modal="true"`, integrated the existing `useFocusTrap` hook for Tab/Shift+Tab wrapping, Escape key handling, initial focus on mount, and focus restoration when the dialog closes.
+**File:** components/ui/policy-conflict-dialog.tsx
+**Severity:** High
 
 
