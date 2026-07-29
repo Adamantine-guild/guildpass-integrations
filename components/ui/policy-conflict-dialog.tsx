@@ -8,9 +8,11 @@
  * - Cancel and manually resolve
  */
 
+import { useRef } from "react";
 import { AccessPolicy } from "@/lib/api/types";
 import { Button } from "./button";
 import { JsonDiff } from "./json-diff";
+import { useFocusTrap } from "@/lib/hooks/use-focus-trap";
 
 interface PolicyConflictDialogProps {
   /** The policy the user attempted to save */
@@ -34,10 +36,15 @@ export function PolicyConflictDialog({
   onForceOverwrite,
   onCancel,
 }: PolicyConflictDialogProps) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(dialogRef, { isActive: true, onEscape: onCancel });
+
   return (
     <div 
+      ref={dialogRef}
       className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm"
       role="dialog"
+      aria-modal="true"
       aria-labelledby="conflict-dialog-title"
       aria-describedby="conflict-dialog-description"
     >

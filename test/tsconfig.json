@@ -54,6 +54,8 @@
     "../lib/api/index.ts",
     "../components/admin-guard.tsx",
     "../components/ui/bulk-action-toolbar.tsx",
+    "../components/ui/policy-conflict-dialog.tsx",
+    "../components/ui/json-diff.tsx",
     "../components/developer/scenario-selector.tsx",
     "../components/developer/siwe-debug-panel.tsx",
     "../components/wallet/address-text.tsx",
