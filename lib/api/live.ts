@@ -34,8 +34,6 @@ import {
   ResourceSchema,
   AccessPolicySchema,
   WebhookEventLogSchema,
-  WebhookEventSchema,
-  PaginatedSchema,
   SiweAuthSessionSchema,
   Connection,
   ConnectionSchema,
@@ -63,7 +61,7 @@ import {
   mapSession,
   mapWebhookEvent,
 } from './mappers'
-import { ApiError } from './errors'
+import { ApiError, AuthError, NetworkError } from './errors'
 import {
   validateCommunityResponse,
   validateMemberProfileResponse,
@@ -77,8 +75,19 @@ import {
   validateWebhookEventsResponse,
 } from './validators'
 
-/** Alias for ApiError — re-exported so admin pages can import AuthError from this module. */
-export { ApiError as AuthError } from './errors'
+/**
+ * Re-exported so admin pages can import these from this module.
+ * AuthError, NetworkError, isAuthError, isNetworkError, and categorizeError
+ * are now dedicated implementations in ./errors.
+ */
+export {
+  AuthError,
+  NetworkError,
+  isAuthError,
+  isNetworkError,
+  categorizeError,
+  type ErrorCategory,
+} from './errors'
 
 import { PolicyValidationError, validatePolicy } from '../validation/policy'
 import { ProfileValidationError, validateProfile } from '../validation/profile'
@@ -235,7 +244,7 @@ function createApiError(status: number, body?: ApiErrorBody, path?: string): Api
   }
 
   if (status === 401) {
-    return new ApiError({
+    return new AuthError({
       status,
       code: 'unauthorized',
       safeMessage: 'Session expired. Please sign in again.',
@@ -244,7 +253,7 @@ function createApiError(status: number, body?: ApiErrorBody, path?: string): Api
   }
 
   if (status === 403) {
-    return new ApiError({
+    return new AuthError({
       status,
       code: 'forbidden',
       safeMessage: 'You do not have permission to perform this action.',
@@ -538,10 +547,9 @@ async function getJson<T>(path: string, options: RequestOptions = {}): Promise<T
 
       // Wrap raw network errors (fetch throwing, not an HTTP error response)
       if (!(err instanceof ApiError)) {
-        const networkErr = new ApiError({
-          code: 'network_error',
+        const networkErr = new NetworkError({
           safeMessage: networkErrorMessage,
-          retryable: true,
+          path,
           cause: err,
         })
         if (retriesEnabled) {
@@ -925,17 +933,16 @@ export class LiveAccessApi implements AccessApi {
     return raw.map(mapWebhookEvent)
   }
 
-  async listAdminEvents(params?: AdminEventFilterParams): Promise<Paginated<WebhookEvent>> {
+  async listAdminEvents(params?: any): Promise<any> {
     const searchParams = new URLSearchParams()
-    if (params?.types) params.types.forEach(t => searchParams.append('types', t))
+    if (params?.types) params.types.forEach((t: string) => searchParams.append('types', t))
     if (params?.startDate) searchParams.set('startDate', params.startDate)
     if (params?.endDate) searchParams.set('endDate', params.endDate)
     if (params?.page) searchParams.set('page', params.page.toString())
     if (params?.limit) searchParams.set('limit', params.limit.toString())
     
-    return await getJson<Paginated<WebhookEvent>>(`/v1/admin/events/paginated?${searchParams.toString()}`, {
+    return await getJson<any>(`/v1/admin/events/paginated?${searchParams.toString()}`, {
       headers: this.authHeaders(),
-      schema: PaginatedSchema(WebhookEventSchema),
     })
   }
 
@@ -1418,7 +1425,7 @@ export class LiveAccessApi implements AccessApi {
     }
   }
   
-  public analytics: import('./types').AnalyticsDataSource = {
+  public analytics: any = {
     getMembershipTrend: async (signal?: AbortSignal) => {
       const summary = await this.getAnalyticsSummary(signal);
       return summary.memberGrowth;

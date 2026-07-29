@@ -47,7 +47,7 @@ export function BulkActionToolbar({
       {/* ── Selection bar ──────────────────────────────────────────────── */}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2 text-sm">
-          <Badge variant="default">
+          <Badge variant="default" role="status" aria-live="polite">
             {selectedCount} of {totalCount} selected
           </Badge>
           {!results && (
@@ -56,6 +56,8 @@ export function BulkActionToolbar({
                 size="sm"
                 onClick={onBulkAction}
                 disabled={isPending || selectedCount === 0}
+                aria-disabled={isPending || selectedCount === 0}
+                aria-busy={isPending}
               >
                 {isPending ? "Applying…" : actionLabel}
               </Button>
@@ -64,6 +66,7 @@ export function BulkActionToolbar({
                 variant="ghost"
                 onClick={onDismiss}
                 disabled={isPending}
+                aria-disabled={isPending}
               >
                 Clear
               </Button>
@@ -74,7 +77,7 @@ export function BulkActionToolbar({
 
       {/* ── Results summary ───────────────────────────────────────────── */}
       {results && (
-        <div className="flex flex-wrap items-center gap-2 text-sm">
+        <div className="flex flex-wrap items-center gap-2 text-sm" role="status" aria-live="polite">
           {results.succeeded > 0 && (
             <span className="text-green-600 dark:text-green-400">
               {results.succeeded} succeeded
@@ -91,6 +94,7 @@ export function BulkActionToolbar({
               variant="outline"
               onClick={onRetryFailed}
               disabled={isPending}
+              aria-disabled={isPending}
             >
               Retry failed
             </Button>
@@ -100,6 +104,7 @@ export function BulkActionToolbar({
             variant="ghost"
             onClick={onDismiss}
             disabled={isPending}
+            aria-disabled={isPending}
           >
             Done
           </Button>

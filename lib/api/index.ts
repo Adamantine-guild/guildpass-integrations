@@ -7,6 +7,8 @@ import {
   replayMockEvent,
   setMockRoleMutationFailure,
   setMockMetaVersion,
+  setMockResourceFetchFailure,
+  setMockResourceFetchDelay,
 } from './mock'
 import { AccessApi } from './types'
 import type { VersionCompatibility } from './version'
@@ -33,4 +35,25 @@ export function getApi(address?: string, token?: string, communityId?: string): 
 
 export * from './types'
 export * from './mappers'
-export { resetMockData, applyMockScenario, replayMockEvent, setMockRoleMutationFailure, setMockMetaVersion } from './mock'
+export {
+  resetMockData,
+  applyMockScenario,
+  replayMockEvent,
+  setMockRoleMutationFailure,
+  setMockMetaVersion,
+  setMockResourceFetchFailure,
+  setMockResourceFetchDelay,
+} from './mock'
+export {
+  ApiError,
+  AuthError,
+  NetworkError,
+  OfflineError,
+  isApiError,
+  isAuthError,
+  isNetworkError,
+  categorizeError,
+  type ErrorCategory,
+  type ApiErrorCode,
+  type ApiErrorOptions,
+} from './errors'

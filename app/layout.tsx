@@ -5,6 +5,7 @@ import { Nav } from '@/components/nav'
 import { SwRegistrar } from '@/components/sw-registrar'
 import { BackendHealthCheck } from '@/components/backend-health-check'
 import { SyncStatusBanner } from '@/components/ui/sync-status-banner'
+import { UnsupportedChainBanner } from '@/components/wallet/unsupported-chain-banner'
 
 export const metadata: Metadata = {
   title: {
@@ -33,6 +34,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           {/* Offline/Degraded status banner */}
           <SyncStatusBanner className="mb-4 w-full" />
           <Nav />
+          <UnsupportedChainBanner />
           <main className="mx-auto max-w-6xl px-4 py-6">{children}</main>
         </RootProviders>
       </body>

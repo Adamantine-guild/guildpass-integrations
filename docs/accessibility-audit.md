@@ -13,6 +13,9 @@ This document contains the results of an accessibility audit of the GuildPass in
 | Membership Expiry Badge       | Has aria-label, icon with aria-hidden | ✅ OK |
 | Sync Status Banner            | Proper aria-live and aria-label, role="status"/"alert" | ✅ OK |
 | UI Buttons                  | focus-visible:ring styles, proper ARIA attributes | ✅ OK |
+| Bulk Action Toolbar            | Missing live region for selection count, missing aria-disabled/aria-busy on buttons, missing live region for action results | Medium | ✅ Fixed |
+| Scenario Selector              | Missing explicit control label, missing region landmark, missing aria-busy/aria-disabled on action buttons, missing live region on status feedback | Medium | ✅ Fixed |
+| SIWE Debug Panel               | Missing aria-controls on toggle button, missing role="status" and aria-live="polite" on dynamic debug store updates | Medium | ✅ Fixed |
 
 ## WCAG 2.1 AA Checks
 
@@ -44,4 +47,23 @@ Automated accessibility checks can be run via `npm run test:accessibility`
 **After:** Uses Button component with focus-visible styles and aria-busy
 **File:** components/admin-guard.tsx
 **Severity:** High
+
+### 3. Bulk Action Toolbar: Missing Live Regions & ARIA State Attributes (Issue #302)
+**Before:** Selection count badge lacked live region attributes (`role="status"`, `aria-live="polite"`), action buttons lacked `aria-disabled` and `aria-busy`, and result outputs were not announced.
+**After:** Added `role="status"` and `aria-live="polite"` to selection count badge and results container; added `aria-disabled` and `aria-busy` to action buttons.
+**File:** components/ui/bulk-action-toolbar.tsx
+**Severity:** Medium
+
+### 4. Scenario Selector: Missing Explicit Control Label & ARIA Attributes (Issue #302)
+**Before:** `<Select>` control had no explicit `<label>` or `aria-label`, container lacked `role="region"`, buttons lacked `aria-disabled`/`aria-busy`, and status messages were not announced to live regions.
+**After:** Linked `<label htmlFor={selectId}>` with `<Select id={selectId} aria-label="...">`, added `role="region"` and `aria-label` to container, added `aria-disabled` and `aria-busy` to buttons, and wrapped feedback message with `role="status"` and `aria-live="polite"`.
+**File:** components/developer/scenario-selector.tsx
+**Severity:** Medium
+
+### 5. SIWE Debug Panel: Missing Collapsible ARIA Linkage & Dynamic Update Announcement (Issue #302)
+**Before:** Toggle button lacked `aria-controls`, card content lacked `role="status"` and `aria-live="polite"` for dynamic SIWE debug updates.
+**After:** Added `aria-controls="siwe-debug-content"` and descriptive `aria-label` to toggle button, and added `id="siwe-debug-content"`, `role="status"`, `aria-live="polite"` to `CardContent`.
+**File:** components/developer/siwe-debug-panel.tsx
+**Severity:** Medium
+
 

@@ -77,31 +77,11 @@ export function AdminGuard({ children }: { children: React.ReactNode }) {
 
   if (sessionStatus !== 'authenticated') {
     return (
-      <div
-        role="status"
-        aria-live="polite"
-        aria-label="Access blocked: sign-in required"
-        className="flex flex-col items-center justify-center p-12 text-center bg-white dark:bg-zinc-950 rounded-lg border border-zinc-200 dark:border-zinc-800"
-      >
-        <span className="sr-only">
-          Your wallet is connected but not signed in. Sign in with Ethereum to
-          unlock this administrative section.
-        </span>
-        <h2 className="text-xl font-bold mb-2">SIWE Authentication Required</h2>
-        <p className="text-zinc-500 mb-4">
-          {sessionStatus === 'expired'
-            ? 'Your admin session has expired. Sign in again to continue.'
-            : 'Accessing privileged management consoles requires a secure gasless authentication signature.'}
-        </p>
-        <Button
-          onClick={signIn}
-          disabled={isSigningIn}
-          aria-busy={isSigningIn}
-          aria-label="Sign in with Ethereum"
-        >
-          {isSigningIn ? 'Signing…' : 'Sign In With Ethereum'}
-        </Button>
-      </div>
+      <SiwePrompt
+        sessionStatus={sessionStatus}
+        isSigningIn={isSigningIn}
+        onSignIn={signIn}
+      />
     );
   }
 
@@ -161,3 +141,114 @@ export function AdminGuard({ children }: { children: React.ReactNode }) {
     </div>
   );
 }
+
+export interface SiwePromptProps {
+  sessionStatus?: string;
+  isSigningIn?: boolean;
+  onSignIn?: () => void;
+  onClose?: () => void;
+}
+
+function getFocusableElements(container: HTMLElement): HTMLElement[] {
+  const selector =
+    'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
+  return Array.from(container.querySelectorAll<HTMLElement>(selector)).filter(
+    (el) => el.offsetWidth > 0 || el.offsetHeight > 0 || el === document.activeElement
+  );
+}
+
+export function SiwePrompt({
+  sessionStatus,
+  isSigningIn = false,
+  onSignIn,
+  onClose,
+}: SiwePromptProps) {
+  const containerRef = React.useRef<HTMLDivElement>(null);
+  const titleId = 'siwe-prompt-title';
+  const descriptionId = 'siwe-prompt-description';
+
+  useEffect(() => {
+    const previousActiveElement = document.activeElement as HTMLElement | null;
+
+    if (containerRef.current) {
+      const focusableElements = getFocusableElements(containerRef.current);
+      if (focusableElements.length > 0) {
+        focusableElements[0].focus();
+      } else {
+        containerRef.current.focus();
+      }
+    }
+
+    return () => {
+      if (previousActiveElement && typeof previousActiveElement.focus === 'function') {
+        previousActiveElement.focus();
+      }
+    };
+  }, []);
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'Escape') {
+      onClose?.();
+      return;
+    }
+
+    if (e.key === 'Tab' && containerRef.current) {
+      const focusables = getFocusableElements(containerRef.current);
+      if (focusables.length === 0) {
+        e.preventDefault();
+        return;
+      }
+
+      const firstElement = focusables[0];
+      const lastElement = focusables[focusables.length - 1];
+      const currentActive = document.activeElement;
+
+      if (e.shiftKey) {
+        if (currentActive === firstElement || currentActive === containerRef.current) {
+          e.preventDefault();
+          lastElement.focus();
+        }
+      } else {
+        if (currentActive === lastElement) {
+          e.preventDefault();
+          firstElement.focus();
+        }
+      }
+    }
+  };
+
+  return (
+    <div
+      ref={containerRef}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby={titleId}
+      aria-describedby={descriptionId}
+      onKeyDown={handleKeyDown}
+      tabIndex={-1}
+      className="flex flex-col items-center justify-center p-12 text-center bg-white dark:bg-zinc-950 rounded-lg border border-zinc-200 dark:border-zinc-800 outline-none"
+    >
+      <span className="sr-only">
+        Your wallet is connected but not signed in. Sign in with Ethereum to
+        unlock this administrative section.
+      </span>
+      <h2 id={titleId} className="text-xl font-bold mb-2">
+        SIWE Authentication Required
+      </h2>
+      <p id={descriptionId} className="text-zinc-500 mb-4">
+        {sessionStatus === 'expired'
+          ? 'Your admin session has expired. Sign in again to continue.'
+          : 'Accessing privileged management consoles requires a secure gasless authentication signature.'}
+      </p>
+      <Button
+        onClick={onSignIn}
+        disabled={isSigningIn}
+        aria-busy={isSigningIn}
+        aria-label="Sign in with Ethereum"
+      >
+        {isSigningIn ? 'Signing…' : 'Sign In With Ethereum'}
+      </Button>
+    </div>
+  );
+}
+

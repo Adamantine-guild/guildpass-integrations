@@ -1,9 +1,48 @@
 "use client";
 
+import { useState, useCallback } from "react";
+import { Copy, Check } from "lucide-react";
 import { useAccount, useConnect, useDisconnect, injected } from "wagmi";
 import { Button } from "@/components/ui/button";
 import { useSiweAuth } from "@/lib/wallet/providers";
 import { AddressText } from "./address-text";
+
+function CopyAddressButton({ address }: { address?: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = useCallback(async () => {
+    if (!address) return;
+    try {
+      await navigator.clipboard.writeText(address);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error("Failed to copy", err);
+    }
+  }, [address]);
+
+  if (!address) return null;
+
+  return (
+    <button
+      onClick={handleCopy}
+      className="inline-flex h-6 w-6 items-center justify-center rounded-md hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring transition-colors relative"
+      aria-label="Copy address"
+      title={copied ? "Copied!" : "Copy address"}
+    >
+      {copied ? (
+        <Check className="h-3.5 w-3.5 text-emerald-500" />
+      ) : (
+        <Copy className="h-3.5 w-3.5 text-muted-foreground" />
+      )}
+      {copied && (
+        <span className="absolute -top-8 left-1/2 -translate-x-1/2 rounded bg-foreground px-2 py-1 text-[10px] font-medium text-background shadow-sm whitespace-nowrap z-10 pointer-events-none animate-in fade-in zoom-in duration-200">
+          Copied!
+        </span>
+      )}
+    </button>
+  );
+}
 
 export function ConnectButton() {
   const { isConnected, address } = useAccount();
@@ -28,10 +67,13 @@ export function ConnectButton() {
   if (sessionStatus === "authenticated") {
     return (
       <div className="flex flex-wrap items-center justify-end gap-2">
-        <AddressText
-          address={address}
-          className="text-xs text-muted-foreground"
-        />
+        <div className="flex items-center gap-1">
+          <AddressText
+            address={address}
+            className="text-xs text-muted-foreground"
+          />
+          <CopyAddressButton address={address} />
+        </div>
         <span
           id="siwe-authenticated-badge"
           role="status"
@@ -69,10 +111,13 @@ export function ConnectButton() {
     return (
       <div className="flex max-w-full flex-col items-end gap-1">
         <div className="flex flex-wrap items-center justify-end gap-2">
-          <AddressText
-            address={address}
-            className="text-xs text-muted-foreground"
-          />
+          <div className="flex items-center gap-1">
+            <AddressText
+              address={address}
+              className="text-xs text-muted-foreground"
+            />
+            <CopyAddressButton address={address} />
+          </div>
           <span
             id="siwe-expired-badge"
             role="status"
@@ -118,10 +163,13 @@ export function ConnectButton() {
   return (
     <div className="flex max-w-full flex-col items-end gap-1">
       <div className="flex flex-wrap items-center justify-end gap-2">
-        <AddressText
-          address={address}
-          className="text-xs text-muted-foreground"
-        />
+        <div className="flex items-center gap-1">
+          <AddressText
+            address={address}
+            className="text-xs text-muted-foreground"
+          />
+          <CopyAddressButton address={address} />
+        </div>
         <Button
           id="wallet-signin-btn"
           size="sm"

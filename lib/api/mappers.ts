@@ -72,11 +72,15 @@ export function mapMemberProfile(raw: any, address: string): MemberProfile {
 // ── Member Row (list view) ───────────────────────────────────────────────────
 
 export function mapMemberRow(raw: any): MemberRow {
+  const displayName = raw.displayName ?? raw.display_name ?? raw.username
   return {
     address: raw.address ?? raw.wallet_address ?? '',
     roles: raw.roles ?? [],
     tier: raw.tier ?? raw.membership_tier ?? 'free',
     active: raw.active ?? raw.is_active ?? false,
+    // Only present when the backend actually sends one — keeps existing
+    // fixtures/snapshots that never touch this field unaffected.
+    ...(displayName ? { displayName } : {}),
   }
 }
 

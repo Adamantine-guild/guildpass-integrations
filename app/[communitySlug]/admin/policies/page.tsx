@@ -23,6 +23,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
+import { useToasts, ToastViewport } from "@/components/ui/toast";
 import {
   DeniedState,
   EmptyState,
@@ -285,10 +286,11 @@ function SessionExpiredBanner() {
 
 export default function PoliciesPage() {
   const { address } = useAccount();
-  const { authSession, markExpired, sessionStatus } = useSiweAuth();
+  const { authSession, markExpired, sessionStatus, registerPendingRetry } = useSiweAuth();
   const qc = useQueryClient();
   const params = useParams();
   const communitySlug = (params?.communitySlug as string) || 'guildpass-demo';
+  const { toasts, addToast, dismissToast } = useToasts();
 
   const [pendingPolicyId, setPendingPolicyId] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState("");
@@ -388,6 +390,40 @@ export default function PoliciesPage() {
       setRollbackMessage(`Change reverted: ${safeErrorMessage(err)}`);
 
       if (err instanceof AuthError) {
+        // Capture the policy so we can replay it once re-auth succeeds.
+        const capturedPolicy = policy;
+        registerPendingRetry(
+          async (freshSession) => {
+            await getApi(address, freshSession.token, communitySlug).updatePolicy(capturedPolicy);
+            setSuccessMessage(`Policy saved for ${capturedPolicy.resourceId}.`);
+            setRollbackMessage("");
+            clearPolicyDraft(capturedPolicy.resourceId);
+            clearPolicyDraft("");
+            setEditingResourceId(null);
+            setShowCreateForm(false);
+            addToast({
+              tone: "success",
+              title: `Policy updated for "${capturedPolicy.resourceId}"`,
+              description: "Policy saved successfully after re-authentication.",
+            });
+            void qc.invalidateQueries({ queryKey: queryKeys.policies.all(communitySlug) });
+          },
+          {
+            onRetryFailure: (retryErr) => {
+              setRollbackMessage(`Retry failed: ${safeErrorMessage(retryErr)}`);
+              addToast({
+                tone: "error",
+                title: "Policy update failed after re-auth",
+                description: safeErrorMessage(retryErr),
+              });
+            },
+          },
+        );
+        addToast({
+          tone: "warning",
+          title: "Session expired — retrying after re-auth",
+          description: "Your admin session expired. Re-authenticate to automatically retry saving the policy.",
+        });
         markExpired();
       }
 
@@ -489,6 +525,7 @@ export default function PoliciesPage() {
     <FeatureGate enabled={features.adminPolicies} name="Access Policies">
       <AdminGuard>
         <div className="space-y-4">
+          <ToastViewport toasts={toasts} onDismiss={dismissToast} />
           {/* Developer Testing Tools (Mock Mode Only) */}
           {config.apiMode === 'mock' && (
             <ScenarioSelector />

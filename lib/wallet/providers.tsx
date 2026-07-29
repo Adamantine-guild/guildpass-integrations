@@ -23,7 +23,7 @@
  * Multi-tab synchronisation — BroadcastChannel
  * ─────────────────────────────────────────────
  * A single named channel (`guildpass:auth`) broadcasts auth-state transitions
- * to every other same-origin tab.  Three message types are emitted:
+ * to every other same-origin tab.  Message types:
  *
  *   { type: 'signed-in',  session: SiweAuthSession }
  *     — Sent after a successful wallet signature.  Peer tabs write the session
@@ -36,6 +36,14 @@
  *   { type: 'signed-out' }
  *     — Sent after an explicit logout or a detected expiry.  Peer tabs clear
  *       their session and transition to the appropriate unauthenticated state.
+ *
+ *   { type: 'request-current-session', address: string }
+ *     — Sent by a tab that, per lib/wallet/refresh-coordination.ts's
+ *       localStorage marker, knows a peer just refreshed but never received
+ *       that peer's 'refreshed' message (e.g. sent before this tab's
+ *       listener existed — BroadcastChannel does not queue/replay missed
+ *       messages). Any tab currently holding a valid session for that
+ *       address responds by re-broadcasting 'refreshed'.
  *
  * The tab that sends a message does NOT receive it via its own listener
  * (BroadcastChannel's same-tab exclusion), so there is no risk of loops.
@@ -54,6 +62,7 @@ import {
   useRef,
   useState,
 } from "react";
+import type { PendingRetryCallback } from "@/lib/wallet/siwe-context";
 import {
   WagmiProvider,
   createConfig,
@@ -71,13 +80,22 @@ import { SiweAuthSession, AdminSessionStatus } from "@/lib/api/types";
 import {
   clearAuthSession,
   getStoredToken,
+  isAccessTokenExpired,
   isRefreshTokenExpired,
   loadAuthSession,
   loadAuthSessionIncludingExpired,
   msUntilRenewal,
+  SESSION_KEY,
   storeAuthSession,
+  subscribeToAuthSessionStorage,
 } from "@/lib/session";
 import { isApiError } from "@/lib/api/errors";
+import {
+  isSessionAlreadyRefreshed,
+  markRefreshCompleted,
+  waitForPeerRefresh,
+  withRefreshLock,
+} from "@/lib/wallet/refresh-coordination";
 import {
   buildSiweMessage,
   deriveSessionStatus,
@@ -96,7 +114,8 @@ const wagmiConfig = createConfig(walletConfig);
 type AuthBroadcastMessage =
   | { type: "signed-in"; session: SiweAuthSession }
   | { type: "refreshed"; session: SiweAuthSession }
-  | { type: "signed-out" };
+  | { type: "signed-out" }
+  | { type: "request-current-session"; address: string };
 
 const AUTH_CHANNEL_NAME = "guildpass:auth";
 
@@ -146,6 +165,19 @@ export interface SiweAuthContextValue {
   logout: () => Promise<void>;
   /** Mark the current session as expired (e.g. after a 401 from the backend). */
   markExpired: () => void;
+  /**
+   * Register a callback to be automatically retried once after the user
+   * successfully re-authenticates following a 401.  The callback receives the
+   * fresh session so it can supply the new token to its API call.
+   *
+   * Only one retry is attempted per registration — if the retried call also
+   * returns a 401 the callback is discarded and a failure toast is shown via
+   * the `onRetryFailure` handler passed in the registration options.
+   */
+  registerPendingRetry: (
+    callback: PendingRetryCallback,
+    options?: { onRetryFailure?: (err: unknown) => void }
+  ) => void;
 }
 
 const queryClient = new QueryClient({
@@ -209,7 +241,22 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
 
   /**
    * Attempt a silent token renewal using the stored refresh token.
-   * On success: updates reducer state, persists session, broadcasts.
+   *
+   * The network call is wrapped in withRefreshLock() so at most one
+   * same-origin tab performs it per address at a time. A tab that was queued
+   * behind the lock re-checks storage first (isSessionAlreadyRefreshed) and
+   * adopts a peer's already-rotated session instead of replaying the (now
+   * invalidated) refresh token. If sessionStorage hasn't caught up yet — the
+   * peer's BroadcastChannel message can be missed entirely if it was sent
+   * before this tab's listener existed, not just delayed — it asks any
+   * listening peer to resend the current session via a
+   * 'request-current-session' message before falling back to its own call.
+   * See lib/wallet/refresh-coordination.ts.
+   *
+   * On success: updates reducer state, persists + broadcasts session (only
+   * the tab that actually called the API does this), and drains any pending
+   * retry callbacks — whether this tab performed the refresh or adopted a
+   * peer's, the session is fresh either way.
    * On failure: transitions to 'expired', broadcasts sign-out.
    */
   const performSilentRefresh = useCallback(
@@ -224,12 +271,50 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
 
       isRefreshing.current = true;
       try {
-        const api = getApi(session.address);
-        const refreshed = await api.siweRefresh(session.refreshToken);
-        storeAuthSession(refreshed);
-        dispatch({ type: "refresh-success", session: refreshed });
-        broadcast({ type: "refreshed", session: refreshed });
-        scheduleRenewal(refreshed);
+        const settled = await withRefreshLock(session.address, async () => {
+          // Re-check whether another tab already refreshed while this tab
+          // waited (or, without Web Locks, raced ahead of it).
+          const current = loadAuthSessionIncludingExpired();
+          if (current && isSessionAlreadyRefreshed(current, session)) {
+            return current;
+          }
+
+          // sessionStorage may not have caught up to a peer's refresh yet.
+          // Ask any listening peer to resend the current session before
+          // assuming this tab needs to perform its own (redundant,
+          // already-invalidated) call.
+          const fromPeer = await waitForPeerRefresh(
+            session.address,
+            session,
+            () => loadAuthSessionIncludingExpired(),
+            () => broadcast({ type: "request-current-session", address: session.address }),
+          );
+          if (fromPeer) {
+            return fromPeer;
+          }
+
+          const api = getApi(session.address);
+          const refreshed = await api.siweRefresh(session.refreshToken!);
+          storeAuthSession(refreshed);
+          markRefreshCompleted(session.address, refreshed.expiresAt);
+          broadcast({ type: "refreshed", session: refreshed });
+          return refreshed;
+        });
+
+        dispatch({ type: "refresh-success", session: settled });
+        scheduleRenewal(settled);
+
+        // A silent refresh also counts as session recovery — drain any pending
+        // retry callbacks that were registered before the 401 was surfaced.
+        const retries = pendingRetriesRef.current;
+        pendingRetriesRef.current = [];
+        for (const entry of retries) {
+          try {
+            await entry.callback(settled);
+          } catch (retryErr) {
+            entry.onRetryFailure?.(retryErr);
+          }
+        }
       } catch {
         // 401 or network failure — session cannot be renewed
         clearAuthSession();
@@ -289,48 +374,89 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
   // ── BroadcastChannel — receive messages from peer tabs ─────────────────────
 
   useEffect(() => {
-    if (typeof window === "undefined" || !("BroadcastChannel" in window))
-      return;
+    if (typeof window === "undefined") return;
 
-    const channel = new BroadcastChannel(AUTH_CHANNEL_NAME);
-    channelRef.current = channel;
-
-    channel.onmessage = (event: MessageEvent<AuthBroadcastMessage>) => {
-      const msg = event.data;
-      if (!msg?.type) return;
-
-      if (msg.type === "signed-in" || msg.type === "refreshed") {
-        const s = msg.session;
-        if (
-          !s ||
-          typeof s.token !== "string" ||
-          !s.token.trim() ||
-          typeof s.address !== "string" ||
-          !s.address.trim() ||
-          typeof s.expiresAt !== "string" ||
-          !s.expiresAt.trim()
-        ) {
-          return;
-        }
-        // If a wallet is currently connected in this tab, discard sessions for other addresses
-        if (address && s.address.toLowerCase() !== address.toLowerCase()) {
-          return;
-        }
-        storeAuthSession(s);
-        dispatch({ type: "restore", session: s });
-        scheduleRenewal(s);
-      } else if (msg.type === "signed-out") {
+    const applyIncomingSession = (session: SiweAuthSession | null) => {
+      if (!session) {
         cancelRenewal();
         clearAuthSession();
         dispatch({ type: "clear" });
+        return;
+      }
+      if (
+        typeof session.token !== "string" ||
+        !session.token.trim() ||
+        typeof session.address !== "string" ||
+        !session.address.trim() ||
+        typeof session.expiresAt !== "string" ||
+        !session.expiresAt.trim()
+      ) {
+        return;
+      }
+      // If a wallet is currently connected in this tab, discard sessions for other addresses
+      if (address && session.address.toLowerCase() !== address.toLowerCase()) {
+        return;
+      }
+      storeAuthSession(session);
+      dispatch({ type: "restore", session });
+      scheduleRenewal(session);
+    };
+
+    const onStorageMessage = (event: StorageEvent) => {
+      if (event.key && event.key !== SESSION_KEY) return;
+      if (event.newValue === null) {
+        applyIncomingSession(null);
+        return;
+      }
+      try {
+        const parsed = JSON.parse(event.newValue ?? "") as SiweAuthSession;
+        applyIncomingSession(parsed);
+      } catch {
+        // Ignore malformed peer-session payloads.
       }
     };
 
+    const unsubscribeStorage = subscribeToAuthSessionStorage(onStorageMessage);
+
+    if ("BroadcastChannel" in window) {
+      const channel = new BroadcastChannel(AUTH_CHANNEL_NAME);
+      channelRef.current = channel;
+
+      channel.onmessage = (event: MessageEvent<AuthBroadcastMessage>) => {
+        const msg = event.data;
+        if (!msg?.type) return;
+
+        if (msg.type === "signed-in" || msg.type === "refreshed") {
+          applyIncomingSession(msg.session);
+        } else if (msg.type === "signed-out") {
+          applyIncomingSession(null);
+        } else if (msg.type === "request-current-session") {
+          // A peer missed our (or another tab's) 'refreshed' broadcast —
+          // BroadcastChannel doesn't queue/replay messages sent before a
+          // listener existed. If we currently hold a valid session for the
+          // requested address, resend it.
+          const current = loadAuthSessionIncludingExpired();
+          if (
+            current &&
+            current.address.toLowerCase() === msg.address.toLowerCase() &&
+            !isAccessTokenExpired(current)
+          ) {
+            broadcast({ type: "refreshed", session: current });
+          }
+        }
+      };
+
+      return () => {
+        unsubscribeStorage();
+        channel.close();
+        channelRef.current = null;
+      };
+    }
+
     return () => {
-      channel.close();
-      channelRef.current = null;
+      unsubscribeStorage();
     };
-  }, [address, cancelRenewal, scheduleRenewal]);
+  }, [address, broadcast, cancelRenewal, scheduleRenewal]);
 
   // ── Invalidation event from same tab (lib/session.ts fires this) ───────────
 
@@ -451,6 +577,30 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, [chainId]);
 
+  // ── Pending-retry queue ──────────────────────────────────────────────────────
+  //
+  // When a mutation fails with 401, it may register a retry callback here
+  // before calling markExpired().  After a successful re-auth, signIn() drains
+  // this queue by invoking each callback with the fresh session.  A second 401
+  // on the retry call invokes the registered onRetryFailure handler instead of
+  // looping forever.
+
+  type RetryEntry = {
+    callback: PendingRetryCallback;
+    onRetryFailure?: (err: unknown) => void;
+  };
+  const pendingRetriesRef = useRef<RetryEntry[]>([]);
+
+  const registerPendingRetry = useCallback(
+    (callback: PendingRetryCallback, options?: { onRetryFailure?: (err: unknown) => void }) => {
+      pendingRetriesRef.current = [
+        ...pendingRetriesRef.current,
+        { callback, onRetryFailure: options?.onRetryFailure },
+      ];
+    },
+    [],
+  );
+
   // ── Sign-in ─────────────────────────────────────────────────────────────────
 
   const signIn = useCallback(async () => {
@@ -489,6 +639,21 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
       dispatch({ type: "sign-in-success", session });
       scheduleRenewal(session);
       broadcast({ type: "signed-in", session });
+
+      // Drain any pending retry callbacks registered before re-auth.
+      // We take the entire queue atomically so a second 401 inside a callback
+      // does not enqueue another retry and cause an infinite loop.
+      const retries = pendingRetriesRef.current;
+      pendingRetriesRef.current = [];
+      for (const entry of retries) {
+        try {
+          await entry.callback(session);
+        } catch (retryErr) {
+          // The retried call failed — invoke the registered failure handler
+          // rather than silently swallowing the error.
+          entry.onRetryFailure?.(retryErr);
+        }
+      }
     } catch (err) {
       dispatch({
         type: "sign-in-error",
@@ -568,6 +733,7 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
       login: signIn, // backward-compat alias
       logout,
       markExpired,
+      registerPendingRetry,
     }),
     [
       state.authSession,
@@ -581,6 +747,7 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
       signIn,
       logout,
       markExpired,
+      registerPendingRetry,
     ],
   );
 
