@@ -111,4 +111,23 @@ export const queryKeys = {
     all: ['moderationReports'] as const,
     detail: (id: string) => ['moderationReport', id] as const,
   },
+
+  // Pending Actions
+  pendingActions: {
+    all: (community: string = 'guildpass-demo') =>
+      features.multiCommunity
+        ? ['pendingActions', community] as const
+        : ['pendingActions'] as const,
+  },
+
+  // Governance
+  governance: {
+    list: (community: string = 'guildpass-demo', filter?: string) =>
+      features.multiCommunity
+        ? ['governance', 'list', community, filter].filter(Boolean) as const
+        : ['governance', 'list', filter].filter(Boolean) as const,
+    detail: (proposalId: string) => ['governance', 'proposal', proposalId] as const,
+    memberVote: (proposalId: string) => ['governance', 'memberVote', proposalId] as const,
+    votes: (proposalId: string) => ['governance', 'votes', proposalId] as const,
+  },
 }

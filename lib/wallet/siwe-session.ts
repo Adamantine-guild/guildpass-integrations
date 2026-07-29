@@ -11,6 +11,7 @@
  */
 
 import type { AdminSessionStatus, SiweAuthSession } from '../api/types'
+import type { AuthMode } from '../config'
 
 export interface SiweSessionState {
   /** The authenticated session, or null if none is held. */
@@ -118,4 +119,32 @@ export function buildSiweMessage(fields: SiweMessageFields): string {
     `Nonce: ${fields.nonce}`,
     `Issued At: ${fields.issuedAt}`,
   ].join('\n')
+}
+
+/**
+ * Validates a session payload received via BroadcastChannel (or the
+ * storage-event fallback) before it is applied to local state.
+ *
+ * Bearer mode requires a non-empty `token` — identical to the inline check
+ * providers.tsx used before this was extracted. Cookie mode never broadcasts
+ * a real token (see providers.tsx's session-scrubbing at the sign-in/refresh
+ * boundary), so the token check is skipped there; `address`/`expiresAt` are
+ * still required in both modes since a payload missing those is malformed
+ * regardless of auth mode.
+ */
+export function isValidBroadcastSession(
+  session: Pick<SiweAuthSession, 'token' | 'address' | 'expiresAt'> | null | undefined,
+  authMode: AuthMode,
+): boolean {
+  if (!session) return false
+  const tokenOk =
+    authMode === 'cookie' ||
+    (typeof session.token === 'string' && session.token.trim().length > 0)
+  return (
+    tokenOk &&
+    typeof session.address === 'string' &&
+    session.address.trim().length > 0 &&
+    typeof session.expiresAt === 'string' &&
+    session.expiresAt.trim().length > 0
+  )
 }

@@ -1,37 +1,149 @@
 "use client";
 
-import { useAccount, useConnect, useDisconnect, injected } from "wagmi";
+import { useState, useCallback, useEffect } from "react";
+import { Copy, Check } from "lucide-react";
+import { useAccount, useConnect, useDisconnect } from "wagmi";
 import { Button } from "@/components/ui/button";
 import { useSiweAuth } from "@/lib/wallet/providers";
 import { AddressText } from "./address-text";
+import { hasInjectedWallet, walletConfig } from "@/lib/wallet/config";
+
+function CopyAddressButton({ address }: { address?: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = useCallback(async () => {
+    if (!address) return;
+    try {
+      await navigator.clipboard.writeText(address);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error("Failed to copy", err);
+    }
+  }, [address]);
+
+  if (!address) return null;
+
+  return (
+    <button
+      onClick={handleCopy}
+      className="inline-flex h-6 w-6 items-center justify-center rounded-md hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring transition-colors relative"
+      aria-label="Copy address"
+      title={copied ? "Copied!" : "Copy address"}
+    >
+      {copied ? (
+        <Check className="h-3.5 w-3.5 text-emerald-500" />
+      ) : (
+        <Copy className="h-3.5 w-3.5 text-muted-foreground" />
+      )}
+      {copied && (
+        <span className="absolute -top-8 left-1/2 -translate-x-1/2 rounded bg-foreground px-2 py-1 text-[10px] font-medium text-background shadow-sm whitespace-nowrap z-10 pointer-events-none animate-in fade-in zoom-in duration-200">
+          Copied!
+        </span>
+      )}
+    </button>
+  );
+}
 
 export function ConnectButton() {
   const { isConnected, address } = useAccount();
-  const { connect, isPending: isConnecting } = useConnect();
+  const { connect, connectors, isPending: isConnecting } = useConnect();
   const { disconnect } = useDisconnect();
   const { sessionStatus, isSigningIn, signIn, logout, error } = useSiweAuth();
+  const [showConnectorPicker, setShowConnectorPicker] = useState(false);
+  const [injectedAvailable, setInjectedAvailable] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    setInjectedAvailable(hasInjectedWallet());
+  }, []);
+
+  const hasMultipleConnectors = walletConfig.connectorNames.length > 1
+  const showFallbackPrompt = injectedAvailable === false && hasMultipleConnectors
+
+  function handleConnect(connectorId: string) {
+    const connector = connectors.find((c) => c.id === connectorId)
+    if (connector) {
+      connect({ connector })
+      setShowConnectorPicker(false)
+    }
+  }
+
+  function handleQuickConnect() {
+    if (injectedAvailable) {
+      const injectedConnector = connectors.find((c) => c.id === 'injected')
+      if (injectedConnector) {
+        connect({ connector: injectedConnector })
+        return
+      }
+    }
+    if (hasMultipleConnectors) {
+      setShowConnectorPicker(true)
+    }
+  }
 
   if (!isConnected) {
+    if (showConnectorPicker) {
+      return (
+        <div className="flex flex-col gap-1">
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {connectors.map((connector) => (
+              <Button
+                key={connector.id}
+                id={`wallet-connect-${connector.id}`}
+                size="sm"
+                variant={connector.id === 'injected' ? 'default' : 'outline'}
+                onClick={() => handleConnect(connector.id)}
+                disabled={isConnecting}
+                aria-busy={isConnecting}
+              >
+                {isConnecting ? "Connecting…" : connector.name}
+              </Button>
+            ))}
+            <Button
+              id="wallet-connect-cancel"
+              variant="ghost"
+              size="sm"
+              onClick={() => setShowConnectorPicker(false)}
+            >
+              Cancel
+            </Button>
+          </div>
+        </div>
+      )
+    }
+
     return (
-      <Button
-        id="wallet-connect-btn"
-        size="sm"
-        onClick={() => connect({ connector: injected() })}
-        disabled={isConnecting}
-        aria-busy={isConnecting}
-      >
-        {isConnecting ? "Connecting…" : "Connect Wallet"}
-      </Button>
+      <div className="flex flex-col gap-1">
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <Button
+            id="wallet-connect-btn"
+            size="sm"
+            onClick={handleQuickConnect}
+            disabled={isConnecting}
+            aria-busy={isConnecting}
+          >
+            {isConnecting ? "Connecting…" : showFallbackPrompt ? "Connect Wallet" : "Connect Wallet"}
+          </Button>
+        </div>
+        {showFallbackPrompt && (
+          <p className="max-w-xs text-right text-xs text-muted-foreground">
+            No injected wallet detected — another connector may be used.
+          </p>
+        )}
+      </div>
     );
   }
 
   if (sessionStatus === "authenticated") {
     return (
       <div className="flex flex-wrap items-center justify-end gap-2">
-        <AddressText
-          address={address}
-          className="text-xs text-muted-foreground"
-        />
+        <div className="flex items-center gap-1">
+          <AddressText
+            address={address}
+            className="text-xs text-muted-foreground"
+          />
+          <CopyAddressButton address={address} />
+        </div>
         <span
           id="siwe-authenticated-badge"
           role="status"
@@ -69,10 +181,13 @@ export function ConnectButton() {
     return (
       <div className="flex max-w-full flex-col items-end gap-1">
         <div className="flex flex-wrap items-center justify-end gap-2">
-          <AddressText
-            address={address}
-            className="text-xs text-muted-foreground"
-          />
+          <div className="flex items-center gap-1">
+            <AddressText
+              address={address}
+              className="text-xs text-muted-foreground"
+            />
+            <CopyAddressButton address={address} />
+          </div>
           <span
             id="siwe-expired-badge"
             role="status"
@@ -118,10 +233,13 @@ export function ConnectButton() {
   return (
     <div className="flex max-w-full flex-col items-end gap-1">
       <div className="flex flex-wrap items-center justify-end gap-2">
-        <AddressText
-          address={address}
-          className="text-xs text-muted-foreground"
-        />
+        <div className="flex items-center gap-1">
+          <AddressText
+            address={address}
+            className="text-xs text-muted-foreground"
+          />
+          <CopyAddressButton address={address} />
+        </div>
         <Button
           id="wallet-signin-btn"
           size="sm"

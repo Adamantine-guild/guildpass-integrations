@@ -35,11 +35,13 @@ import {
   MemberRow,
   Membership,
   MembershipTier,
+  MetaResponse,
   PaginatedMembers,
   Resource,
   ResourceLookupResult,
   Role,
   Session,
+  SessionStatus,
   SiweAuthSession,
   WalletVerification,
   WebhookEventLog,
@@ -51,6 +53,17 @@ import {
   AdminEventFilterParams,
   Paginated,
   WebhookEvent,
+  EXPECTED_API_VERSION,
+  PendingAction,
+  ApprovalConfig,
+  PendingActionType,
+  PendingActionPayload,
+  Proposal,
+  Vote,
+  VoteChoice,
+  VotesSummary,
+  ProposalStatus,
+  ProposalType,
 } from './types'
 import { ApiError } from './errors'
 import {
@@ -59,12 +72,48 @@ import {
   clearPersistedState,
   LS_KEY,
 } from './mock-storage'
+import { config } from '../config'
 
 /** Read once at module load so it is stable across renders. */
 const MOCK_SESSION_STATE =
   (typeof process !== 'undefined' &&
     process.env.NEXT_PUBLIC_MOCK_SESSION_STATE) ||
   ''
+
+// ── Mock cookie-session simulation (cookie auth mode) ───────────────────────
+//
+// There is no real backend in mock mode, so a real httpOnly cookie can't be
+// set. This uses a plain, non-httpOnly document.cookie entry to simulate
+// "the browser is holding a session cookie" — an honest simulation boundary
+// (mock JS genuinely cannot set an httpOnly cookie either). It intentionally
+// never touches sessionStorage, so cookie-mode session state is provably
+// independent of the bearer-token sessionStorage path in lib/session.ts.
+// Only ever written/read when config.authMode === 'cookie', so bearer-mode
+// mock runs get zero new side effects.
+
+const MOCK_SESSION_COOKIE = 'gp_mock_session'
+
+function setMockSessionCookie(address: string, expiresAt: string): void {
+  if (typeof document === 'undefined') return
+  const value = encodeURIComponent(`${address}|${expiresAt}`)
+  document.cookie = `${MOCK_SESSION_COOKIE}=${value}; path=/; SameSite=Lax`
+}
+
+function clearMockSessionCookie(): void {
+  if (typeof document === 'undefined') return
+  document.cookie = `${MOCK_SESSION_COOKIE}=; path=/; Max-Age=0; SameSite=Lax`
+}
+
+function readMockSessionCookie(): { address: string; expiresAt: string } | null {
+  if (typeof document === 'undefined') return null
+  const row = document.cookie
+    .split('; ')
+    .find((entry) => entry.startsWith(`${MOCK_SESSION_COOKIE}=`))
+  if (!row) return null
+  const raw = decodeURIComponent(row.slice(MOCK_SESSION_COOKIE.length + 1))
+  const [address, expiresAt] = raw.split('|')
+  return address && expiresAt ? { address, expiresAt } : null
+}
 
 const DEFAULT_COMMUNITY: Community = {
   id: 'guildpass-demo',
@@ -242,14 +291,30 @@ const MOCK_ANALYTICS_SUMMARY: AnalyticsSummary = {
 
 const DEFAULT_MEMBER_STORE: Record<string, { membership: Membership; roles: Role[]; profile: MemberProfile }> = {}
 
+/** Deterministic name pool for seeded members — gives search-by-name something realistic and varied to match against. */
+const SEED_FIRST_NAMES = ['Ada', 'Grace', 'Alan', 'Katherine', 'Linus', 'Margaret', 'Dennis', 'Radia', 'Barbara', 'Vint', 'Hedy', 'Claude']
+const SEED_LAST_NAMES = ['Lovelace', 'Hopper', 'Turing', 'Johnson', 'Torvalds', 'Hamilton', 'Ritchie', 'Perlman', 'Liskov', 'Cerf', 'Lamarr', 'Shannon']
+
 // Populate 50,000 synthetic members to exercise the scale scenario
 for (let i = 0; i < 50000; i++) {
   const hex = (i + 1).toString(16).padStart(40, '0')
   const address = `0x${hex}`
   const tier: MembershipTier = i % 10 < 3 ? 'pro' : i % 10 < 7 ? 'standard' : 'free'
   const active = i % 5 !== 0
-  const roles: Role[] = i === 0 ? ['admin'] : i % 50 === 0 ? ['moderator'] : ['member']
-  
+  // i % 777 (excluding i === 0, already 'admin') seeds a small, deterministic
+  // set of multi-role members so role-filter "matches any assigned role"
+  // behavior has real examples to exercise, without disturbing the existing
+  // single-admin / every-50th-moderator distribution other tests rely on.
+  const roles: Role[] =
+    i === 0
+      ? ['admin']
+      : i % 777 === 0
+        ? ['moderator', 'member']
+        : i % 50 === 0
+          ? ['moderator']
+          : ['member']
+  const displayName = `${SEED_FIRST_NAMES[i % SEED_FIRST_NAMES.length]} ${SEED_LAST_NAMES[Math.floor(i / SEED_FIRST_NAMES.length) % SEED_LAST_NAMES.length]}`
+
   DEFAULT_MEMBER_STORE[address] = {
     membership: {
       address,
@@ -259,7 +324,7 @@ for (let i = 0; i < 50000; i++) {
     roles,
     profile: {
       address,
-      displayName: `Synthetic Member ${i + 1}`,
+      displayName,
       badges: i % 100 === 0 ? ['Early Adopter'] : [],
     },
   }
@@ -389,6 +454,9 @@ export interface CommunityState {
   policies: AccessPolicy[]
   webhookEvents: WebhookEventLog[]
   memberStore: Record<string, { membership: Membership; roles: Role[]; profile: MemberProfile }>
+  pendingActions: PendingAction[]
+  proposals: Record<string, Proposal>
+  votes: Record<string, Vote>  // Maps vote ID to Vote
 }
 
 export let communityStates: Record<string, CommunityState> = {}
@@ -401,7 +469,15 @@ export function getCommunityState(communityId: string = 'guildpass-demo'): Commu
       resources: [...(MOCK_RESOURCES[normalizedId] ?? [])],
       policies: [...(MOCK_POLICIES[normalizedId] ?? [])],
       webhookEvents: [...DEFAULT_WEBHOOK_EVENTS],
-      memberStore: { ...(MOCK_MEMBER_STORES[normalizedId] ?? {}) }
+      memberStore: Object.fromEntries(
+        Object.entries(MOCK_MEMBER_STORES[normalizedId] ?? {}).map(([k, v]) => [
+          k,
+          { ...v, roles: [...v.roles], membership: { ...v.membership }, profile: { ...v.profile } }
+        ])
+      ),
+      pendingActions: [],
+      proposals: {},
+      votes: {},
     }
   }
   return communityStates[normalizedId]
@@ -456,6 +532,7 @@ const initPromise = loadPersistedState().then((persisted) => {
       policies: (persisted as any).policies || [...DEFAULT_POLICIES],
       webhookEvents: (persisted as any).webhookEvents || [...DEFAULT_WEBHOOK_EVENTS],
       memberStore: (persisted as any).memberStore || { ...DEFAULT_MEMBER_STORE },
+      pendingActions: (persisted as any).pendingActions || [],
     }
   }
   for (const cid of Object.keys(MOCK_COMMUNITIES)) {
@@ -499,6 +576,7 @@ type MockScenario =
   | 'denied-resource'
   | 'admin-session-expired'
   | 'no-roles'
+  | 'multiple-roles'
   | 'multiple-communities'
   | 'concurrent-policy-edit'
   | 'customized-profile'
@@ -586,6 +664,8 @@ export async function resetMockData() {
     getCommunityState(cid)
   }
   mockRoleMutationShouldFail = false
+  mockResourceFetchFailure = false
+  mockResourceFetchDelayMs = 0
   await clearPersistedState()
 }
 
@@ -681,6 +761,29 @@ export async function applyMockScenario(scenario: MockScenario, address: string 
           address,
           displayName: 'No Roles User',
           badges: ['New User'],
+        },
+      }
+      break
+
+    case 'multiple-roles':
+      // 'admin' is included deliberately: it's the only role that changes
+      // nav/admin-console visibility in this codebase (every first-party
+      // module in lib/admin-modules/modules/*.ts requires it), so leaving it
+      // out would make role-aware nav unverifiable. It does not bypass
+      // tier-gated resource access (lib/api/access-decision.ts evaluates
+      // tier independently of role), so alpha/pro-reports stay genuinely
+      // tier-gated for this member.
+      demoState.memberStore[address] = {
+        membership: {
+          address,
+          tier: 'pro',
+          active: true,
+        },
+        roles: ['admin', 'moderator', 'member'],
+        profile: {
+          address,
+          displayName: 'Multi-Role Member',
+          badges: ['Admin', 'Moderator'],
         },
       }
       break
@@ -822,6 +925,47 @@ export function setMockRoleMutationFailure(shouldFail: boolean): void {
   mockRoleMutationShouldFail = shouldFail
 }
 
+/**
+ * When set, the next getResource()/getPolicy() call(s) simulate an
+ * operational failure instead of succeeding — used to verify loading and
+ * error-boundary behaviour in mock mode without a real backend.
+ * 'network' simulates a transport-level failure (fetch rejection);
+ * 'server' simulates an HTTP 5xx. Reset by resetMockData().
+ */
+let mockResourceFetchFailure: 'network' | 'server' | false = false
+
+/** Optional artificial delay (ms) applied before getResource()/getPolicy() resolve or fail. */
+let mockResourceFetchDelayMs = 0
+
+/**
+ * Toggle a simulated operational failure for getResource()/getPolicy().
+ * Mock-only — LiveAccessApi has no equivalent. Intended for tests and the
+ * /developer page, never application code.
+ */
+export function setMockResourceFetchFailure(mode: 'network' | 'server' | false): void {
+  mockResourceFetchFailure = mode
+}
+
+/** Set an artificial delay (ms) before getResource()/getPolicy() settle. Pass 0 to disable. */
+export function setMockResourceFetchDelay(ms: number): void {
+  mockResourceFetchDelayMs = ms
+}
+
+function mockResourceFetchError(): ApiError {
+  return mockResourceFetchFailure === 'network'
+    ? new ApiError({
+        code: 'network_error',
+        safeMessage: 'Unable to connect. Please check your connection and try again.',
+        retryable: true,
+      })
+    : new ApiError({
+        status: 500,
+        code: 'server_error',
+        safeMessage: 'The server could not complete the request. Please try again.',
+        retryable: true,
+      })
+}
+
 /** Throw a mock 500 ApiError — simulates an ordinary (non-auth) server failure. */
 function throwMockRoleMutationFailure(): never {
   throw new ApiError({
@@ -830,6 +974,22 @@ function throwMockRoleMutationFailure(): never {
     safeMessage: 'Simulated role mutation failure (mock mode).',
     retryable: true,
   })
+}
+
+/**
+ * Override the mock backend's advertised API contract version.
+ * Set to `null` to restore the default (matches EXPECTED_API_VERSION).
+ * When set, `getMeta()` returns this version, which can be used to
+ * simulate an incompatible backend.
+ */
+export let MOCK_META_VERSION_OVERRIDE: string | null = null
+
+/**
+ * Set the mock backend's advertised API contract version. Pass `null` to
+ * restore the default behaviour (matches the frontend's expected version).
+ */
+export function setMockMetaVersion(version: string | null): void {
+  MOCK_META_VERSION_OVERRIDE = version
 }
 
 export class MockAccessApi implements AccessApi {
@@ -845,6 +1005,15 @@ export class MockAccessApi implements AccessApi {
   ) {
     this.address = address
     this.communityId = communityId ?? 'guildpass-demo'
+  }
+
+  async getMeta(_signal?: AbortSignal): Promise<MetaResponse> {
+    await initPromise
+    return {
+      version: MOCK_META_VERSION_OVERRIDE ?? EXPECTED_API_VERSION,
+      commit: 'mock-commit-sha',
+      uptime: (typeof process !== 'undefined' && typeof process.uptime === 'function') ? Math.floor(process.uptime()) : 0,
+    }
   }
 
   // ── Read-only ──────────────────────────────────────────────────────────────
@@ -940,6 +1109,7 @@ export class MockAccessApi implements AccessApi {
       roles: m.roles,
       tier: m.membership.tier,
       active: m.membership.active,
+      ...(m.profile.displayName ? { displayName: m.profile.displayName } : {}),
     }))
 
     if (!params) {
@@ -977,6 +1147,10 @@ export class MockAccessApi implements AccessApi {
 
   async getResource(id: string, _signal?: AbortSignal): Promise<ResourceLookupResult> {
     await initPromise
+    if (mockResourceFetchDelayMs > 0) await new Promise((r) => setTimeout(r, mockResourceFetchDelayMs))
+    if (mockResourceFetchFailure) {
+      return { status: 'error', error: mockResourceFetchError() }
+    }
     const state = getCommunityState(this.communityId)
     const r = state.resources.find((x) => x.id === id)
     return r
@@ -986,6 +1160,10 @@ export class MockAccessApi implements AccessApi {
 
   async getPolicy(resourceId: string, _signal?: AbortSignal): Promise<AccessPolicy | null> {
     await initPromise
+    if (mockResourceFetchDelayMs > 0) await new Promise((r) => setTimeout(r, mockResourceFetchDelayMs))
+    if (mockResourceFetchFailure) {
+      throw mockResourceFetchError()
+    }
     const state = getCommunityState(this.communityId)
     const p = state.policies.find((x) => x.resourceId === resourceId)
     return p ? { ...p, roles: p.roles ?? [] } : null
@@ -1066,28 +1244,116 @@ export class MockAccessApi implements AccessApi {
     )
   }
 
-  async assignRole(address: string, role: Role): Promise<void> {
+  async getPendingActions(): Promise<PendingAction[]> {
+    await initPromise
+    return getCommunityState(this.communityId).pendingActions
+  }
+
+  async approveAction(id: string): Promise<void> {
+    await initPromise
+    const state = getCommunityState(this.communityId)
+    const action = state.pendingActions.find(a => a.id === id)
+    if (!action || action.status !== 'pending') return
+    
+    const adminAddr = this.address || '0x0000000000000000000000000000000000000001'
+    if (!action.currentApprovals.includes(adminAddr)) {
+      action.currentApprovals.push(adminAddr)
+    }
+
+    if (action.currentApprovals.length >= action.requiredApprovals) {
+      if (action.type === 'assignRole') {
+        const data = ensureAddress(action.payload.address!, this.communityId)
+        if (data && !data.roles.includes(action.payload.role! as Role)) data.roles.push(action.payload.role! as Role)
+      } else if (action.type === 'removeRole') {
+        const data = state.memberStore[action.payload.address!]
+        if (data) data.roles = data.roles.filter(r => r !== action.payload.role!)
+      } else if (action.type === 'updatePolicy') {
+        const result = validatePolicy(action.payload.policy!)
+        if (result.valid) {
+           const idx = state.policies.findIndex(p => p.resourceId === result.value.resourceId)
+           const updatedPolicy = { ...result.value, updatedAt: new Date().toISOString() }
+           if (idx >= 0) state.policies[idx] = updatedPolicy
+           else state.policies.push(updatedPolicy)
+        }
+      }
+      action.status = 'executed'
+    }
+    schedulePersist()
+  }
+
+  async rejectAction(id: string): Promise<void> {
+    await initPromise
+    const state = getCommunityState(this.communityId)
+    const action = state.pendingActions.find(a => a.id === id)
+    if (action && action.status === 'pending') {
+      action.status = 'rejected'
+      schedulePersist()
+    }
+  }
+
+  async updateApprovalConfig(config: ApprovalConfig): Promise<void> {
+    await initPromise
+    const state = getCommunityState(this.communityId)
+    ;(state.community as any).approvalConfig = config
+    schedulePersist()
+  }
+
+  private _checkApproval(type: PendingActionType, payload: PendingActionPayload): { status: 'executed' | 'pending'; pendingActionId?: string } {
+    const state = getCommunityState(this.communityId)
+    const config = (state.community as any).approvalConfig
+    const required = config ? config[type] || 1 : 1
+    
+    if (required > 1) {
+      const pendingActionId = `pa_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`
+      const adminAddr = this.address || '0x0000000000000000000000000000000000000001'
+      state.pendingActions.push({
+        id: pendingActionId,
+        type,
+        payload,
+        proposer: adminAddr,
+        requiredApprovals: required,
+        currentApprovals: [adminAddr],
+        status: 'pending',
+        createdAt: new Date().toISOString()
+      })
+      schedulePersist()
+      return { status: 'pending', pendingActionId }
+    }
+    return { status: 'executed' }
+  }
+
+  async assignRole(address: string, role: Role): Promise<{ status: 'executed' | 'pending'; pendingActionId?: string }> {
     await initPromise
     if (MOCK_SESSION_STATE === 'expired') throwMockUnauthorized()
     if (mockRoleMutationShouldFail) throwMockRoleMutationFailure()
+    
+    const check = this._checkApproval('assignRole', { address, role })
+    if (check.status === 'pending') return check
+
     const data = ensureAddress(address, this.communityId)
-    if (!data) return
+    if (!data) return { status: 'executed' }
     if (!data.roles.includes(role)) data.roles.push(role)
     schedulePersist()
+    return { status: 'executed' }
   }
 
-  async removeRole(address: string, role: Role): Promise<void> {
+  async removeRole(address: string, role: Role): Promise<{ status: 'executed' | 'pending'; pendingActionId?: string }> {
     await initPromise
     if (MOCK_SESSION_STATE === 'expired') throwMockUnauthorized()
     if (mockRoleMutationShouldFail) throwMockRoleMutationFailure()
+    
+    const check = this._checkApproval('removeRole', { address, role })
+    if (check.status === 'pending') return check
+
     const state = getCommunityState(this.communityId)
     const data = state.memberStore[address]
-    if (!data) return
+    if (!data) return { status: 'executed' }
     data.roles = data.roles.filter((r) => r !== role)
     schedulePersist()
+    return { status: 'executed' }
   }
 
-  async updatePolicy(policy: AccessPolicy): Promise<void> {
+  async updatePolicy(policy: AccessPolicy): Promise<{ status: 'executed' | 'pending'; pendingActionId?: string }> {
     await initPromise
     if (MOCK_SESSION_STATE === 'expired') throwMockUnauthorized()
     const result = validatePolicy(policy)
@@ -1103,7 +1369,6 @@ export class MockAccessApi implements AccessApi {
     if (idx >= 0 && policy.updatedAt) {
       const existingPolicy = state.policies[idx]
       if (existingPolicy.updatedAt && existingPolicy.updatedAt !== policy.updatedAt) {
-        // Policy has been modified by another admin - return 409 Conflict
         throw new ApiError({
           status: 409,
           code: 'conflict',
@@ -1116,6 +1381,9 @@ export class MockAccessApi implements AccessApi {
       }
     }
     
+    const check = this._checkApproval('updatePolicy', { policy })
+    if (check.status === 'pending') return check
+
     // Update policy with new timestamp
     const updatedPolicy = {
       ...result.value,
@@ -1125,6 +1393,7 @@ export class MockAccessApi implements AccessApi {
     if (idx >= 0) state.policies[idx] = updatedPolicy
     else state.policies.push(updatedPolicy)
     schedulePersist()
+    return { status: 'executed' }
   }
 
   async listAdminEvents(params?: AdminEventFilterParams): Promise<Paginated<WebhookEvent>> {
@@ -1202,11 +1471,16 @@ export class MockAccessApi implements AccessApi {
         : new Date(Date.now() + 60 * 60 * 1000).toISOString()
 
     const refreshExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
+    const resolvedAddress = this.address ?? '0x0000000000000000000000000000000000000000'
+
+    if (config.authMode === 'cookie') {
+      setMockSessionCookie(resolvedAddress, expiresAt)
+    }
 
     return {
       isAuthenticated: true,
       token: `mock-jwt-${randomHex()}`,
-      address: this.address ?? '0x0000000000000000000000000000000000000000',
+      address: resolvedAddress,
       expiresAt,
       refreshToken: `mock-refresh-${randomHex()}`,
       refreshExpiresAt,
@@ -1215,6 +1489,13 @@ export class MockAccessApi implements AccessApi {
 
   async siweRefresh(refreshToken: string): Promise<SiweAuthSession> {
     await initPromise
+    // e2e instrumentation only: mock mode makes no real network request for
+    // siweRefresh, so cross-tab race tests need some observable signal for
+    // "how many refresh attempts actually happened" per tab.
+    if (typeof window !== 'undefined') {
+      (window as any).__mockSiweRefreshCalls__ =
+        ((window as any).__mockSiweRefreshCalls__ ?? 0) + 1
+    }
     if (MOCK_SESSION_STATE === 'expired' || MOCK_SESSION_STATE === 'unauthenticated') {
       throw new ApiError({
         status: 401,
@@ -1223,7 +1504,17 @@ export class MockAccessApi implements AccessApi {
       })
     }
 
-    if (!refreshToken || !refreshToken.startsWith('mock-refresh-')) {
+    if (config.authMode === 'cookie') {
+      // Cookie mode has no refresh-token string for the frontend to hold —
+      // the (mock) session cookie is the only refreshability signal.
+      if (!readMockSessionCookie()) {
+        throw new ApiError({
+          status: 401,
+          code: 'unauthorized',
+          safeMessage: 'Invalid refresh token.',
+        })
+      }
+    } else if (!refreshToken || !refreshToken.startsWith('mock-refresh-')) {
       throw new ApiError({
         status: 401,
         code: 'unauthorized',
@@ -1233,19 +1524,48 @@ export class MockAccessApi implements AccessApi {
 
     const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString()
     const refreshExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
+    const resolvedAddress = this.address ?? '0x0000000000000000000000000000000000000000'
+
+    if (config.authMode === 'cookie') {
+      setMockSessionCookie(resolvedAddress, expiresAt)
+    }
 
     return {
       isAuthenticated: true,
       token: `mock-jwt-${randomHex()}`,
-      address: this.address ?? '0x0000000000000000000000000000000000000000',
+      address: resolvedAddress,
       expiresAt,
       refreshToken: `mock-refresh-${randomHex()}`,
       refreshExpiresAt,
     }
   }
 
-  async siweLogout(_token: string): Promise<void> {
+  async siweLogout(_token?: string): Promise<void> {
     await initPromise
+    if (config.authMode === 'cookie') {
+      clearMockSessionCookie()
+    }
+  }
+
+  /**
+   * Mock counterpart to LiveAccessApi.getSessionStatus(). Reads only the
+   * simulated document.cookie session marker set by siweVerify/siweRefresh —
+   * never sessionStorage — so cookie-mode session state stays deterministic
+   * and independent of the bearer-token sessionStorage path.
+   */
+  async getSessionStatus(_signal?: AbortSignal): Promise<SessionStatus> {
+    await initPromise
+    if (MOCK_SESSION_STATE === 'unauthenticated') {
+      return { authenticated: false }
+    }
+    const cookie = readMockSessionCookie()
+    if (!cookie) {
+      return { authenticated: false }
+    }
+    if (MOCK_SESSION_STATE === 'expired' || new Date(cookie.expiresAt).getTime() <= Date.now()) {
+      return { authenticated: false }
+    }
+    return { authenticated: true, address: cookie.address, expiresAt: cookie.expiresAt }
   }
 
   async verifyWallet(_address: string, _signal?: AbortSignal): Promise<WalletVerification> {
@@ -1406,6 +1726,392 @@ export class MockAccessApi implements AccessApi {
         Object.assign(report, updates)
       }
       report.updatedAt = new Date().toISOString()
+    }
+  }
+
+  // ── Governance ──
+  async listProposals(params?: { filter?: ProposalStatus | ProposalType; limit?: number; cursor?: string }, _signal?: AbortSignal): Promise<Proposal[]> {
+    await initPromise
+    const state = getCommunityState(this.communityId)
+    let proposals = Object.values(state.proposals)
+
+    if (params?.filter) {
+      // Filter by status or type
+      const isStatus = ['draft', 'active', 'closed', 'resolved'].includes(params.filter)
+      if (isStatus) {
+        proposals = proposals.filter(p => p.status === params.filter)
+      } else {
+        proposals = proposals.filter(p => p.type === params.filter)
+      }
+    }
+
+    // Sort by creation date, newest first
+    proposals.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+
+    const limit = params?.limit ?? 20
+    const cursor = params?.cursor ? parseInt(params.cursor, 10) : 0
+    return proposals.slice(cursor, cursor + limit)
+  }
+
+  async getProposal(id: string, _signal?: AbortSignal): Promise<Proposal | null> {
+    await initPromise
+    const state = getCommunityState(this.communityId)
+    return state.proposals[id] ?? null
+  }
+
+  async getMemberVote(proposalId: string, _signal?: AbortSignal): Promise<Vote | null> {
+    await initPromise
+    if (!this.address) return null
+
+    const state = getCommunityState(this.communityId)
+    const vote = Object.values(state.votes).find(
+      v => v.proposalId === proposalId && v.voter.toLowerCase() === this.address!.toLowerCase()
+    )
+    return vote ?? null
+  }
+
+  async listProposalVotes(proposalId: string, params?: { limit?: number; cursor?: string }, _signal?: AbortSignal): Promise<Vote[]> {
+    await initPromise
+    const state = getCommunityState(this.communityId)
+    let votes = Object.values(state.votes).filter(v => v.proposalId === proposalId)
+
+    // Sort by vote time, newest first
+    votes.sort((a, b) => new Date(b.votedAt).getTime() - new Date(a.votedAt).getTime())
+
+    const limit = params?.limit ?? 20
+    const cursor = params?.cursor ? parseInt(params.cursor, 10) : 0
+    return votes.slice(cursor, cursor + limit)
+  }
+
+  async castVote(proposalId: string, choice: VoteChoice): Promise<Vote> {
+    await initPromise
+    if (MOCK_SESSION_STATE === 'expired') throwMockUnauthorized()
+    if (!this.address) {
+      throw new ApiError({
+        status: 403,
+        code: 'forbidden',
+        safeMessage: 'Must be authenticated to vote.',
+      })
+    }
+
+    const state = getCommunityState(this.communityId)
+    const proposal = state.proposals[proposalId]
+
+    if (!proposal) {
+      throw new ApiError({
+        status: 404,
+        code: 'not_found',
+        safeMessage: 'Proposal not found.',
+      })
+    }
+
+    if (proposal.status !== 'active') {
+      throw new ApiError({
+        status: 400,
+        code: 'invalid_state',
+        safeMessage: 'Voting is not currently open for this proposal.',
+      })
+    }
+
+    // Check if already voted
+    const existingVoteId = Object.entries(state.votes).find(
+      ([_, v]) => v.proposalId === proposalId && v.voter.toLowerCase() === this.address!.toLowerCase()
+    )?.[0]
+
+    // Get voter's weight based on tier/role
+    const memberData = state.memberStore[this.address]
+    const tier = memberData?.membership.tier ?? 'free'
+    const role = memberData?.roles[0] ?? 'member'
+
+    // Simple weight: free=1, standard=2, pro=3 (tier) × member=1, moderator=2, admin=3 (role)
+    const tierWeight: Record<MembershipTier, number> = { free: 1, standard: 2, pro: 3 }
+    const roleMultiplier: Record<Role, number> = { member: 1, moderator: 2, admin: 3 }
+    const weight = tierWeight[tier] * roleMultiplier[role]
+
+    const vote: Vote = {
+      id: existingVoteId || `vote_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+      proposalId,
+      voter: this.address,
+      choice,
+      weight,
+      voterContext: { tier, role },
+      votedAt: new Date().toISOString(),
+    }
+
+    // Update proposal vote summary
+    if (existingVoteId) {
+      const oldVote = state.votes[existingVoteId]
+      // Remove old vote from summary
+      proposal.votesSummary.totalVotes--
+      proposal.votesSummary.weightsFor -= oldVote.choice === 'for' ? oldVote.weight : 0
+      proposal.votesSummary.weightsAgainst -= oldVote.choice === 'against' ? oldVote.weight : 0
+      proposal.votesSummary.weightsAbstain -= oldVote.choice === 'abstain' ? oldVote.weight : 0
+    }
+
+    // Add new vote to summary
+    proposal.votesSummary.totalVotes++
+    if (choice === 'for') proposal.votesSummary.weightsFor += weight
+    else if (choice === 'against') proposal.votesSummary.weightsAgainst += weight
+    else proposal.votesSummary.weightsAbstain += weight
+
+    // Recalculate percentages
+    if (proposal.totalWeight > 0) {
+      proposal.votesSummary.percentFor = Math.round((proposal.votesSummary.weightsFor / proposal.totalWeight) * 100)
+      proposal.votesSummary.percentAgainst = Math.round((proposal.votesSummary.weightsAgainst / proposal.totalWeight) * 100)
+    }
+
+    state.votes[vote.id] = vote
+    schedulePersist()
+
+    return vote
+  }
+
+  async createProposal(proposal: Omit<Proposal, 'id' | 'createdAt' | 'status' | 'communityId' | 'votesSummary' | 'totalWeight'>): Promise<Proposal> {
+    await initPromise
+    if (MOCK_SESSION_STATE === 'expired') throwMockUnauthorized()
+
+    // Check if user is admin
+    if (!this.address || !getCommunityState(this.communityId).memberStore[this.address]?.roles.includes('admin')) {
+      throw new ApiError({
+        status: 403,
+        code: 'forbidden',
+        safeMessage: 'Only admins can create proposals.',
+      })
+    }
+
+    const state = getCommunityState(this.communityId)
+
+    // Calculate total weight (sum of all member weights)
+    let totalWeight = 0
+    Object.values(state.memberStore).forEach(member => {
+      const tierWeight: Record<MembershipTier, number> = { free: 1, standard: 2, pro: 3 }
+      const roleMultiplier: Record<Role, number> = { member: 1, moderator: 2, admin: 3 }
+      const weight = tierWeight[member.membership.tier] * roleMultiplier[member.roles[0] ?? 'member']
+      totalWeight += weight
+    })
+
+    const newProposal: Proposal = {
+      id: `prop_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+      communityId: this.communityId,
+      ...proposal,
+      status: 'draft',
+      createdAt: new Date().toISOString(),
+      votesSummary: {
+        totalVotes: 0,
+        weightsFor: 0,
+        weightsAgainst: 0,
+        weightsAbstain: 0,
+      },
+      totalWeight,
+    }
+
+    state.proposals[newProposal.id] = newProposal
+    schedulePersist()
+
+    return newProposal
+  }
+
+  async updateProposal(id: string, updates: Partial<Omit<Proposal, 'id' | 'status' | 'proposer' | 'createdAt' | 'votesSummary' | 'totalWeight'>>): Promise<Proposal> {
+    await initPromise
+    if (MOCK_SESSION_STATE === 'expired') throwMockUnauthorized()
+
+    if (!this.address || !getCommunityState(this.communityId).memberStore[this.address]?.roles.includes('admin')) {
+      throw new ApiError({
+        status: 403,
+        code: 'forbidden',
+        safeMessage: 'Only admins can update proposals.',
+      })
+    }
+
+    const state = getCommunityState(this.communityId)
+    const proposal = state.proposals[id]
+
+    if (!proposal) {
+      throw new ApiError({
+        status: 404,
+        code: 'not_found',
+        safeMessage: 'Proposal not found.',
+      })
+    }
+
+    if (proposal.status === 'active' || proposal.status === 'resolved') {
+      throw new ApiError({
+        status: 400,
+        code: 'invalid_state',
+        safeMessage: 'Cannot update an active or resolved proposal.',
+      })
+    }
+
+    Object.assign(proposal, updates)
+    schedulePersist()
+
+    return proposal
+  }
+
+  async publishProposal(id: string): Promise<Proposal> {
+    await initPromise
+    if (MOCK_SESSION_STATE === 'expired') throwMockUnauthorized()
+
+    if (!this.address || !getCommunityState(this.communityId).memberStore[this.address]?.roles.includes('admin')) {
+      throw new ApiError({
+        status: 403,
+        code: 'forbidden',
+        safeMessage: 'Only admins can publish proposals.',
+      })
+    }
+
+    const state = getCommunityState(this.communityId)
+    const proposal = state.proposals[id]
+
+    if (!proposal) {
+      throw new ApiError({
+        status: 404,
+        code: 'not_found',
+        safeMessage: 'Proposal not found.',
+      })
+    }
+
+    if (proposal.status !== 'draft') {
+      throw new ApiError({
+        status: 400,
+        code: 'invalid_state',
+        safeMessage: 'Only draft proposals can be published.',
+      })
+    }
+
+    proposal.status = 'active'
+    schedulePersist()
+
+    return proposal
+  }
+
+  async closeProposalVoting(id: string): Promise<Proposal> {
+    await initPromise
+    if (MOCK_SESSION_STATE === 'expired') throwMockUnauthorized()
+
+    if (!this.address || !getCommunityState(this.communityId).memberStore[this.address]?.roles.includes('admin')) {
+      throw new ApiError({
+        status: 403,
+        code: 'forbidden',
+        safeMessage: 'Only admins can close voting.',
+      })
+    }
+
+    const state = getCommunityState(this.communityId)
+    const proposal = state.proposals[id]
+
+    if (!proposal) {
+      throw new ApiError({
+        status: 404,
+        code: 'not_found',
+        safeMessage: 'Proposal not found.',
+      })
+    }
+
+    if (proposal.status !== 'active') {
+      throw new ApiError({
+        status: 400,
+        code: 'invalid_state',
+        safeMessage: 'Only active proposals can be closed.',
+      })
+    }
+
+    proposal.status = 'closed'
+    schedulePersist()
+
+    return proposal
+  }
+
+  async resolveProposal(id: string, outcome: string): Promise<Proposal> {
+    await initPromise
+    if (MOCK_SESSION_STATE === 'expired') throwMockUnauthorized()
+
+    if (!this.address || !getCommunityState(this.communityId).memberStore[this.address]?.roles.includes('admin')) {
+      throw new ApiError({
+        status: 403,
+        code: 'forbidden',
+        safeMessage: 'Only admins can resolve proposals.',
+      })
+    }
+
+    const state = getCommunityState(this.communityId)
+    const proposal = state.proposals[id]
+
+    if (!proposal) {
+      throw new ApiError({
+        status: 404,
+        code: 'not_found',
+        safeMessage: 'Proposal not found.',
+      })
+    }
+
+    proposal.status = 'resolved'
+    proposal.payload = { ...proposal.payload, outcome, resolvedAt: new Date().toISOString() }
+    schedulePersist()
+
+    return proposal
+  }
+
+  async deleteProposal(id: string): Promise<void> {
+    await initPromise
+    if (MOCK_SESSION_STATE === 'expired') throwMockUnauthorized()
+
+    if (!this.address || !getCommunityState(this.communityId).memberStore[this.address]?.roles.includes('admin')) {
+      throw new ApiError({
+        status: 403,
+        code: 'forbidden',
+        safeMessage: 'Only admins can delete proposals.',
+      })
+    }
+
+    const state = getCommunityState(this.communityId)
+    const proposal = state.proposals[id]
+
+    if (!proposal) {
+      throw new ApiError({
+        status: 404,
+        code: 'not_found',
+        safeMessage: 'Proposal not found.',
+      })
+    }
+
+    if (proposal.status !== 'draft') {
+      throw new ApiError({
+        status: 400,
+        code: 'invalid_state',
+        safeMessage: 'Only draft proposals can be deleted.',
+      })
+    }
+
+    delete state.proposals[id]
+    // Also delete any votes on this proposal
+    Object.keys(state.votes).forEach(voteId => {
+      if (state.votes[voteId].proposalId === id) {
+        delete state.votes[voteId]
+      }
+    })
+    schedulePersist()
+  }
+
+  public analytics: import('./types').AnalyticsDataSource = {
+  public analytics: any = {
+    getMembershipTrend: async (_signal?: AbortSignal) => {
+      await initPromise;
+      return MOCK_ANALYTICS_SUMMARY.memberGrowth;
+    },
+    getRoleDistribution: async (_signal?: AbortSignal) => {
+      await initPromise;
+      const state = getCommunityState(this.communityId);
+      const members = Object.values(state.memberStore);
+      const ALL_ROLES: import('./types').Role[] = ['member', 'moderator', 'admin'];
+      return ALL_ROLES.map(role => ({
+        role,
+        count: members.filter(m => m.roles.includes(role)).length
+      }));
+    },
+    getAccessAttempts: async (_signal?: AbortSignal) => {
+      await initPromise;
+      return MOCK_ANALYTICS_SUMMARY.resourceAccess;
     }
   }
 }

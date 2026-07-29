@@ -22,16 +22,34 @@
  * or silent refresh occurs in any tab, the provider broadcasts the updated
  * session; peer tabs write the received session via `storeAuthSession()` so
  * every tab eventually converges on the same state.
+ *
+ * Cookie auth mode (dual-mode readiness)
+ * ───────────────────────────────────────
+ * When `config.authMode === 'cookie'` (see docs/http-only-cookie-migration.md),
+ * this module's persistence functions become no-ops *before* touching
+ * `sessionStorage` at all: `storeAuthSession()` never writes, and
+ * `loadAuthSessionIncludingExpired()` (and therefore `loadAuthSession()`,
+ * `getStoredToken()`, `getStoredAddress()`, all of which call through it)
+ * never reads. No bearer token is ever persisted client-side in this mode.
+ * `isSessionActive()` — a network call, not a storage read — replaces the
+ * client-side expiry check for cookie mode.
  */
 
 import type { SiweAuthSession } from './api/types'
+import { config } from './config'
+import { getApi } from './api'
 
-const SESSION_KEY = 'guildpass:siwe-session'
+export const SESSION_KEY = 'guildpass:siwe-session'
 
 // ── Persist ───────────────────────────────────────────────────────────────────
 
-/** Persist an authenticated session (including any refresh token) to sessionStorage. */
+/**
+ * Persist an authenticated session (including any refresh token) to
+ * sessionStorage. No-op in cookie auth mode — no bearer token is ever
+ * written to sessionStorage in that mode.
+ */
 export function storeAuthSession(session: SiweAuthSession): void {
+  if (config.authMode === 'cookie') return
   if (typeof window === 'undefined') return
   try {
     window.sessionStorage.setItem(SESSION_KEY, JSON.stringify(session))
@@ -70,8 +88,12 @@ export function loadAuthSession(): SiweAuthSession | null {
  * Load the raw stored session without any expiry filtering.
  * Useful when you need to retrieve the refresh token even after the access
  * token has expired.
+ *
+ * Always returns `null` in cookie auth mode without touching
+ * `sessionStorage` — no bearer token is ever read from storage in that mode.
  */
 export function loadAuthSessionIncludingExpired(): SiweAuthSession | null {
+  if (config.authMode === 'cookie') return null
   if (typeof window === 'undefined') return null
   try {
     const raw = window.sessionStorage.getItem(SESSION_KEY)
@@ -95,11 +117,49 @@ export function loadAuthSessionIncludingExpired(): SiweAuthSession | null {
   }
 }
 
+// ── Cross-tab sync helpers ────────────────────────────────────────────────
+
+/**
+ * Subscribe to storage events for the SIWE session key so peer tabs can react
+ * when another tab signs in, refreshes, or logs out.
+ *
+ * We keep the canonical session in sessionStorage because it is still scoped to
+ * the current origin and survives tab reloads without the broader XSS exposure
+ * of localStorage. The storage-event listener is a fallback for browsers or
+ * environments where BroadcastChannel is unavailable.
+ */
+export function subscribeToAuthSessionStorage(
+  listener: (event: StorageEvent) => void,
+): () => void {
+  if (typeof window === 'undefined') return () => undefined
+  const handler = (event: StorageEvent) => {
+    if (event.key === null || event.key === SESSION_KEY) {
+      listener(event)
+    }
+  }
+  window.addEventListener('storage', handler)
+  return () => window.removeEventListener('storage', handler)
+}
+
 // ── Clear ─────────────────────────────────────────────────────────────────────
 
-/** Remove the stored session from sessionStorage. */
+/**
+ * Remove the stored session from sessionStorage and notify same-tab
+ * listeners. In cookie auth mode, sessionStorage is never touched (there is
+ * nothing to remove there) — only the invalidation event fires, so
+ * providers.tsx's markExpired handling keeps working identically in both
+ * modes.
+ */
 export function clearAuthSession(): void {
   if (typeof window === 'undefined') return
+  if (config.authMode === 'cookie') {
+    try {
+      window.dispatchEvent(new CustomEvent('siwe:invalidated'))
+    } catch {
+      // Ignore environments that disallow CustomEvent
+    }
+    return
+  }
   try {
     window.sessionStorage.removeItem(SESSION_KEY)
     try {
@@ -181,3 +241,64 @@ export function msUntilRenewal(
 ): number {
   return new Date(session.expiresAt).getTime() - Date.now() - renewalLeadMs
 }
+
+// ── Proactive Session Expiry Warning Helpers ───────────────────────────────
+
+/** Default proactive warning threshold in seconds before access token expiry (2 minutes / 120 seconds). */
+export const DEFAULT_WARNING_THRESHOLD_SECONDS = 120
+
+/**
+ * Returns the number of seconds remaining until the access token expires.
+ * Returns 0 if session is null or already expired.
+ */
+export function getRemainingSessionSeconds(
+  session: Pick<SiweAuthSession, 'expiresAt'> | null | undefined,
+): number {
+  if (!session?.expiresAt) return 0
+  const diff = new Date(session.expiresAt).getTime() - Date.now()
+  return Math.max(0, Math.floor(diff / 1000))
+}
+
+/**
+ * Returns `true` if the access token will expire within `thresholdSeconds`
+ * (and has not already expired).
+ */
+export function isSessionExpiringSoon(
+  session: Pick<SiweAuthSession, 'expiresAt'> | null | undefined,
+  thresholdSeconds = DEFAULT_WARNING_THRESHOLD_SECONDS,
+): boolean {
+  if (!session?.expiresAt) return false
+  const remaining = getRemainingSessionSeconds(session)
+  return remaining > 0 && remaining <= thresholdSeconds
+}
+
+/**
+ * Format remaining seconds as human readable string (e.g. "1m 45s" or "45s").
+ */
+export function formatTimeRemaining(seconds: number): string {
+  if (seconds <= 0) return '0s'
+  const mins = Math.floor(seconds / 60)
+  const secs = seconds % 60
+  if (mins === 0) return `${secs}s`
+  return `${mins}m ${secs}s`
+}
+
+// ── Cookie auth mode: session-status check ──────────────────────────────────
+
+/**
+ * Checks whether the browser currently holds a valid session by calling the
+ * approved session-status endpoint (`GET /v1/auth/session` — see
+ * docs/http-only-cookie-migration.md) rather than reading a client-side
+ * token. This is the cookie-mode replacement for the optimistic client-side
+ * expiry check bearer mode does via `isAccessTokenExpired()`.
+ *
+ * Network/server errors are NOT swallowed as `false` — they propagate so the
+ * caller can distinguish an unreachable backend from a genuinely absent
+ * session (treating an outage as "signed out" would incorrectly sign a user
+ * out during a transient failure).
+ */
+export async function isSessionActive(): Promise<boolean> {
+  const status = await getApi().getSessionStatus()
+  return status.authenticated
+}
+

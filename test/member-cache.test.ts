@@ -1,3 +1,4 @@
+import './setup-env'
 import { describe, it } from 'node:test'
 import * as assert from 'node:assert/strict'
 import { QueryClient, QueryObserver } from '@tanstack/react-query'

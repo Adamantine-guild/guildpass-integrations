@@ -5,7 +5,7 @@ import { Nav } from '@/components/nav'
 import { SwRegistrar } from '@/components/sw-registrar'
 import { BackendHealthCheck } from '@/components/backend-health-check'
 import { SyncStatusBanner } from '@/components/ui/sync-status-banner'
-
+import { ThemeProvider } from '@/components/theme-provider'
 export const metadata: Metadata = {
   title: {
     default: 'GuildPass',
@@ -22,19 +22,26 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <body>
-        <RootProviders>
-          {/* Registers the service worker for dashboard offline caching */}
-          <SwRegistrar />
-          {/* One-time startup check so a misconfigured/unreachable backend
-              surfaces immediately, not just after a user action fails */}
-          <BackendHealthCheck />
-          {/* Offline/Degraded status banner */}
-          <SyncStatusBanner className="mb-4 w-full" />
-          <Nav />
-          <main className="mx-auto max-w-6xl px-4 py-6">{children}</main>
-        </RootProviders>
+        <ThemeProvider
+          attribute="class"
+          defaultTheme="system"
+          enableSystem
+          disableTransitionOnChange
+        >
+          <RootProviders>
+            {/* Registers the service worker for dashboard offline caching */}
+            <SwRegistrar />
+            {/* One-time startup check so a misconfigured/unreachable backend
+                surfaces immediately, not just after a user action fails */}
+            <BackendHealthCheck />
+            {/* Offline/Degraded status banner */}
+            <SyncStatusBanner className="mb-4 w-full" />
+            <Nav />
+            <main className="mx-auto max-w-6xl px-4 py-6">{children}</main>
+          </RootProviders>
+        </ThemeProvider>
       </body>
     </html>
   )

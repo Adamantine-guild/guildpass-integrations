@@ -10,11 +10,15 @@ import {
   MemberRow,
   Membership,
   MembershipTier,
+  MetaResponse,
+  MetaResponseSchema,
   PaginatedMembers,
   Resource,
   ResourceLookupResult,
   Role,
   Session,
+  SessionStatus,
+  SessionStatusSchema,
   SiweAuthSession,
   WalletVerification,
   BackendSession,
@@ -40,7 +44,15 @@ import {
   ModerationReport,
   ModerationReportSchema,
   ModerationState,
+  PendingAction,
+  ApprovalConfig,
+  Proposal,
+  Vote,
+  VoteChoice,
+  ProposalStatus,
+  ProposalType,
 } from './types'
+import { checkVersionCompatibility, type VersionCompatibility } from './version'
 import {
   mapCommunity,
   mapMembership,
@@ -51,7 +63,7 @@ import {
   mapSession,
   mapWebhookEvent,
 } from './mappers'
-import { ApiError } from './errors'
+import { ApiError, AuthError, NetworkError } from './errors'
 import {
   validateCommunityResponse,
   validateMemberProfileResponse,
@@ -65,8 +77,19 @@ import {
   validateWebhookEventsResponse,
 } from './validators'
 
-/** Alias for ApiError — re-exported so admin pages can import AuthError from this module. */
-export { ApiError as AuthError } from './errors'
+/**
+ * Re-exported so admin pages can import these from this module.
+ * AuthError, NetworkError, isAuthError, isNetworkError, and categorizeError
+ * are now dedicated implementations in ./errors.
+ */
+export {
+  AuthError,
+  NetworkError,
+  isAuthError,
+  isNetworkError,
+  categorizeError,
+  type ErrorCategory,
+} from './errors'
 
 import { PolicyValidationError, validatePolicy } from '../validation/policy'
 import { ProfileValidationError, validateProfile } from '../validation/profile'
@@ -223,7 +246,7 @@ function createApiError(status: number, body?: ApiErrorBody, path?: string): Api
   }
 
   if (status === 401) {
-    return new ApiError({
+    return new AuthError({
       status,
       code: 'unauthorized',
       safeMessage: 'Session expired. Please sign in again.',
@@ -232,7 +255,7 @@ function createApiError(status: number, body?: ApiErrorBody, path?: string): Api
   }
 
   if (status === 403) {
-    return new ApiError({
+    return new AuthError({
       status,
       code: 'forbidden',
       safeMessage: 'You do not have permission to perform this action.',
@@ -502,6 +525,12 @@ async function getJson<T>(path: string, options: RequestOptions = {}): Promise<T
           'Content-Type': 'application/json',
           ...(headers ?? {}),
         },
+        // Cookie mode needs the session cookie sent on cross-origin requests
+        // (e.g. NEXT_PUBLIC_CORE_API_URL on a different dev port) — the
+        // browser's 'same-origin' default excludes those. Bearer mode passes
+        // `undefined`, which is equivalent to omitting the option entirely,
+        // so its request shape is unchanged.
+        credentials: config.authMode === 'cookie' ? 'include' : undefined,
         signal,
       })
 
@@ -526,10 +555,9 @@ async function getJson<T>(path: string, options: RequestOptions = {}): Promise<T
 
       // Wrap raw network errors (fetch throwing, not an HTTP error response)
       if (!(err instanceof ApiError)) {
-        const networkErr = new ApiError({
-          code: 'network_error',
+        const networkErr = new NetworkError({
           safeMessage: networkErrorMessage,
-          retryable: true,
+          path,
           cause: err,
         })
         if (retriesEnabled) {
@@ -602,17 +630,79 @@ function parseJsonResponse<T>(text: string, path?: string): T {
 // ── LiveAccessApi ─────────────────────────────────────────────────────────────
 
 export class LiveAccessApi implements AccessApi {
+  /** Resolved after the first successful version-compatibility check. */
+  #versionCheckResult: VersionCompatibility | null = null
+  #versionCheckPromise: Promise<VersionCompatibility> | null = null
+
   constructor(
     private readonly address?: string,
     private readonly token?: string,
     private readonly communityId?: string,
   ) { }
 
+  /**
+   * Returns the result of the startup version-compatibility check, or
+   * `null` if the check has not yet completed.
+   */
+  get versionCompatibility(): VersionCompatibility | null {
+    return this.#versionCheckResult
+  }
+
+  /**
+   * Perform a one-time version-compatibility check against the backend's
+   * `/v1/meta` endpoint. Resolves with the compatibility result. Subsequent
+   * calls return the cached result.
+   */
+  async checkVersion(): Promise<VersionCompatibility> {
+    if (this.#versionCheckResult) {
+      return this.#versionCheckResult
+    }
+    if (this.#versionCheckPromise) {
+      return this.#versionCheckPromise
+    }
+
+    this.#versionCheckPromise = this.#performVersionCheck()
+    try {
+      this.#versionCheckResult = await this.#versionCheckPromise
+    } finally {
+      this.#versionCheckPromise = null
+    }
+    return this.#versionCheckResult!
+  }
+
+  async #performVersionCheck(): Promise<VersionCompatibility> {
+    try {
+      const meta = await this.getMeta()
+      return checkVersionCompatibility(meta.version)
+    } catch (err) {
+      return {
+        compatible: false,
+        expectedVersion: '',
+        backendVersion: '',
+        reason:
+          err instanceof Error
+            ? `Could not reach backend /v1/meta endpoint: ${err.message}`
+            : 'Could not reach backend /v1/meta endpoint.',
+      }
+    }
+  }
+
+  async getMeta(signal?: AbortSignal): Promise<MetaResponse> {
+    return getJson<MetaResponse>('/v1/meta', {
+      schema: MetaResponseSchema,
+      headers: this.authHeaders(),
+      signal,
+    })
+  }
+
   private authHeaders(extra?: HeadersInit): HeadersInit {
     const headers: Record<string, string> = {
       ...(extra as Record<string, string> ?? {})
     }
-    if (this.token) {
+    // Cookie mode relies exclusively on the httpOnly session cookie (sent
+    // automatically via `credentials: 'include'` in getJson()) — never send
+    // Authorization here, even if a token happens to be held in memory.
+    if (config.authMode !== 'cookie' && this.token) {
       headers['Authorization'] = `Bearer ${this.token}`
     }
     if (this.communityId) {
@@ -854,6 +944,19 @@ export class LiveAccessApi implements AccessApi {
     return raw.map(mapWebhookEvent)
   }
 
+  async listAdminEvents(params?: any): Promise<any> {
+    const searchParams = new URLSearchParams()
+    if (params?.types) params.types.forEach((t: string) => searchParams.append('types', t))
+    if (params?.startDate) searchParams.set('startDate', params.startDate)
+    if (params?.endDate) searchParams.set('endDate', params.endDate)
+    if (params?.page) searchParams.set('page', params.page.toString())
+    if (params?.limit) searchParams.set('limit', params.limit.toString())
+    
+    return await getJson<any>(`/v1/admin/events/paginated?${searchParams.toString()}`, {
+      headers: this.authHeaders(),
+    })
+  }
+
   subscribeWebhookEvents(
     onEvent: (event: WebhookEventLog) => void,
     onError?: (error: unknown) => void,
@@ -929,15 +1032,32 @@ export class LiveAccessApi implements AccessApi {
     })
   }
 
-  async assignRole(address: string, role: Role): Promise<void> {
+  async getPendingActions(): Promise<PendingAction[]> {
+    throw new Error("Pending actions are not yet supported by guildpass-core.")
+  }
+
+  async approveAction(id: string): Promise<void> {
+    throw new Error("Pending actions are not yet supported by guildpass-core.")
+  }
+
+  async rejectAction(id: string): Promise<void> {
+    throw new Error("Pending actions are not yet supported by guildpass-core.")
+  }
+
+  async updateApprovalConfig(config: ApprovalConfig): Promise<void> {
+    throw new Error("Pending actions are not yet supported by guildpass-core.")
+  }
+
+  async assignRole(address: string, role: Role): Promise<{ status: 'executed' | 'pending'; pendingActionId?: string }> {
     await getJson<void>(`/v1/members/${encodeURIComponent(address)}/roles`, {
       method: 'POST',
       headers: this.authHeaders(),
       body: JSON.stringify({ role }),
     })
+    return { status: 'executed' }
   }
 
-  async removeRole(address: string, role: Role): Promise<void> {
+  async removeRole(address: string, role: Role): Promise<{ status: 'executed' | 'pending'; pendingActionId?: string }> {
     await getJson<void>(
       `/v1/members/${encodeURIComponent(address)}/roles/${encodeURIComponent(role)}`,
       {
@@ -945,9 +1065,10 @@ export class LiveAccessApi implements AccessApi {
         headers: this.authHeaders(),
       },
     )
+    return { status: 'executed' }
   }
 
-  async updatePolicy(policy: AccessPolicy): Promise<void> {
+  async updatePolicy(policy: AccessPolicy): Promise<{ status: 'executed' | 'pending'; pendingActionId?: string }> {
     const result = validatePolicy(policy)
 
     if (!result.valid) {
@@ -964,6 +1085,7 @@ export class LiveAccessApi implements AccessApi {
         updated_at: result.value.updatedAt,
       }),
     })
+    return { status: 'executed' }
   }
 
   async getNonce(address: string): Promise<string> {
@@ -1010,13 +1132,46 @@ export class LiveAccessApi implements AccessApi {
     return { isAuthenticated: true, ...data }
   }
 
-  async siweLogout(token: string): Promise<void> {
+  async siweLogout(token?: string): Promise<void> {
+    const headers: Record<string, string> = {}
+    // Guard against a falsy token producing "Bearer undefined"/"Bearer null"/
+    // "Bearer " — and never send Authorization at all in cookie mode, where
+    // the session cookie (sent via credentials: 'include') identifies the
+    // caller instead.
+    if (config.authMode !== 'cookie' && token) {
+      headers['Authorization'] = `Bearer ${token}`
+    }
     await getJson<void>('/v1/auth/siwe/logout', {
       method: 'POST',
-      headers: { Authorization: `Bearer ${token}` },
+      headers,
     }).catch(() => {
       // best-effort logout
     })
+  }
+
+  /**
+   * Lightweight session-status check for httpOnly-cookie auth mode. Never
+   * sends or receives a bearer token — the cookie is transparent to this
+   * request (`credentials: 'include'` in getJson()).
+   *
+   * "No session" (401/404) resolves to `{ authenticated: false }` rather
+   * than throwing, so callers can treat it as a steady state. Network/5xx
+   * failures propagate so a caller can distinguish "definitely signed out"
+   * from "backend unreachable."
+   */
+  async getSessionStatus(signal?: AbortSignal): Promise<SessionStatus> {
+    try {
+      return await getJson<SessionStatus>('/v1/auth/session', {
+        method: 'GET',
+        schema: SessionStatusSchema,
+        signal,
+      })
+    } catch (err) {
+      if (err instanceof ApiError && err.code === 'aborted') throw err
+      if (err instanceof AuthError) return { authenticated: false }
+      if (err instanceof ApiError && err.status === 404) return { authenticated: false }
+      throw err
+    }
   }
 
   // ── Social Graph (Connections / Blocks) ──
@@ -1097,5 +1252,244 @@ export class LiveAccessApi implements AccessApi {
       body: JSON.stringify({ state, ...updates }),
       headers: this.authHeaders(),
     })
+  }
+
+  // ── Governance ──
+  async listProposals(params?: { filter?: ProposalStatus | ProposalType; limit?: number; cursor?: string }, signal?: AbortSignal): Promise<Proposal[]> {
+    const qs = new URLSearchParams()
+    if (params?.filter) qs.set('filter', params.filter)
+    if (params?.limit) qs.set('limit', String(params.limit))
+    if (params?.cursor) qs.set('cursor', params.cursor)
+    const query = qs.toString()
+    const path = `/v1/governance/proposals${query ? `?${query}` : ''}`
+    try {
+      return await getJson<Proposal[]>(path, { signal, headers: this.authHeaders() })
+    } catch (err) {
+      // Graceful degradation: if governance endpoints not available, return empty list
+      if (err instanceof ApiError && err.status === 503) {
+        return []
+      }
+      throw err
+    }
+  }
+
+  async getProposal(id: string, signal?: AbortSignal): Promise<Proposal | null> {
+    const path = `/v1/governance/proposals/${encodeURIComponent(id)}`
+    try {
+      return await getJson<Proposal>(path, { signal, headers: this.authHeaders() })
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) {
+        return null
+      }
+      if (err instanceof ApiError && err.status === 503) {
+        return null
+      }
+      throw err
+    }
+  }
+
+  async getMemberVote(proposalId: string, signal?: AbortSignal): Promise<Vote | null> {
+    const path = `/v1/governance/proposals/${encodeURIComponent(proposalId)}/votes/my`
+    try {
+      return await getJson<Vote>(path, { signal, headers: this.authHeaders() })
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) {
+        return null
+      }
+      if (err instanceof ApiError && err.status === 204) {
+        // No content means no vote yet
+        return null
+      }
+      if (err instanceof ApiError && err.status === 503) {
+        return null
+      }
+      throw err
+    }
+  }
+
+  async listProposalVotes(proposalId: string, params?: { limit?: number; cursor?: string }, signal?: AbortSignal): Promise<Vote[]> {
+    const qs = new URLSearchParams()
+    if (params?.limit) qs.set('limit', String(params.limit))
+    if (params?.cursor) qs.set('cursor', params.cursor)
+    const query = qs.toString()
+    const path = `/v1/governance/proposals/${encodeURIComponent(proposalId)}/votes${query ? `?${query}` : ''}`
+    try {
+      return await getJson<Vote[]>(path, { signal, headers: this.authHeaders() })
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 503) {
+        return []
+      }
+      throw err
+    }
+  }
+
+  async castVote(proposalId: string, choice: VoteChoice): Promise<Vote> {
+    const path = `/v1/governance/proposals/${encodeURIComponent(proposalId)}/vote`
+    try {
+      return await getJson<Vote>(path, {
+        method: 'POST',
+        body: JSON.stringify({ choice }),
+        headers: this.authHeaders(),
+      })
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 503) {
+        throw new ApiError({
+          status: 503,
+          code: 'service_unavailable',
+          safeMessage: 'Governance service is temporarily unavailable.',
+          retryable: true,
+        })
+      }
+      throw err
+    }
+  }
+
+  async createProposal(proposal: Omit<Proposal, 'id' | 'createdAt' | 'status' | 'communityId' | 'votesSummary' | 'totalWeight'>): Promise<Proposal> {
+    const path = '/v1/governance/proposals'
+    try {
+      return await getJson<Proposal>(path, {
+        method: 'POST',
+        body: JSON.stringify(proposal),
+        headers: this.authHeaders(),
+      })
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 503) {
+        throw new ApiError({
+          status: 503,
+          code: 'service_unavailable',
+          safeMessage: 'Governance service is temporarily unavailable.',
+          retryable: true,
+        })
+      }
+      throw err
+    }
+  }
+
+  async updateProposal(id: string, updates: Partial<Omit<Proposal, 'id' | 'status' | 'proposer' | 'createdAt' | 'votesSummary' | 'totalWeight'>>): Promise<Proposal> {
+    const path = `/v1/governance/proposals/${encodeURIComponent(id)}`
+    try {
+      return await getJson<Proposal>(path, {
+        method: 'PATCH',
+        body: JSON.stringify(updates),
+        headers: this.authHeaders(),
+      })
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 503) {
+        throw new ApiError({
+          status: 503,
+          code: 'service_unavailable',
+          safeMessage: 'Governance service is temporarily unavailable.',
+          retryable: true,
+        })
+      }
+      throw err
+    }
+  }
+
+  async publishProposal(id: string): Promise<Proposal> {
+    const path = `/v1/governance/proposals/${encodeURIComponent(id)}/publish`
+    try {
+      return await getJson<Proposal>(path, {
+        method: 'POST',
+        body: JSON.stringify({}),
+        headers: this.authHeaders(),
+      })
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 503) {
+        throw new ApiError({
+          status: 503,
+          code: 'service_unavailable',
+          safeMessage: 'Governance service is temporarily unavailable.',
+          retryable: true,
+        })
+      }
+      throw err
+    }
+  }
+
+  async closeProposalVoting(id: string): Promise<Proposal> {
+    const path = `/v1/governance/proposals/${encodeURIComponent(id)}/close`
+    try {
+      return await getJson<Proposal>(path, {
+        method: 'POST',
+        body: JSON.stringify({}),
+        headers: this.authHeaders(),
+      })
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 503) {
+        throw new ApiError({
+          status: 503,
+          code: 'service_unavailable',
+          safeMessage: 'Governance service is temporarily unavailable.',
+          retryable: true,
+        })
+      }
+      throw err
+    }
+  }
+
+  async resolveProposal(id: string, outcome: string): Promise<Proposal> {
+    const path = `/v1/governance/proposals/${encodeURIComponent(id)}/resolve`
+    try {
+      return await getJson<Proposal>(path, {
+        method: 'POST',
+        body: JSON.stringify({ outcome }),
+        headers: this.authHeaders(),
+      })
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 503) {
+        throw new ApiError({
+          status: 503,
+          code: 'service_unavailable',
+          safeMessage: 'Governance service is temporarily unavailable.',
+          retryable: true,
+        })
+      }
+      throw err
+    }
+  }
+
+  async deleteProposal(id: string): Promise<void> {
+    const path = `/v1/governance/proposals/${encodeURIComponent(id)}`
+    try {
+      await getJson<void>(path, {
+        method: 'DELETE',
+        headers: this.authHeaders(),
+      })
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 503) {
+        throw new ApiError({
+          status: 503,
+          code: 'service_unavailable',
+          safeMessage: 'Governance service is temporarily unavailable.',
+          retryable: true,
+        })
+      }
+      throw err
+    }
+  }
+  
+  public analytics: any = {
+    getMembershipTrend: async (signal?: AbortSignal) => {
+      const summary = await this.getAnalyticsSummary(signal);
+      return summary.memberGrowth;
+    },
+    getRoleDistribution: async (signal?: AbortSignal) => {
+      // NOTE: getAnalyticsSummary currently doesn't provide roleDistribution,
+      // but to satisfy the new interface without breaking the backend contract immediately,
+      // we'll fetch members and compute it like we used to.
+      // In a real live app, the backend would be updated to provide this in getAnalyticsSummary.
+      const members = await this.listMembers({}, signal);
+      const memberArray = Array.isArray(members) ? members : members.members;
+      const ALL_ROLES: import('./types').Role[] = ['member', 'moderator', 'admin'];
+      return ALL_ROLES.map(role => ({
+        role,
+        count: memberArray.filter(m => m.roles.includes(role)).length
+      }));
+    },
+    getAccessAttempts: async (signal?: AbortSignal) => {
+      const summary = await this.getAnalyticsSummary(signal);
+      return summary.resourceAccess;
+    }
   }
 }

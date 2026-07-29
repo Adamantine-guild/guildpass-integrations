@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 const SCHEMA_PATH = path.join(__dirname, '../test/fixtures/openapi.json');
 const TARGET_PATH = path.join(__dirname, '../lib/api/types.ts');
@@ -32,6 +33,31 @@ export interface WebhookEventLog {
   fullPayload?: Record<string, unknown>;
   /** True when this entry was injected via the replay/debug tool rather than ingested from a real webhook. */
   isReplay?: boolean;
+}
+
+export interface ApprovalConfig {
+  assignRole: number
+  removeRole: number
+  updatePolicy: number
+}
+
+export type PendingActionType = 'assignRole' | 'removeRole' | 'updatePolicy'
+
+export interface PendingActionPayload {
+  address?: string
+  role?: string
+  policy?: AccessPolicy
+}
+
+export interface PendingAction {
+  id: string
+  type: PendingActionType
+  payload: PendingActionPayload
+  proposer: string
+  requiredApprovals: number
+  currentApprovals: string[]
+  status: 'pending' | 'approved' | 'rejected' | 'executed'
+  createdAt: string
 }
 
 export interface WalletVerification {
@@ -257,6 +283,12 @@ export interface MemberAccessApi {
    */
   updateProfile(profile: MemberProfile): Promise<void>
 
+  /**
+   * Fetch backend metadata including the API contract version.
+   * Used by the startup version-compatibility check.
+   */
+  getMeta(signal?: AbortSignal): Promise<MetaResponse>
+
   // ── Social Graph (Connections / Blocks) ──
   getConnections(address: string, signal?: AbortSignal): Promise<Connection[]>
   getPrivacySettings(address: string, signal?: AbortSignal): Promise<MemberPrivacySettings>
@@ -292,16 +324,41 @@ export interface AdminAccessApi {
    * @provisional Calls \`GET /v1/admin/analytics\` — endpoint not yet live in
    * guildpass-core. Contract tracked in issue #157; pending backend confirmation.
    */
-  getAnalyticsSummary(signal?: AbortSignal): Promise<AnalyticsSummary>
-  assignRole(address: string, role: Role): Promise<void>
-  removeRole(address: string, role: Role): Promise<void>
-  updatePolicy(policy: AccessPolicy): Promise<void>
+  getPendingActions(): Promise<PendingAction[]>
+  approveAction(id: string): Promise<void>
+  rejectAction(id: string): Promise<void>
+  updateApprovalConfig(config: ApprovalConfig): Promise<void>
+  
+  assignRole(address: string, role: Role): Promise<{ status: 'executed' | 'pending'; pendingActionId?: string }>
+  removeRole(address: string, role: Role): Promise<{ status: 'executed' | 'pending'; pendingActionId?: string }>
+  updatePolicy(policy: AccessPolicy): Promise<{ status: 'executed' | 'pending'; pendingActionId?: string }>
 
   // ── Moderation Queue ──
   listReports(signal?: AbortSignal): Promise<ModerationReport[]>
   getReport(id: string, signal?: AbortSignal): Promise<ModerationReport | null>
   updateReportState(id: string, state: ModerationState, updates?: Partial<ModerationReport>): Promise<void>
 }
+
+/**
+ * Lightweight session-status check for httpOnly-cookie auth mode (dual-mode
+ * readiness — see docs/http-only-cookie-migration.md). Never carries a
+ * bearer token; \`authenticated\` is the only field guaranteed present.
+ *
+ * @provisional \`GET /v1/auth/session\` is not yet implemented in
+ * guildpass-core. This contract lets the frontend cookie-mode path be built
+ * and tested against the mock ahead of the backend endpoint shipping.
+ */
+export interface SessionStatus {
+  authenticated: boolean
+  address?: string
+  expiresAt?: string
+}
+
+export const SessionStatusSchema = z.object({
+  authenticated: z.boolean(),
+  address: z.string().optional(),
+  expiresAt: z.string().optional(),
+})
 
 /**
  * SIWE authentication endpoints.
@@ -325,9 +382,23 @@ export interface SiweAuthApi {
    * signalling that the user must re-sign with their wallet.
    */
   siweRefresh(refreshToken: string): Promise<SiweAuthSession>
-  /** Invalidate the current server-side session (no-op for stateless JWTs). */
-  siweLogout(token: string): Promise<void>
+  /**
+   * Invalidate the current server-side session (no-op for stateless JWTs).
+   * \`token\` is optional so cookie-auth-mode callers — which never hold a
+   * bearer token — can invoke this with no argument; the session cookie
+   * identifies the caller instead.
+   */
+  siweLogout(token?: string): Promise<void>
   verifyWallet(address: string): Promise<WalletVerification>
+  /**
+   * Lightweight session-status check for httpOnly-cookie auth mode. Returns
+   * \`{ authenticated: false }\` for "no session" (never throws for that
+   * case); network/server errors propagate so the caller can distinguish an
+   * unreachable backend from a genuinely absent session.
+   *
+   * @provisional See {@link SessionStatus}.
+   */
+  getSessionStatus(signal?: AbortSignal): Promise<SessionStatus>
 }
 
 /**
@@ -439,12 +510,29 @@ const STATIC_SCHEMA_NAMES = new Set([
   'WebhookPayloadSummary',
 ]);
 
+/**
+ * Compute a deterministic SHA-256 hash over the structural parts of the
+ * schema (paths and components.schemas) that represent the actual API
+ * contract shape. Metadata fields (info, x-*) are excluded so that only
+ * meaningful schema changes affect the hash.
+ */
+function computeSchemaHash(schema) {
+  const structural = {
+    paths: schema.paths,
+    schemas: schema.components?.schemas,
+  }
+  const normalized = JSON.stringify(structural, Object.keys(structural).sort())
+  return crypto.createHash('sha256').update(normalized).digest('hex').slice(0, 16)
+}
+
 function generateTypes(schema) {
   if (!schema) {
     const rawSchema = fs.readFileSync(SCHEMA_PATH, 'utf8');
     schema = JSON.parse(rawSchema);
   }
   const schemasObj = schema.components.schemas;
+
+  const contractVersion = (schema.info && schema.info.version) ? schema.info.version : '0.0.0-unknown'
 
   let output = `/**
  * This file was auto-generated from the OpenAPI schema.
@@ -455,6 +543,12 @@ function generateTypes(schema) {
 
 import { z } from 'zod';
 import { ApiError } from './errors'
+
+/**
+ * The API contract version this frontend build expects the backend to
+ * implement. Generated from test/fixtures/openapi.json info.version.
+ */
+export const EXPECTED_API_VERSION = "${contractVersion}"
 
 export type ResourceLookupResult =
   | { status: 'found'; data: Resource; source: 'direct' | 'fallback' }
@@ -527,7 +621,44 @@ function main() {
     process.exit(1);
   }
 
-  const generated = generateTypes();
+  const rawSchema = fs.readFileSync(SCHEMA_PATH, 'utf8');
+  const schema = JSON.parse(rawSchema);
+
+  const currentHash = computeSchemaHash(schema);
+  const storedHash = schema['x-schema-hash'];
+  const version = schema.info?.version;
+
+  if (!version) {
+    console.error('FAIL: openapi.json is missing info.version. Please add a semver version (e.g. "1.0.0").');
+    process.exit(1);
+  }
+
+  // Schema hash enforcement: if the hash changed but the stored hash
+  // hasn't been updated in the file yet, the developer must also bump
+  // the version. This only applies during --check, not --write (since
+  // --write updates both the hash and the types file).
+  if (isCheck && storedHash) {
+    if (currentHash !== storedHash) {
+      console.error(
+        'FAIL: Schema hash changed but version was not bumped!\n' +
+        `  Stored hash:  ${storedHash}\n` +
+        `  Current hash: ${currentHash}\n` +
+        `  Current version: ${version}\n` +
+        '  Action: Bump the version in test/fixtures/openapi.json (info.version), then run:\n' +
+        '    npm run sync-types'
+      );
+      process.exit(1);
+    }
+  }
+
+  // When writing, always update the stored hash in openapi.json
+  if (isWrite) {
+    schema['x-schema-hash'] = currentHash;
+    fs.writeFileSync(SCHEMA_PATH, JSON.stringify(schema, null, 2) + '\n', 'utf8');
+    console.log(`Schema hash updated: ${currentHash}`);
+  }
+
+  const generated = generateTypes(schema);
 
   if (isCheck) {
     if (!fs.existsSync(TARGET_PATH)) {

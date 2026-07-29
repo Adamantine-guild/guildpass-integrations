@@ -40,6 +40,9 @@ npm install
 # Set up environment variables
 cp .env.example .env.local
 # Edit .env.local as needed (mock mode requires no changes)
+
+# Verify your local environment before starting Next.js
+npm run check-env
 ```
 
 ### Run in mock / demo mode
@@ -88,7 +91,7 @@ Admin actions are protected by [Sign-In with Ethereum (EIP-4361)](https://eips.e
 4. EIP-4361 message built client-side (domain, statement, nonce, chainId, issuedAt)
 5. wagmi signMessage → user approves in wallet
 6. POST /v1/auth/siwe/verify → { token, expiresAt }
-7. Token stored in sessionStorage; auto-attached to admin mutations
+7. Token stored in sessionStorage; peer tabs sync the session via BroadcastChannel and storage-event fallback so a sign-in or logout in one tab is reflected in others
 8. 401 from backend shows inline re-auth banner without page redirect
 ```
 
@@ -102,6 +105,27 @@ Admin actions are protected by [Sign-In with Ethereum (EIP-4361)](https://eips.e
 
 > In **mock mode** all three endpoints are simulated in-memory — no backend required.
 
+### Dual-mode readiness: httpOnly cookie auth (`NEXT_PUBLIC_AUTH_MODE`)
+
+`NEXT_PUBLIC_AUTH_MODE=cookie` switches the flow above to session-cookie auth
+instead of a sessionStorage-persisted bearer token — see
+[docs/http-only-cookie-migration.md](./docs/http-only-cookie-migration.md)
+for the full design and current implementation status. `bearer` (the
+default) is unchanged by this flag. In short, cookie mode:
+
+- Never reads or writes a bearer token to `sessionStorage`.
+- Never sends an `Authorization` header — the browser sends the session
+  cookie automatically (`credentials: 'include'`).
+- Hydrates session state on mount via `isSessionActive()`
+  (`GET /v1/auth/session`, mocked in mock mode) instead of reading storage.
+- Broadcasts only `signed-in`/`refreshed`/`signed-out` signals to peer tabs
+  without a real token.
+
+This is **not yet a full Phase 2 cutover** — `guildpass-core` doesn't
+implement `GET /v1/auth/session` yet (mock mode simulates it), and
+cookie-mode silent refresh does not yet use the same cross-tab Web-Locks
+coordination bearer mode has (see the doc for details).
+
 ---
 
 ## Environment Variables
@@ -110,22 +134,32 @@ All configuration is read and validated at startup by [`lib/config.ts`](./lib/co
 Invalid values produce a clear `ConfigError` in development so broken configuration is caught
 immediately rather than at runtime.
 
+Run `npm run check-env` after creating `.env.local` to validate the same app
+and wallet rules before the dev server starts. `npm run dev` also runs this
+check automatically via the `predev` script.
+
 | Variable | Required | Description |
 | ---- | ------- | ----------- |
 | `NEXT_PUBLIC_MOCK_MODE` | No | Set `true` for in-memory mock API; SIWE fully simulated |
 | `NEXT_PUBLIC_DEMO_MODE` | No | Alias for `NEXT_PUBLIC_MOCK_MODE` |
+| `NEXT_PUBLIC_AUTH_MODE` | No | `bearer` (default) or `cookie` — see [Dual-mode readiness](#dual-mode-readiness-httponly-cookie-auth-next_public_auth_mode) above. Any value other than the literal `cookie` falls back to `bearer`. |
 | `NEXT_PUBLIC_CORE_API_URL` | Live mode only (validated) | Base URL of the `guildpass-core` access-api — must be a valid absolute URL in live mode |
 | `NEXT_PUBLIC_SIWE_DOMAIN` | No | Domain field in the EIP-4361 message (defaults to `localhost:3000`) |
 | `NEXT_PUBLIC_SIWE_STATEMENT` | No | Human-readable statement shown in the signed message |
 | `NEXT_PUBLIC_WALLET_CHAINS` | No | Comma-separated supported chains for wagmi; supported values: `mainnet`, `base`, `sepolia`; defaults to all three |
-| `NEXT_PUBLIC_WALLET_RPC_MAINNET` | No | Optional browser-safe RPC URL for Ethereum mainnet when enabled |
-| `NEXT_PUBLIC_WALLET_RPC_BASE` | No | Optional browser-safe RPC URL for Base when enabled |
-| `NEXT_PUBLIC_WALLET_RPC_SEPOLIA` | No | Optional browser-safe RPC URL for Sepolia when enabled |
+| `NEXT_PUBLIC_WALLET_RPC_MAINNET` | No | Optional browser-safe RPC URL(s) for Ethereum mainnet; supports comma-separated list for multi-RPC failover |
+| `NEXT_PUBLIC_WALLET_RPC_BASE` | No | Optional browser-safe RPC URL(s) for Base; supports comma-separated list for multi-RPC failover |
+| `NEXT_PUBLIC_WALLET_RPC_SEPOLIA` | No | Optional browser-safe RPC URL(s) for Sepolia; supports comma-separated list for multi-RPC failover |
 | `NEXT_PUBLIC_WALLET_CONNECTORS` | No | Comma-separated wallet connectors; see [Wallet connectors](#wallet-connectors) for supported values (defaults to `injected`) |
+| `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID` | When walletConnect enabled | WalletConnect Cloud project ID (required when `walletConnect` connector is listed in `NEXT_PUBLIC_WALLET_CONNECTORS`) |
 
 See [`.env.example`](./.env.example) for a ready-to-copy template.
 
 Wallet chain settings are built by [`lib/wallet/config.ts`](./lib/wallet/config.ts). Invalid chain names, empty chain lists, unsupported connectors, or malformed RPC URLs throw a `ConfigError` during development so deployment mistakes are visible before users connect a wallet. In mock mode, leaving these variables unset preserves the local default of `mainnet`, `base`, and `sepolia` with default transports.
+
+**Multi-RPC failover**: Each chain supports multiple comma-separated RPC URLs. The first reachable endpoint is preferred; after 3 consecutive failures an endpoint is deprioritized for 60 seconds (with automatic recovery). The public default RPC is always appended as the final fallback.
+
+**Wallet connector fallback**: When the `walletConnect` connector is enabled alongside `injected`, the connect button automatically offers a WalletConnect QR path when no injected wallet is detected (e.g. mobile browsers without an extension).
 
 Only expose RPC URLs that are safe to bundle into browser JavaScript. Do not put private RPC credentials in `NEXT_PUBLIC_*` variables unless your provider explicitly documents that the key is public and browser-safe.
 
@@ -138,6 +172,7 @@ Currently supported values:
 | Value | Connector |
 | ----- | --------- |
 | `injected` | Browser-extension / injected wallets (MetaMask, Rabby, etc.) — the default |
+| `walletConnect` | [WalletConnect](https://walletconnect.com/) v2 — QR-code based mobile wallet pairing (requires `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID`) |
 
 Setting any other value (for example `walletconnect`) throws a `ConfigError` at startup that lists the supported values and links back to this section — connectors are compiled into the bundle, so an unrecognized name can never work at runtime and is better caught early.
 
@@ -189,6 +224,7 @@ Modules that are experimental or not yet production-ready are controlled by envi
 
 ```bash
 npm run dev        # Start Next.js dev server (http://localhost:3000)
+npm run check-env  # Validate .env.local before the dev server starts
 npm run build      # Production build
 npm run start      # Start production server (after build)
 npm run lint       # Lint via Next.js ESLint config

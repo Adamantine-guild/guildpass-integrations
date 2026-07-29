@@ -16,17 +16,19 @@ import { queryKeys } from "@/lib/query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { MembershipExpiryBadge } from "@/components/ui/membership-expiry-badge";
-import { MembershipCardSkeleton } from "@/components/dashboard/membership-card-skeleton";
 import Link from "next/link";
 import { buttonVariants } from "@/components/ui/button";
 import {
-  LoadingState,
   ErrorState,
   EmptyState,
   DeniedState,
   safeErrorMessage,
 } from "@/components/ui/api-states";
 import { SyncStatusBanner } from "@/components/ui/sync-status-banner";
+import { MembershipCardSkeleton } from "@/components/dashboard/membership-card-skeleton";
+import { VerificationCardSkeleton } from "@/components/dashboard/verification-card-skeleton";
+import { BadgesCardSkeleton } from "@/components/dashboard/badges-card-skeleton";
+import { ResourcesCardSkeleton } from "@/components/dashboard/resources-card-skeleton";
 import { AddressText } from "@/components/wallet/address-text";
 import { DisabledTooltip } from "@/components/ui/tooltip";
 import { ProfileEditor } from "@/components/dashboard/profile-editor";
@@ -329,7 +331,7 @@ export default function DashboardPage() {
               message="Connect your wallet to load your verification state."
             />
           ) : isVerifying ? (
-            <LoadingState />
+            <VerificationCardSkeleton />
           ) : (
             <div className="space-y-4">
               {(() => {
@@ -384,7 +386,7 @@ export default function DashboardPage() {
               message="Connect your wallet to view your badges."
             />
           ) : profileLoading ? (
-            <LoadingState />
+            <BadgesCardSkeleton />
           ) : profileIsError && !(isApiError(profileError) && profileError.code === 'aborted') ? (
             <ErrorState
               title="Failed to load badges"
@@ -417,7 +419,7 @@ export default function DashboardPage() {
               message="Resources are not available in the current environment."
             />
           ) : resourcesLoading ? (
-            <LoadingState message="Loading resources..." />
+            <ResourcesCardSkeleton />
           ) : resourcesIsError && !(isApiError(resourcesError) && resourcesError.code === 'aborted') ? (
             <ErrorState
               title="Failed to load resources"
@@ -461,5 +463,5 @@ export default function DashboardPage() {
         </Section>
       </div>
     </div>
-  );
+  )
 }

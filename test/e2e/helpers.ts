@@ -169,6 +169,56 @@ export async function navigateToAdmin(page: Page, baseUrl = 'http://localhost:30
 }
 
 /**
+ * Reads the raw SIWE session entry from sessionStorage (guildpass:siwe-session).
+ * Returns null if nothing is stored — the expected state at every point in a
+ * cookie-auth-mode flow (see docs/http-only-cookie-migration.md). Used by
+ * siwe-flow-cookie-mode.spec.ts to prove cookie mode never writes a bearer
+ * token there.
+ */
+export async function getSessionStorageEntry(page: Page): Promise<string | null> {
+  return page.evaluate(() => window.sessionStorage.getItem('guildpass:siwe-session'))
+}
+
+/**
+ * Reads the mock cookie-session marker set by lib/api/mock.ts's cookie-mode
+ * simulation (`gp_mock_session`). This mock cookie is intentionally
+ * non-httpOnly — mock JS cannot set a real httpOnly cookie either — so e2e
+ * tests can assert cookie-mode session persistence (survives reload, absent
+ * after logout) without ever reading sessionStorage.
+ */
+export async function getMockSessionCookie(page: Page): Promise<string | null> {
+  return page.evaluate(() => {
+    const row = document.cookie.split('; ').find((entry) => entry.startsWith('gp_mock_session='))
+    return row ? row.slice('gp_mock_session='.length) : null
+  })
+}
+
+/**
+ * Directly seed sessionStorage with a SIWE auth session before the app
+ * mounts (via addInitScript), bypassing the wallet-signature UI flow.
+ * Useful for deterministically forcing the provider's mount-time hydration
+ * path — e.g. seeding an already-expired access token with a still-valid
+ * refresh token triggers an immediate silent-refresh attempt on load.
+ */
+export async function seedAuthSession(
+  page: Page,
+  session: {
+    token: string
+    address: string
+    expiresAt: string
+    refreshToken: string
+    refreshExpiresAt: string
+  },
+): Promise<void> {
+  await page.addInitScript((seeded) => {
+    window.sessionStorage.setItem(
+      'guildpass:siwe-session',
+      JSON.stringify({ isAuthenticated: true, ...seeded }),
+    )
+  }, session)
+}
+
+/**
  * Get the current address from sessionStorage.
  * Useful for asserting that the session was persisted correctly.
  */

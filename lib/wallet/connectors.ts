@@ -13,7 +13,7 @@
 
 import { ConfigError } from '../config'
 
-export const SUPPORTED_CONNECTOR_NAMES = ['injected'] as const
+export const SUPPORTED_CONNECTOR_NAMESinjected', 'walletConnect'] as const
 
 export type WalletConnectorName = (typeof SUPPORTED_CONNECTOR_NAMES)[number]
 
@@ -54,3 +54,10 @@ export function parseConnectorNames(
     return name as WalletConnectorName
   })
 }
+export {
+  CONNECTOR_DOCS_URL,
+  SUPPORTED_CONNECTOR_NAMES,
+  parseConnectorNames,
+  unsupportedConnectorMessage,
+} from './validation.js'
+export type { WalletConnectorName } from './validation.js'

@@ -2,7 +2,7 @@
 
 import { useAccount } from "wagmi";
 import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { getApi, type MemberRow, type Role, type MembershipTier } from "@/lib/api";
+import { getApi, type MemberRow, type Role } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,7 +22,6 @@ import {
   DeniedState,
   safeErrorMessage,
 } from "@/components/ui/api-states";
-import { usePagination } from "@/lib/hooks/usePagination";
 import {
   applyOptimisticRole,
   applyOptimisticRemoveRole,
@@ -30,9 +29,9 @@ import {
 import { roleRemovalConfirmationMessage } from "@/lib/api/role-removal";
 import { AddressText } from "@/components/wallet/address-text";
 import { isWalletAddress, normalizeAddress } from "@/lib/wallet/address";
-import { BulkActionToolbar, type BulkResult } from "@/components/ui/bulk-action-toolbar";
+import type { BulkResult } from "@/components/ui/bulk-action-toolbar";
+import { MemberList } from "@/components/admin/member-list";
 import { Users } from "lucide-react";
-import Link from "next/link";
 import { features } from "@/lib/features";
 
 type AssignRoleInput = {
@@ -42,6 +41,16 @@ type AssignRoleInput = {
 
 type AssignRoleRollback = {
   previousMembers?: MemberRow[];
+};
+
+type AuditLogEntry = {
+  id: string;
+  address: string;
+  role: Role;
+  action: "assign" | "remove";
+  status: "pending" | "success" | "error";
+  timestamp: Date;
+  error?: string;
 };
 
 function SessionExpiredBanner() {
@@ -157,26 +166,11 @@ function VirtualList<T>({
 
 export default function MembersPage() {
   const { address } = useAccount();
-  const { authSession, markExpired, sessionStatus } = useSiweAuth();
+  const { authSession, markExpired, sessionStatus, registerPendingRetry } = useSiweAuth();
   const qc = useQueryClient();
   const { toasts, addToast, dismissToast } = useToasts();
   const params = useParams();
   const communitySlug = (params?.communitySlug as string) || 'guildpass-demo';
-
-  // Filter state
-  const [searchQuery, setSearchQuery] = useState('')
-  const [roleFilter, setRoleFilter] = useState<Role | 'all'>('all')
-  const [tierFilter, setTierFilter] = useState<MembershipTier | 'all'>('all')
-  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all')
-  const [pageSize, setPageSize] = useState(25)
-
-  const resetFilters = () => {
-    setSearchQuery('')
-    setRoleFilter('all')
-    setTierFilter('all')
-    setStatusFilter('all')
-    setPageSize(25)
-  }
 
   const {
     data,
@@ -188,14 +182,16 @@ export default function MembersPage() {
     isFetchingNextPage,
     refetch,
   } = useInfiniteQuery({
-    queryKey: [...queryKeys.members.all(communitySlug), { searchQuery }],
+    queryKey: queryKeys.members.all(communitySlug),
     queryFn: async ({ pageParam }) => {
       const api = getApi(address, authSession?.token, communitySlug);
       const limit = 100;
+      // Search/role/tier filtering happens entirely client-side (see
+      // components/admin/member-list.tsx) — this fetch is purely
+      // cursor-driven and never re-runs in response to filter changes.
       const res = await api.listMembers({
         cursor: pageParam,
         limit,
-        filter: searchQuery || undefined,
       });
 
       if (Array.isArray(res)) {
@@ -225,6 +221,7 @@ export default function MembersPage() {
     useState<AssignRoleInput | null>(null);
   const [rollbackMessage, setRollbackMessage] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
+  const [auditLog, setAuditLog] = useState<AuditLogEntry[]>([]);
   // ── Bulk selection state ──────────────────────────────────────────
   const [selectedAddresses, setSelectedAddresses] = useState<Set<string>>(
     new Set(),
@@ -243,42 +240,7 @@ export default function MembersPage() {
     return data?.pages.flatMap((page) => page.members) ?? [];
   }, [data]);
 
-  const isFallbackMode = data?.pages[0]?.isFallback ?? false;
-
-  const filteredMembers = useMemo(() => {
-    return allFetchedMembers.filter((m) => {
-      const matchesSearch =
-        !isFallbackMode ||
-        !searchQuery ||
-        m.address.toLowerCase().includes(searchQuery.toLowerCase());
-      const matchesRole = roleFilter === 'all' || m.roles.includes(roleFilter);
-      const matchesTier = tierFilter === 'all' || m.tier === tierFilter;
-      const matchesStatus =
-        statusFilter === 'all' ||
-        (statusFilter === 'active' && m.active) ||
-        (statusFilter === 'inactive' && !m.active);
-
-      return matchesSearch && matchesRole && matchesTier && matchesStatus;
-    });
-  }, [allFetchedMembers, isFallbackMode, searchQuery, roleFilter, tierFilter, statusFilter]);
-
-  const {
-    paginatedItems,
-    currentPage,
-    totalPages,
-    nextPage,
-    prevPage,
-    setPage,
-    setCurrentPage,
-  } = usePagination(filteredMembers, pageSize);
-
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [searchQuery, roleFilter, tierFilter, statusFilter, pageSize, setCurrentPage]);
-
-  const isFiltered = searchQuery || roleFilter !== 'all' || tierFilter !== 'all' || statusFilter !== 'all'
   const hasAnyMembers = allFetchedMembers.length > 0
-  const hasVisibleMembers = filteredMembers.length > 0
 
   const {
     mutate,
@@ -286,10 +248,26 @@ export default function MembersPage() {
     isError: mutateError,
     error: mutateErrorValue,
     reset: resetMutation,
-  } = useMutation<void, unknown, AssignRoleInput, { previousQueries?: [any, any][] }>({
+  } = useMutation<{ status: 'executed' | 'pending'; pendingActionId?: string }, unknown, AssignRoleInput, { previousQueries?: [any, any][]; auditId: string }>({
     mutationFn: (input) =>
       getApi(address, authSession?.token, communitySlug).assignRole(input.address, input.role),
+    // Auth errors are handled via registerPendingRetry — do not auto-retry 401s
+    // to avoid racing with the re-auth banner flow.
+    retry: false,
     onMutate: async (input) => {
+      const auditId = Date.now().toString() + Math.random().toString();
+      setAuditLog((prev) => [
+        {
+          id: auditId,
+          address: input.address,
+          role: input.role,
+          action: "assign",
+          status: "pending",
+          timestamp: new Date(),
+        },
+        ...prev,
+      ]);
+
       await qc.cancelQueries({ queryKey: queryKeys.members.all(communitySlug) });
       const previousQueries = qc.getQueriesData({ queryKey: queryKeys.members.all(communitySlug) });
 
@@ -314,9 +292,32 @@ export default function MembersPage() {
         return old;
       });
 
-      return { previousQueries };
+      return { previousQueries, auditId };
     },
-    onSuccess: (_data, input) => {
+    onSuccess: (data, input, context) => {
+      if (data.status === 'pending') {
+        // Rollback optimistic update
+        if (context?.previousQueries) {
+          for (const [key, qData] of context.previousQueries) {
+            qc.setQueryData(key, qData);
+          }
+        }
+        setPendingAssignment(null);
+        addToast({
+          tone: "warning",
+          title: "Approval Required",
+          description: `Assignment of ${input.role} to ${input.address.slice(0, 6)}…${input.address.slice(-4)} has been proposed for approval.`,
+        });
+        setAddr("");
+        resetMutation();
+        return;
+      }
+
+      setAuditLog((prev) =>
+        prev.map((entry) =>
+          entry.id === context?.auditId ? { ...entry, status: "success" } : entry
+        )
+      );
       reconcileMemberRoleCache(qc, {
         address: input.address,
         role: input.role,
@@ -340,16 +341,60 @@ export default function MembersPage() {
       void qc.invalidateQueries({ queryKey: queryKeys.members.all(communitySlug) });
       const isExpiredSession = err instanceof AuthError && err.code === "unauthorized";
       const message = isExpiredSession
-        ? "Session expired. Use the re-authentication banner to sign in again."
+        ? "Session expired. Re-authenticating and retrying role assignment…"
         : safeErrorMessage(err);
 
-      setRollbackMessage(`Change reverted: ${message}`);
+      if (context?.auditId) {
+        setAuditLog((prev) =>
+          prev.map((entry) =>
+            entry.id === context.auditId
+              ? { ...entry, status: "error", error: message }
+              : entry
+          )
+        );
+      }
+
+      setRollbackMessage(`Change reverted: ${safeErrorMessage(err)}`);
       addToast({
         tone: isExpiredSession ? "warning" : "error",
-        title: isExpiredSession ? "Admin session expired" : "Failed to assign role",
+        title: isExpiredSession ? "Session expired — retrying after re-auth" : "Failed to assign role",
         description: message,
       });
+
       if (isExpiredSession) {
+        // Capture the input so the mutation can be replayed once re-auth succeeds.
+        const capturedInput = _input;
+        registerPendingRetry(
+          async (freshSession) => {
+            await getApi(address, freshSession.token, communitySlug).assignRole(
+              capturedInput.address,
+              capturedInput.role,
+            );
+            // Reconcile cache and notify success
+            reconcileMemberRoleCache(
+              qc,
+              { address: capturedInput.address, role: capturedInput.role, action: "assign" },
+              communitySlug,
+            );
+            setSuccessAssignment(capturedInput);
+            setRollbackMessage("");
+            addToast({
+              tone: "success",
+              title: `Role assigned to ${capturedInput.address.slice(0, 6)}…${capturedInput.address.slice(-4)}`,
+              description: `The ${capturedInput.role} role was assigned successfully after re-authentication.`,
+            });
+          },
+          {
+            onRetryFailure: (retryErr) => {
+              setRollbackMessage(`Retry failed: ${safeErrorMessage(retryErr)}`);
+              addToast({
+                tone: "error",
+                title: "Role assignment failed after re-auth",
+                description: safeErrorMessage(retryErr),
+              });
+            },
+          },
+        );
         markExpired();
       }
     },
@@ -362,14 +407,29 @@ export default function MembersPage() {
     mutateErrorValue instanceof AuthError && mutateErrorValue.code === "unauthorized";
 
   const removeRoleMutation = useMutation<
-    void,
+    { status: 'executed' | 'pending'; pendingActionId?: string },
     unknown,
     AssignRoleInput,
-    { previousQueries?: [any, any][] }
+    { previousQueries?: [any, any][]; auditId: string }
   >({
     mutationFn: (input) =>
       getApi(address, authSession?.token, communitySlug).removeRole(input.address, input.role),
+    // Auth errors are handled via registerPendingRetry — do not auto-retry 401s.
+    retry: false,
     onMutate: async (input) => {
+      const auditId = Date.now().toString() + Math.random().toString();
+      setAuditLog((prev) => [
+        {
+          id: auditId,
+          address: input.address,
+          role: input.role,
+          action: "remove",
+          status: "pending",
+          timestamp: new Date(),
+        },
+        ...prev,
+      ]);
+
       await qc.cancelQueries({ queryKey: queryKeys.members.all(communitySlug) });
       const previousQueries = qc.getQueriesData({ queryKey: queryKeys.members.all(communitySlug) });
       setPendingAssignment(input);
@@ -391,9 +451,31 @@ export default function MembersPage() {
         }
         return old;
       });
-      return { previousQueries };
+      return { previousQueries, auditId };
     },
-    onSuccess: (_data, input) => {
+    onSuccess: (data, input, context) => {
+      if (data.status === 'pending') {
+        // Rollback optimistic update
+        if (context?.previousQueries) {
+          for (const [key, qData] of context.previousQueries) {
+            qc.setQueryData(key, qData);
+          }
+        }
+        setPendingAssignment(null);
+        addToast({
+          tone: "warning",
+          title: "Approval Required",
+          description: `Removal of ${input.role} from ${input.address.slice(0, 6)}…${input.address.slice(-4)} has been proposed for approval.`,
+        });
+        resetMutation();
+        return;
+      }
+
+      setAuditLog((prev) =>
+        prev.map((entry) =>
+          entry.id === context?.auditId ? { ...entry, status: "success" } : entry
+        )
+      );
       reconcileMemberRoleCache(qc, {
         address: input.address,
         role: input.role,
@@ -416,16 +498,58 @@ export default function MembersPage() {
       void qc.invalidateQueries({ queryKey: queryKeys.members.all(communitySlug) });
       const isExpiredSession = err instanceof AuthError && err.code === "unauthorized";
       const message = isExpiredSession
-        ? "Session expired. Use the re-authentication banner to sign in again."
+        ? "Session expired. Re-authenticating and retrying role removal…"
         : safeErrorMessage(err);
 
-      setRollbackMessage(`Change reverted: ${message}`);
+      if (context?.auditId) {
+        setAuditLog((prev) =>
+          prev.map((entry) =>
+            entry.id === context.auditId
+              ? { ...entry, status: "error", error: message }
+              : entry
+          )
+        );
+      }
+
+      setRollbackMessage(`Change reverted: ${safeErrorMessage(err)}`);
       addToast({
         tone: isExpiredSession ? "warning" : "error",
-        title: isExpiredSession ? "Admin session expired" : "Failed to remove role",
+        title: isExpiredSession ? "Session expired — retrying after re-auth" : "Failed to remove role",
         description: message,
       });
+
       if (isExpiredSession) {
+        const capturedInput = _input;
+        registerPendingRetry(
+          async (freshSession) => {
+            await getApi(address, freshSession.token, communitySlug).removeRole(
+              capturedInput.address,
+              capturedInput.role,
+            );
+            reconcileMemberRoleCache(
+              qc,
+              { address: capturedInput.address, role: capturedInput.role, action: "remove" },
+              communitySlug,
+            );
+            setSuccessMessage(`Role "${capturedInput.role}" removed from ${capturedInput.address}.`);
+            setRollbackMessage("");
+            addToast({
+              tone: "success",
+              title: `Role removed from ${capturedInput.address.slice(0, 6)}…${capturedInput.address.slice(-4)}`,
+              description: `The ${capturedInput.role} role was removed successfully after re-authentication.`,
+            });
+          },
+          {
+            onRetryFailure: (retryErr) => {
+              setRollbackMessage(`Retry failed: ${safeErrorMessage(retryErr)}`);
+              addToast({
+                tone: "error",
+                title: "Role removal failed after re-auth",
+                description: safeErrorMessage(retryErr),
+              });
+            },
+          },
+        );
         markExpired();
       }
     },
@@ -460,28 +584,6 @@ export default function MembersPage() {
       }
       return next;
     });
-  };
-
-  const toggleSelectAll = () => {
-    const pageAddresses = paginatedItems.map((m) => m.address);
-    const allSelected = pageAddresses.every((a) =>
-      selectedAddresses.has(a),
-    );
-    if (allSelected) {
-      // Deselect all on this page
-      setSelectedAddresses((prev) => {
-        const next = new Set(prev);
-        pageAddresses.forEach((a) => next.delete(a));
-        return next;
-      });
-    } else {
-      // Select all on this page
-      setSelectedAddresses((prev) => {
-        const next = new Set(prev);
-        pageAddresses.forEach((a) => next.add(a));
-        return next;
-      });
-    }
   };
 
   const clearSelection = () => {
@@ -557,11 +659,6 @@ export default function MembersPage() {
       await executeBulkAssign(bulkFailedItems);
     }
   };
-
-  const pageAddresses = paginatedItems.map((m) => m.address);
-  const allPageSelected =
-    pageAddresses.length > 0 &&
-    pageAddresses.every((a) => selectedAddresses.has(a));
 
   const handleScrollToBottom = () => {
     if (hasNextPage && !isFetchingNextPage) {
@@ -677,13 +774,41 @@ export default function MembersPage() {
           </CardContent>
         </Card>
 
+        {auditLog.length > 0 && (
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-lg">Recent Role Changes (This Session)</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-3">
+                {auditLog.map((log) => (
+                  <div key={log.id} className="flex items-center justify-between text-sm border-b pb-2 last:border-0 last:pb-0">
+                    <div>
+                      <span className="font-medium"><AddressText address={log.address} /></span>
+                      <span className="text-muted-foreground mx-2">
+                        {log.action === 'assign' ? 'assigned' : 'removed'} role
+                      </span>
+                      <Badge variant="outline">{log.role}</Badge>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-muted-foreground">
+                        {log.timestamp.toLocaleTimeString()}
+                      </span>
+                      {log.status === 'pending' && <Badge variant="outline">Pending</Badge>}
+                      {log.status === 'success' && <Badge className="bg-green-600 hover:bg-green-700">Success</Badge>}
+                      {log.status === 'error' && (
+                        <Badge variant="destructive" title={log.error}>Failed</Badge>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         <Card>
           <CardContent>
-            {hasAnyMembers && hasVisibleMembers && (
-              <CardHeader className="px-0 pt-0 pb-4 border-b-0">
-                <CardTitle>Member List</CardTitle>
-              </CardHeader>
-            )}
             {isLoading ? (
               <LoadingState message="Loading members…" />
             ) : isError ? (
@@ -706,119 +831,30 @@ export default function MembersPage() {
                   </a>
                 }
               />
-            ) : !hasVisibleMembers ? (
-              <EmptyState
-                title="No matching members"
-                message="Members exist, but none match the current filters. Clear the filters to see the full list."
-                icon={<Users className="h-10 w-10" aria-hidden="true" />}
-              />
             ) : (
-               <div className="space-y-4">
-                 {/* ── Bulk action toolbar ─────────────────────────── */}
-                 {selectedAddressArray.length > 0 && (
-                   <div className="space-y-2">
-                     <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_10rem_auto] sm:items-end">
-                       <div />
-                       <Select
-                         value={bulkRole}
-                         onChange={(e) => setBulkRole(e.target.value as Role)}
-                       >
-                         <option value="member">member</option>
-                         <option value="moderator">moderator</option>
-                         <option value="admin">admin</option>
-                       </Select>
-                     </div>
-                     <BulkActionToolbar
-                       selectedCount={selectedAddressArray.length}
-                       totalCount={filteredMembers.length}
-                       onDismiss={clearSelection}
-                       onBulkAction={handleBulkAssign}
-                       actionLabel={`Assign ${bulkRole} to selected`}
-                       isPending={isBulkPending}
-                       results={bulkResults}
-                       onRetryFailed={handleRetryFailed}
-                     />
-                   </div>
-                 )}
-                 <div className="space-y-2">
-                   {paginatedItems.map((m) => (
-                     <div
-                       key={m.address}
-                       className="flex flex-col gap-3 rounded-md border p-3 sm:flex-row sm:items-center sm:justify-between h-full bg-card"
-                     >
-                       <div className="flex items-center gap-2">
-                         <input
-                           type="checkbox"
-                           checked={selectedAddresses.has(m.address)}
-                           onChange={() => toggleSelect(m.address)}
-                           className="h-4 w-4 rounded border-gray-300"
-                           aria-label={`Select ${m.address}`}
-                         />
-                         <AddressText address={m.address} className="text-sm" />
-                         {features.profiles && (
-                           <Link
-                             href={`/members/${m.address}`}
-                             className="text-xs text-primary underline-offset-4 hover:underline"
-                           >
-                             View profile
-                           </Link>
-                         )}
-                       </div>
-                       <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                         <span>Tier: {m.tier}</span>
-                         <div className="flex flex-wrap gap-1">
-                           {m.roles.map((r: string) => (
-                             <button
-                               key={r}
-                               type="button"
-                               className="inline-flex items-center rounded-md border border-transparent bg-secondary px-2 py-0.5 text-xs font-semibold text-secondary-foreground transition-colors hover:bg-destructive hover:text-destructive-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-                               onClick={() => requestRoleRemoval(m, r)}
-                               aria-label={`Remove ${r} role from ${m.address}`}
-                               title={`Remove ${r} role`}
-                             >
-                               {r} <span aria-hidden="true">✕</span>
-                             </button>
-                           ))}
-                         </div>
-                         {pendingAssignment?.address.toLowerCase() ===
-                           m.address.toLowerCase() && (
-                           <Badge variant="warning">Saving</Badge>
-                         )}
-                       </div>
-                     </div>
-                   ))}
-                 </div>
-                 
-                 <div className="flex items-center justify-between border-t pt-4">
-                    <div className="text-sm text-muted-foreground">
-                      Page {currentPage} of {totalPages} ({filteredMembers.length} members)
-                    </div>
-                    <div className="flex items-center gap-2">
-                       <Select
-                          value={String(pageSize)}
-                          onChange={(e) => setPageSize(Number(e.target.value))}
-                       >
-                          <option value="25">25 per page</option>
-                          <option value="50">50 per page</option>
-                          <option value="100">100 per page</option>
-                       </Select>
-                       <Button variant="outline" size="sm" onClick={prevPage} disabled={currentPage === 1}>
-                         Previous
-                       </Button>
-                       <Button variant="outline" size="sm" onClick={nextPage} disabled={currentPage === totalPages}>
-                         Next
-                       </Button>
-                    </div>
-                 </div>
-
-                 {isFetchingNextPage && (
-                   <div className="text-center py-2 text-xs text-muted-foreground">
-                     Loading more members…
-                   </div>
-                 )}
-               </div>
-             )}
-
+              <>
+                <MemberList
+                  members={allFetchedMembers}
+                  showProfileLink={features.profiles}
+                  pendingAddress={pendingAssignment?.address.toLowerCase()}
+                  onRequestRoleRemoval={requestRoleRemoval}
+                  selectedAddresses={selectedAddresses}
+                  onToggleSelect={toggleSelect}
+                  bulkRole={bulkRole}
+                  onBulkRoleChange={setBulkRole}
+                  onBulkAssign={handleBulkAssign}
+                  onClearSelection={clearSelection}
+                  onRetryFailedBulk={handleRetryFailed}
+                  isBulkPending={isBulkPending}
+                  bulkResults={bulkResults}
+                />
+                {isFetchingNextPage && (
+                  <div className="text-center py-2 text-xs text-muted-foreground">
+                    Loading more members…
+                  </div>
+                )}
+              </>
+            )}
           </CardContent>
         </Card>
       </div>

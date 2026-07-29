@@ -23,7 +23,7 @@
  * Multi-tab synchronisation — BroadcastChannel
  * ─────────────────────────────────────────────
  * A single named channel (`guildpass:auth`) broadcasts auth-state transitions
- * to every other same-origin tab.  Three message types are emitted:
+ * to every other same-origin tab.  Message types:
  *
  *   { type: 'signed-in',  session: SiweAuthSession }
  *     — Sent after a successful wallet signature.  Peer tabs write the session
@@ -37,12 +37,35 @@
  *     — Sent after an explicit logout or a detected expiry.  Peer tabs clear
  *       their session and transition to the appropriate unauthenticated state.
  *
+ *   { type: 'request-current-session', address: string }
+ *     — Sent by a tab that, per lib/wallet/refresh-coordination.ts's
+ *       localStorage marker, knows a peer just refreshed but never received
+ *       that peer's 'refreshed' message (e.g. sent before this tab's
+ *       listener existed — BroadcastChannel does not queue/replay missed
+ *       messages). Any tab currently holding a valid session for that
+ *       address responds by re-broadcasting 'refreshed'.
+ *
  * The tab that sends a message does NOT receive it via its own listener
  * (BroadcastChannel's same-tab exclusion), so there is no risk of loops.
  *
  * lib/session.ts remains the single source of truth for the persisted token.
  * BroadcastChannel is used only for propagation; each tab writes its own
  * sessionStorage entry independently.
+ *
+ * Cookie auth mode (dual-mode readiness)
+ * ─────────────────────────────────────
+ * When `config.authMode === 'cookie'` (see docs/http-only-cookie-migration.md),
+ * this provider never hydrates from sessionStorage — it calls
+ * `getApi().getSessionStatus()` on mount instead. Sign-in/refresh responses
+ * still carry a `token`/`refreshToken` (the backend keeps returning them
+ * during the dual-ship window), but this provider scrubs both to empty
+ * before the session is stored, dispatched to broadcast, or held as local
+ * state, so no real token is ever persisted or sent to a peer tab. The
+ * existing Web-Locks-based cross-tab refresh coordination
+ * (lib/wallet/refresh-coordination.ts) is bearer-mode-only in this PR; cookie
+ * mode performs its own refresh call without that mutual-exclusion layer —
+ * acceptable for now per docs/http-only-cookie-migration.md's own note that
+ * tab sync "becomes less critical" once the cookie jar is shared across tabs.
  */
 
 import {
@@ -54,6 +77,7 @@ import {
   useRef,
   useState,
 } from "react";
+import type { PendingRetryCallback } from "@/lib/wallet/siwe-context";
 import {
   WagmiProvider,
   createConfig,
@@ -71,19 +95,30 @@ import { SiweAuthSession, AdminSessionStatus } from "@/lib/api/types";
 import {
   clearAuthSession,
   getStoredToken,
+  isAccessTokenExpired,
   isRefreshTokenExpired,
   loadAuthSession,
   loadAuthSessionIncludingExpired,
   msUntilRenewal,
+  SESSION_KEY,
   storeAuthSession,
+  subscribeToAuthSessionStorage,
 } from "@/lib/session";
 import { isApiError } from "@/lib/api/errors";
+import {
+  isSessionAlreadyRefreshed,
+  markRefreshCompleted,
+  waitForPeerRefresh,
+  withRefreshLock,
+} from "@/lib/wallet/refresh-coordination";
 import {
   buildSiweMessage,
   deriveSessionStatus,
   initialSiweSessionState,
+  isValidBroadcastSession,
   siweSessionReducer,
 } from "@/lib/wallet/siwe-session";
+import { SiweAuthContext } from "@/lib/wallet/siwe-context";
 import { useContext } from "react";
 
 // ── Wagmi config ──────────────────────────────────────────────────────────────
@@ -95,7 +130,8 @@ const wagmiConfig = createConfig(walletConfig);
 type AuthBroadcastMessage =
   | { type: "signed-in"; session: SiweAuthSession }
   | { type: "refreshed"; session: SiweAuthSession }
-  | { type: "signed-out" };
+  | { type: "signed-out" }
+  | { type: "request-current-session"; address: string };
 
 const AUTH_CHANNEL_NAME = "guildpass:auth";
 
@@ -126,6 +162,10 @@ export interface SiweAuthContextValue {
    * 0 when no active session.
    */
   timeLeft: number;
+  /** True when active session will expire within warningThresholdSeconds. */
+  isExpiring: boolean;
+  /** Warning threshold in seconds before access token expiry (default 120s / 2m). */
+  warningThresholdSeconds: number;
   /** True while a signature request is in-flight. */
   isSigningIn: boolean;
   /** Human-readable error from the most recent signIn attempt, if any. */
@@ -141,11 +181,20 @@ export interface SiweAuthContextValue {
   logout: () => Promise<void>;
   /** Mark the current session as expired (e.g. after a 401 from the backend). */
   markExpired: () => void;
+  /**
+   * Register a callback to be automatically retried once after the user
+   * successfully re-authenticates following a 401.  The callback receives the
+   * fresh session so it can supply the new token to its API call.
+   *
+   * Only one retry is attempted per registration — if the retried call also
+   * returns a 401 the callback is discarded and a failure toast is shown via
+   * the `onRetryFailure` handler passed in the registration options.
+   */
+  registerPendingRetry: (
+    callback: PendingRetryCallback,
+    options?: { onRetryFailure?: (err: unknown) => void }
+  ) => void;
 }
-
-const SiweAuthContext = createContext<SiweAuthContextValue | undefined>(
-  undefined,
-);
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -208,12 +257,77 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
 
   /**
    * Attempt a silent token renewal using the stored refresh token.
-   * On success: updates reducer state, persists session, broadcasts.
+   *
+   * The network call is wrapped in withRefreshLock() so at most one
+   * same-origin tab performs it per address at a time. A tab that was queued
+   * behind the lock re-checks storage first (isSessionAlreadyRefreshed) and
+   * adopts a peer's already-rotated session instead of replaying the (now
+   * invalidated) refresh token. If sessionStorage hasn't caught up yet — the
+   * peer's BroadcastChannel message can be missed entirely if it was sent
+   * before this tab's listener existed, not just delayed — it asks any
+   * listening peer to resend the current session via a
+   * 'request-current-session' message before falling back to its own call.
+   * See lib/wallet/refresh-coordination.ts.
+   *
+   * On success: updates reducer state, persists + broadcasts session (only
+   * the tab that actually called the API does this), and drains any pending
+   * retry callbacks — whether this tab performed the refresh or adopted a
+   * peer's, the session is fresh either way.
    * On failure: transitions to 'expired', broadcasts sign-out.
    */
   const performSilentRefresh = useCallback(
     async (session: SiweAuthSession) => {
       if (isRefreshing.current) return;
+
+      // ── Cookie mode ───────────────────────────────────────────────────────
+      // No refresh-token string is held locally (scrubbed at sign-in/refresh
+      // time — see signIn() and the bearer branch below). Renewability is
+      // judged from `refreshExpiresAt` alone (a non-secret timestamp); when
+      // absent (e.g. a session reconstructed from getSessionStatus() at
+      // mount, which never returns refresh data) renewal is attempted
+      // optimistically and the backend's response is authoritative.
+      if (config.authMode === "cookie") {
+        const stillRenewable =
+          !session.refreshExpiresAt ||
+          new Date(session.refreshExpiresAt).getTime() > Date.now();
+        if (!stillRenewable) {
+          dispatch({ type: "mark-expired" });
+          broadcast({ type: "signed-out" });
+          return;
+        }
+
+        isRefreshing.current = true;
+        try {
+          const api = getApi(session.address);
+          const refreshed = await api.siweRefresh("");
+          const settled: SiweAuthSession = {
+            ...refreshed,
+            token: "",
+            refreshToken: undefined,
+          };
+          dispatch({ type: "refresh-success", session: settled });
+          scheduleRenewal(settled);
+          broadcast({ type: "refreshed", session: settled });
+
+          const retries = pendingRetriesRef.current;
+          pendingRetriesRef.current = [];
+          for (const entry of retries) {
+            try {
+              await entry.callback(settled);
+            } catch (retryErr) {
+              entry.onRetryFailure?.(retryErr);
+            }
+          }
+        } catch {
+          dispatch({ type: "mark-expired" });
+          broadcast({ type: "signed-out" });
+        } finally {
+          isRefreshing.current = false;
+        }
+        return;
+      }
+
+      // ── Bearer mode (unchanged) ──────────────────────────────────────────
       if (!session.refreshToken || isRefreshTokenExpired(session)) {
         dispatch({ type: "mark-expired" });
         clearAuthSession();
@@ -223,12 +337,50 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
 
       isRefreshing.current = true;
       try {
-        const api = getApi(session.address);
-        const refreshed = await api.siweRefresh(session.refreshToken);
-        storeAuthSession(refreshed);
-        dispatch({ type: "refresh-success", session: refreshed });
-        broadcast({ type: "refreshed", session: refreshed });
-        scheduleRenewal(refreshed);
+        const settled = await withRefreshLock(session.address, async () => {
+          // Re-check whether another tab already refreshed while this tab
+          // waited (or, without Web Locks, raced ahead of it).
+          const current = loadAuthSessionIncludingExpired();
+          if (current && isSessionAlreadyRefreshed(current, session)) {
+            return current;
+          }
+
+          // sessionStorage may not have caught up to a peer's refresh yet.
+          // Ask any listening peer to resend the current session before
+          // assuming this tab needs to perform its own (redundant,
+          // already-invalidated) call.
+          const fromPeer = await waitForPeerRefresh(
+            session.address,
+            session,
+            () => loadAuthSessionIncludingExpired(),
+            () => broadcast({ type: "request-current-session", address: session.address }),
+          );
+          if (fromPeer) {
+            return fromPeer;
+          }
+
+          const api = getApi(session.address);
+          const refreshed = await api.siweRefresh(session.refreshToken!);
+          storeAuthSession(refreshed);
+          markRefreshCompleted(session.address, refreshed.expiresAt);
+          broadcast({ type: "refreshed", session: refreshed });
+          return refreshed;
+        });
+
+        dispatch({ type: "refresh-success", session: settled });
+        scheduleRenewal(settled);
+
+        // A silent refresh also counts as session recovery — drain any pending
+        // retry callbacks that were registered before the 401 was surfaced.
+        const retries = pendingRetriesRef.current;
+        pendingRetriesRef.current = [];
+        for (const entry of retries) {
+          try {
+            await entry.callback(settled);
+          } catch (retryErr) {
+            entry.onRetryFailure?.(retryErr);
+          }
+        }
       } catch {
         // 401 or network failure — session cannot be renewed
         clearAuthSession();
@@ -249,6 +401,28 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
   const scheduleRenewal = useCallback(
     (session: SiweAuthSession) => {
       cancelRenewal();
+
+      if (config.authMode === "cookie") {
+        const stillRenewable =
+          !session.refreshExpiresAt ||
+          new Date(session.refreshExpiresAt).getTime() > Date.now();
+        if (!stillRenewable) return;
+
+        const delay = msUntilRenewal(session, 60_000);
+        if (delay <= 0) {
+          void performSilentRefresh(session);
+          return;
+        }
+
+        renewalTimer.current = setTimeout(() => {
+          // Nothing is persisted to re-read in cookie mode — the closed-over
+          // session is the freshest local knowledge; the backend call itself
+          // is authoritative regardless.
+          void performSilentRefresh(session);
+        }, delay);
+        return;
+      }
+
       if (isRefreshTokenExpired(session)) return; // no renewal possible
 
       const delay = msUntilRenewal(session, 60_000);
@@ -267,9 +441,43 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
     [cancelRenewal, performSilentRefresh],
   );
 
-  // ── Hydrate from sessionStorage on mount ───────────────────────────────────
+  // ── Hydrate on mount ─────────────────────────────────────────────────────
 
   useEffect(() => {
+    if (config.authMode === "cookie") {
+      // No sessionStorage to hydrate from — ask the backend whether the
+      // browser currently holds a valid session cookie.
+      let cancelled = false;
+      void (async () => {
+        try {
+          const status = await getApi().getSessionStatus();
+          if (
+            cancelled ||
+            !status.authenticated ||
+            !status.address ||
+            !status.expiresAt
+          ) {
+            return;
+          }
+          const session: SiweAuthSession = {
+            isAuthenticated: true,
+            token: "",
+            address: status.address,
+            expiresAt: status.expiresAt,
+          };
+          dispatch({ type: "restore", session });
+          scheduleRenewal(session);
+        } catch {
+          // Backend unreachable or check failed — leave state unauthenticated;
+          // the user can retry via signIn(). Do not treat this the same as a
+          // confirmed "no session" response.
+        }
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }
+
     const stored = loadAuthSession();
     if (stored) {
       dispatch({ type: "restore", session: stored });
@@ -288,47 +496,77 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
   // ── BroadcastChannel — receive messages from peer tabs ─────────────────────
 
   useEffect(() => {
-    if (typeof window === "undefined" || !("BroadcastChannel" in window))
-      return;
+    if (typeof window === "undefined") return;
 
-    const channel = new BroadcastChannel(AUTH_CHANNEL_NAME);
-    channelRef.current = channel;
-
-    channel.onmessage = (event: MessageEvent<AuthBroadcastMessage>) => {
-      const msg = event.data;
-      if (!msg?.type) return;
-
-      if (msg.type === "signed-in" || msg.type === "refreshed") {
-        const s = msg.session;
-        if (
-          !s ||
-          typeof s.token !== "string" ||
-          !s.token.trim() ||
-          typeof s.address !== "string" ||
-          !s.address.trim() ||
-          typeof s.expiresAt !== "string" ||
-          !s.expiresAt.trim()
-        ) {
-          return;
-        }
-        // If a wallet is currently connected in this tab, discard sessions for other addresses
-        if (address && s.address.toLowerCase() !== address.toLowerCase()) {
-          return;
-        }
-        storeAuthSession(s);
-        dispatch({ type: "restore", session: s });
-        scheduleRenewal(s);
-      } else if (msg.type === "signed-out") {
+    const applyIncomingSession = (session: SiweAuthSession | null) => {
+      if (!session) {
         cancelRenewal();
         clearAuthSession();
         dispatch({ type: "clear" });
         disconnect();
       }
+      // If a wallet is currently connected in this tab, discard sessions for other addresses
+      if (address && session.address.toLowerCase() !== address.toLowerCase()) {
+        return;
+      }
+      storeAuthSession(session);
+      dispatch({ type: "restore", session });
+      scheduleRenewal(session);
     };
 
+    const onStorageMessage = (event: StorageEvent) => {
+      if (event.key && event.key !== SESSION_KEY) return;
+      if (event.newValue === null) {
+        applyIncomingSession(null);
+        return;
+      }
+      try {
+        const parsed = JSON.parse(event.newValue ?? "") as SiweAuthSession;
+        applyIncomingSession(parsed);
+      } catch {
+        // Ignore malformed peer-session payloads.
+      }
+    };
+
+    const unsubscribeStorage = subscribeToAuthSessionStorage(onStorageMessage);
+
+    if ("BroadcastChannel" in window) {
+      const channel = new BroadcastChannel(AUTH_CHANNEL_NAME);
+      channelRef.current = channel;
+
+      channel.onmessage = (event: MessageEvent<AuthBroadcastMessage>) => {
+        const msg = event.data;
+        if (!msg?.type) return;
+
+        if (msg.type === "signed-in" || msg.type === "refreshed") {
+          applyIncomingSession(msg.session);
+        } else if (msg.type === "signed-out") {
+          applyIncomingSession(null);
+        } else if (msg.type === "request-current-session") {
+          // A peer missed our (or another tab's) 'refreshed' broadcast —
+          // BroadcastChannel doesn't queue/replay messages sent before a
+          // listener existed. If we currently hold a valid session for the
+          // requested address, resend it.
+          const current = loadAuthSessionIncludingExpired();
+          if (
+            current &&
+            current.address.toLowerCase() === msg.address.toLowerCase() &&
+            !isAccessTokenExpired(current)
+          ) {
+            broadcast({ type: "refreshed", session: current });
+          }
+        }
+      };
+
+      return () => {
+        unsubscribeStorage();
+        channel.close();
+        channelRef.current = null;
+      };
+    }
+
     return () => {
-      channel.close();
-      channelRef.current = null;
+      unsubscribeStorage();
     };
   }, [address, cancelRenewal, scheduleRenewal, disconnect]);
 
@@ -451,6 +689,30 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, [chainId]);
 
+  // ── Pending-retry queue ──────────────────────────────────────────────────────
+  //
+  // When a mutation fails with 401, it may register a retry callback here
+  // before calling markExpired().  After a successful re-auth, signIn() drains
+  // this queue by invoking each callback with the fresh session.  A second 401
+  // on the retry call invokes the registered onRetryFailure handler instead of
+  // looping forever.
+
+  type RetryEntry = {
+    callback: PendingRetryCallback;
+    onRetryFailure?: (err: unknown) => void;
+  };
+  const pendingRetriesRef = useRef<RetryEntry[]>([]);
+
+  const registerPendingRetry = useCallback(
+    (callback: PendingRetryCallback, options?: { onRetryFailure?: (err: unknown) => void }) => {
+      pendingRetriesRef.current = [
+        ...pendingRetriesRef.current,
+        { callback, onRetryFailure: options?.onRetryFailure },
+      ];
+    },
+    [],
+  );
+
   // ── Sign-in ─────────────────────────────────────────────────────────────────
 
   const signIn = useCallback(async () => {
@@ -485,10 +747,35 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
 
       const signature = await signMessageAsync({ message });
       const session = await api.siweVerify(message, signature);
-      storeAuthSession(session);
-      dispatch({ type: "sign-in-success", session });
-      scheduleRenewal(session);
-      broadcast({ type: "signed-in", session });
+      // Cookie mode: the backend response still legitimately carries a
+      // token/refreshToken during the dual-ship window, but this frontend
+      // never persists, broadcasts, or holds one — the session cookie (set
+      // by the backend alongside this same response) is the actual
+      // credential. Scrubbing here means the token never reaches
+      // storeAuthSession(), the reducer, or a peer tab.
+      const settledSession: SiweAuthSession =
+        config.authMode === "cookie"
+          ? { ...session, token: "", refreshToken: undefined }
+          : session;
+      storeAuthSession(settledSession);
+      dispatch({ type: "sign-in-success", session: settledSession });
+      scheduleRenewal(settledSession);
+      broadcast({ type: "signed-in", session: settledSession });
+
+      // Drain any pending retry callbacks registered before re-auth.
+      // We take the entire queue atomically so a second 401 inside a callback
+      // does not enqueue another retry and cause an infinite loop.
+      const retries = pendingRetriesRef.current;
+      pendingRetriesRef.current = [];
+      for (const entry of retries) {
+        try {
+          await entry.callback(settledSession);
+        } catch (retryErr) {
+          // The retried call failed — invoke the registered failure handler
+          // rather than silently swallowing the error.
+          entry.onRetryFailure?.(retryErr);
+        }
+      }
     } catch (err) {
       dispatch({
         type: "sign-in-error",
@@ -508,23 +795,45 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
   const logout = useCallback(async () => {
     cancelRenewal();
     const token = getStoredToken();
+    const hadCookieSession =
+      config.authMode === "cookie" && state.authSession !== null;
     clearAuthSession();
     dispatch({ type: "clear" });
     broadcast({ type: "signed-out" });
     disconnect();
-    if (token) {
+    if (hadCookieSession) {
+      // No token to send — the cookie identifies the session to invalidate.
+      await getApi(address)
+        .siweLogout()
+        .catch(() => {
+          // best-effort server-side invalidation
+        });
+      return;
+    }
+    if (config.authMode !== "cookie" && token) {
       await getApi(address)
         .siweLogout(token)
         .catch(() => {
           // best-effort server-side invalidation
         });
     }
-  }, [address, cancelRenewal, broadcast, disconnect]);
+  }, [address, cancelRenewal, broadcast, disconnect, state.authSession]);
 
   // ── markExpired ─────────────────────────────────────────────────────────────
 
   const markExpired = useCallback(() => {
     cancelRenewal();
+
+    if (config.authMode === "cookie") {
+      if (state.authSession) {
+        void performSilentRefresh(state.authSession);
+        return;
+      }
+      dispatch({ type: "mark-expired" });
+      broadcast({ type: "signed-out" });
+      return;
+    }
+
     // Attempt a silent refresh if a refresh token is still available
     const raw = loadAuthSessionIncludingExpired();
     if (raw && !isRefreshTokenExpired(raw)) {
@@ -534,20 +843,24 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
       dispatch({ type: "mark-expired" });
       broadcast({ type: "signed-out" });
     }
-  }, [cancelRenewal, performSilentRefresh, broadcast]);
+  }, [cancelRenewal, performSilentRefresh, broadcast, state.authSession]);
 
   // ── Derived values ──────────────────────────────────────────────────────────
 
   const sessionStatus = deriveSessionStatus(state, isConnected);
+  const warningThresholdSeconds = config.siwe.warningThresholdSeconds ?? 120;
+  const isExpiring =
+    sessionStatus === "authenticated" &&
+    timeLeft > 0 &&
+    timeLeft <= warningThresholdSeconds;
 
-  const legacyStatus: SiweAuthContextValue["status"] =
-    sessionStatus === "authenticated" && timeLeft > 0 && timeLeft <= 60
-      ? "expiring"
-      : sessionStatus === "authenticated"
-        ? "authenticated"
-        : isConnected
-          ? "unauthenticated"
-          : "disconnected";
+  const legacyStatus: SiweAuthContextValue["status"] = isExpiring
+    ? "expiring"
+    : sessionStatus === "authenticated"
+      ? "authenticated"
+      : isConnected
+        ? "unauthenticated"
+        : "disconnected";
 
   const value = useMemo<SiweAuthContextValue>(
     () => ({
@@ -556,12 +869,15 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
       sessionStatus,
       status: legacyStatus,
       timeLeft,
+      isExpiring,
+      warningThresholdSeconds,
       isSigningIn: state.isSigningIn,
       error: state.error,
       signIn,
       login: signIn, // backward-compat alias
       logout,
       markExpired,
+      registerPendingRetry,
     }),
     [
       state.authSession,
@@ -570,14 +886,17 @@ export function SiweAuthProvider({ children }: { children: React.ReactNode }) {
       sessionStatus,
       legacyStatus,
       timeLeft,
+      isExpiring,
+      warningThresholdSeconds,
       signIn,
       logout,
       markExpired,
+      registerPendingRetry,
     ],
   );
 
   return (
-    <SiweAuthContext.Provider value={value}>
+    <SiweAuthContext.Provider value={value as any}>
       {children}
     </SiweAuthContext.Provider>
   );
@@ -618,7 +937,7 @@ export function useSiweAuth(): SiweAuthContextValue {
   const context = useContext(SiweAuthContext);
   if (!context)
     throw new Error("useSiweAuth must be used within SiweAuthProvider");
-  return context;
+  return context as unknown as SiweAuthContextValue;
 }
 
 // ── Root providers ────────────────────────────────────────────────────────────
