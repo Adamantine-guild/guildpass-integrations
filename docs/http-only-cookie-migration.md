@@ -74,21 +74,52 @@ The backend still returns `token` in the `/verify` and `/refresh` response
 bodies.  No frontend changes are needed yet; this phase verifies the cookie
 path works end-to-end without risking a regression.
 
-### Phase 2 — Switch to cookie
+### Phase 1.5 — Dual-mode readiness (implemented)
 
-| Module | Change |
+Rather than a hard cutover, the frontend now supports **both** modes behind
+`NEXT_PUBLIC_AUTH_MODE` (`bearer` default, `cookie` opt-in — see the
+[README](../README.md#dual-mode-readiness-httponly-cookie-auth-next_public_auth_mode)).
+`bearer` mode is byte-for-byte unchanged. `cookie` mode implements the target
+architecture below, gated behind the flag, entirely against the mock (no
+real `guildpass-core` endpoint exists yet):
+
+| Module | What actually changed |
 |--------|--------|
-| `lib/session.ts` | Remove all `sessionStorage` read/write/clear logic. `storeAuthSession()`, `loadAuthSession()`, `clearAuthSession()` become no-ops or thin wrappers around a new session-status check. `getStoredToken()` returns `null` — the token is no longer accessible to JS. |
-| `lib/session.ts` — new | Add `isSessionActive(): Promise<boolean>` that calls `GET /v1/auth/session` (or similar lightweight endpoint that returns `{ authenticated: true/false }`). This replaces the client-side expiry check. |
-| `lib/api/live.ts` | Remove `authHeaders()` entirely — the cookie is sent automatically by the browser. `LiveAccessApi` no longer needs the `token` constructor parameter. |
-| `lib/api/index.ts` | `getApi()` no longer takes a `token` argument. |
-| `lib/wallet/providers.tsx` | `SiweAuthProvider` no longer hydrates from `sessionStorage` on mount. Auth status is determined by calling `isSessionActive()`. Silent refresh still triggers `siweRefresh()` but the new cookie is set by the backend automatically. |
-| All call sites | Remove `authSession?.token` from `getApi(...)` calls in `nav.tsx`, `app/admin/*/page.tsx`. The constructor parameter is gone; the cookie is transparent. |
+| `lib/config.ts` | New `config.authMode: 'bearer' \| 'cookie'`, parsed from `NEXT_PUBLIC_AUTH_MODE`. Any value other than the literal `cookie` falls back to `bearer`. |
+| `lib/session.ts` | `storeAuthSession()`, `loadAuthSession()`, `loadAuthSessionIncludingExpired()`, and the `sessionStorage` branch of `clearAuthSession()` become no-ops in cookie mode — proven by unit tests that spy on `sessionStorage` call counts, not just return values. `getStoredToken()`/`getStoredAddress()` return `null` via the same gate. New `isSessionActive(): Promise<boolean>` calls the endpoint below. |
+| `lib/api/types.ts` | New `SessionStatus { authenticated: boolean; address?: string; expiresAt?: string }` / `SessionStatusSchema` — provisional, like `AnalyticsSummary`. Added to `SiweAuthApi.getSessionStatus()`. `siweLogout(token?: string)` — token is now optional so a cookie-mode caller can invoke it with none. |
+| `lib/api/live.ts` | `getSessionStatus()` calls `GET /v1/auth/session` (no live backend implements this yet — 404 is treated the same as "no session"). `authHeaders()` never adds `Authorization` when `authMode === 'cookie'`, regardless of whether a token is present in memory. `getJson()` sends `credentials: 'include'` only in cookie mode (needed because the core API can be cross-origin in dev — the browser's `same-origin` default excludes those cookies). The `token` constructor parameter was already optional; it stays. |
+| `lib/api/mock.ts` | Mock `getSessionStatus()`/cookie simulation via a non-httpOnly `document.cookie` entry (mock JS cannot set a real httpOnly cookie either) — entirely separate storage from `sessionStorage`, active only when `authMode === 'cookie'`. |
+| `lib/wallet/providers.tsx` | Mount hydration calls `getApi().getSessionStatus()` instead of reading `sessionStorage` when in cookie mode. Sign-in/refresh responses still legitimately carry a `token`/`refreshToken` from the backend during the dual-ship window, but the provider scrubs both to empty before the session is stored, dispatched, or broadcast, so a real token is never persisted or sent to a peer tab. |
+| Call sites (`nav.tsx`, `app/**/page.tsx`) | **Unchanged.** `getApi(address, authSession?.token, communitySlug)` keeps its exact signature everywhere — in cookie mode `authSession.token` is simply `''`, which `authHeaders()` already ignores. This was a deliberate scope decision to avoid a 20-file diff for this PR; see "Known gaps" below for the follow-up once the backend endpoint ships. |
+
+**Known gaps in this dual-mode-readiness pass** (tracked for the actual
+Phase 2 cutover once `guildpass-core` ships `GET /v1/auth/session`):
+
+- Cookie mode's silent refresh does **not** use the same Web-Locks-based
+  cross-tab mutual exclusion bearer mode has
+  (`lib/wallet/refresh-coordination.ts`) — it performs its own
+  `siweRefresh()` call directly. Acceptable for now per the "tab sync
+  becomes less critical" note below; two tabs racing a refresh at the exact
+  same moment could redundantly both call the backend. Bearer mode's
+  coordination is untouched.
+- `getSessionStatus()` is unimplemented on the real `guildpass-core`
+  backend — only the mock simulates it.
+
+### Phase 2 — Switch to cookie (remaining work once the backend ships)
+
+With the dual-mode plumbing above already in place, the remaining Phase 2
+work is: `guildpass-core` implements `GET /v1/auth/session` and starts
+setting the `gp_session` cookie; the frontend's default flips from `bearer`
+to `cookie` (or ops sets `NEXT_PUBLIC_AUTH_MODE=cookie` per-environment);
+and the cross-tab refresh coordination gap above gets closed.
 
 ### Phase 3 — Cleanup
 
 Remove backward-compat `token` fields from the response body (backend) and
-remove the dead code paths in the frontend.
+remove the dead code paths in the frontend (the bearer-mode branches in
+`lib/session.ts` / `lib/wallet/providers.tsx` / `lib/api/live.ts` once
+`bearer` mode is no longer supported).
 
 ---
 

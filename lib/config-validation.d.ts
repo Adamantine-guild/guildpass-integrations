@@ -2,6 +2,8 @@ export type EnvSource = Record<string, string | undefined>
 
 export type ApiMode = 'mock' | 'live'
 
+export type AuthMode = 'bearer' | 'cookie'
+
 export interface SiweConfig {
   domain: string
   statement: string
@@ -27,6 +29,7 @@ export interface IntegrationGatewayConfig {
 
 export interface AppConfig {
   apiMode: ApiMode
+  authMode: AuthMode
   apiUrl: string
   siwe: SiweConfig
   features: FeatureFlags
@@ -49,6 +52,7 @@ export function buildFeatureFlags(
 export function coreApiUrlRequiredMessage(): string
 export function flag(source: EnvSource, varName: string, defaultVal: boolean): boolean
 export function parseApiModeFromEnv(source?: EnvSource): ApiMode
+export function parseAuthModeFromEnv(source?: EnvSource): AuthMode
 export function resolveCoreApiUrl(source?: EnvSource, apiMode?: ApiMode): string
 export function resolveWarningThresholdSeconds(source?: EnvSource): number
 export function validateSiweStatement(value: string): string
