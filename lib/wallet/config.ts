@@ -1,4 +1,5 @@
 import { http, injected, fallback } from 'wagmi'
+import { walletConnect } from '@wagmi/connectors'
 import { mainnet, base, sepolia } from 'wagmi/chains'
 import type { Chain } from 'viem'
 import type { CreateConnectorFn } from 'wagmi'
@@ -52,17 +53,74 @@ function rpcEnvName(chain: Chain): string {
   return rpcEnvNameFromChainName(name ?? String(chain.id))
 }
 
+// ── RPC Health Tracking ─────────────────────────────────────────────────────
+
+const FAILURE_THRESHOLD = 3
+const RECOVERY_COOLDOWN_MS = 60_000
+
+interface EndpointHealth {
+  failureCount: number
+  lastFailureAt: number
+  deprioritized: boolean
+}
+
+export const rpcHealth = new Map<string, EndpointHealth>()
+
+export function recordRpcFailure(url: string): void {
+  const now = Date.now()
+  const entry = rpcHealth.get(url) ?? { failureCount: 0, lastFailureAt: 0, deprioritized: false }
+  entry.failureCount += 1
+  entry.lastFailureAt = now
+  if (entry.failureCount >= FAILURE_THRESHOLD) {
+    entry.deprioritized = true
+  }
+  rpcHealth.set(url, entry)
+}
+
+export function recordRpcSuccess(url: string): void {
+  rpcHealth.delete(url)
+}
+
+export function isDeprioritized(url: string): boolean {
+  const entry = rpcHealth.get(url)
+  if (!entry) return false
+  if (!entry.deprioritized) return false
+  if (Date.now() - entry.lastFailureAt > RECOVERY_COOLDOWN_MS) {
+    rpcHealth.delete(url)
+    return false
+  }
+  return true
+}
+
+function sortByHealth(urls: string[]): string[] {
+  return [...urls].sort((a, b) => {
+    const aDp = isDeprioritized(a)
+    const bDp = isDeprioritized(b)
+    if (aDp && !bDp) return 1
+    if (!aDp && bDp) return -1
+    const aF = rpcHealth.get(a)?.failureCount ?? 0
+    const bF = rpcHealth.get(b)?.failureCount ?? 0
+    return aF - bF
+  })
+}
+
+// ── Transport Builder ────────────────────────────────────────────────────────
+
 function buildTransports(chains: readonly [SupportedWalletChain, ...SupportedWalletChain[]]): WalletRuntimeConfig['transports'] {
   return chains.reduce<WalletRuntimeConfig['transports']>((transports, chain) => {
     const envName = rpcEnvName(chain)
-    const rpcUrl = env(envName)
-    const primaryTransport = rpcUrl ? http(validateBrowserUrl(rpcUrl, envName)) : null
-    transports[chain.id] = primaryTransport
-      ? fallback([primaryTransport, http()])
+    const rawValue = env(envName)
+    const urls = splitCsv(rawValue).map((u) => validateBrowserUrl(u, envName))
+    const sorted = sortByHealth(urls)
+    const userTransports = sorted.map((url) => http(url, { name: url }))
+    transports[chain.id] = userTransports.length > 0
+      ? fallback([...userTransports, http()])
       : http()
     return transports
   }, {} as WalletRuntimeConfig['transports'])
 }
+
+// ── Connector Builder ────────────────────────────────────────────────────────
 
 function parseConnectorNames(): readonly WalletConnectorName[] {
   return parseConnectorNamesCsv(env('NEXT_PUBLIC_WALLET_CONNECTORS'))
@@ -73,9 +131,28 @@ function buildConnectors(connectorNames: readonly WalletConnectorName[]): Create
     switch (name) {
       case 'injected':
         return injected({ shimDisconnect: true })
+      case 'walletConnect': {
+        const projectId = env('NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID')
+        if (!projectId) {
+          fail(
+            'NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID is required when using the walletConnect connector.',
+          )
+        }
+        return walletConnect({
+          projectId,
+          showQrModal: true,
+        })
+      }
     }
   })
 }
+
+export function hasInjectedWallet(): boolean {
+  if (typeof window === 'undefined') return false
+  return typeof window.ethereum !== 'undefined'
+}
+
+// ── Main Config Builder ──────────────────────────────────────────────────────
 
 function buildWalletConfig(): WalletRuntimeConfig {
   try {

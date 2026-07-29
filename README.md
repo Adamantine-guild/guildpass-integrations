@@ -125,14 +125,19 @@ check automatically via the `predev` script.
 | `NEXT_PUBLIC_SIWE_DOMAIN` | No | Domain field in the EIP-4361 message (defaults to `localhost:3000`) |
 | `NEXT_PUBLIC_SIWE_STATEMENT` | No | Human-readable statement shown in the signed message |
 | `NEXT_PUBLIC_WALLET_CHAINS` | No | Comma-separated supported chains for wagmi; supported values: `mainnet`, `base`, `sepolia`; defaults to all three |
-| `NEXT_PUBLIC_WALLET_RPC_MAINNET` | No | Optional browser-safe RPC URL for Ethereum mainnet when enabled |
-| `NEXT_PUBLIC_WALLET_RPC_BASE` | No | Optional browser-safe RPC URL for Base when enabled |
-| `NEXT_PUBLIC_WALLET_RPC_SEPOLIA` | No | Optional browser-safe RPC URL for Sepolia when enabled |
+| `NEXT_PUBLIC_WALLET_RPC_MAINNET` | No | Optional browser-safe RPC URL(s) for Ethereum mainnet; supports comma-separated list for multi-RPC failover |
+| `NEXT_PUBLIC_WALLET_RPC_BASE` | No | Optional browser-safe RPC URL(s) for Base; supports comma-separated list for multi-RPC failover |
+| `NEXT_PUBLIC_WALLET_RPC_SEPOLIA` | No | Optional browser-safe RPC URL(s) for Sepolia; supports comma-separated list for multi-RPC failover |
 | `NEXT_PUBLIC_WALLET_CONNECTORS` | No | Comma-separated wallet connectors; see [Wallet connectors](#wallet-connectors) for supported values (defaults to `injected`) |
+| `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID` | When walletConnect enabled | WalletConnect Cloud project ID (required when `walletConnect` connector is listed in `NEXT_PUBLIC_WALLET_CONNECTORS`) |
 
 See [`.env.example`](./.env.example) for a ready-to-copy template.
 
 Wallet chain settings are built by [`lib/wallet/config.ts`](./lib/wallet/config.ts). Invalid chain names, empty chain lists, unsupported connectors, or malformed RPC URLs throw a `ConfigError` during development so deployment mistakes are visible before users connect a wallet. In mock mode, leaving these variables unset preserves the local default of `mainnet`, `base`, and `sepolia` with default transports.
+
+**Multi-RPC failover**: Each chain supports multiple comma-separated RPC URLs. The first reachable endpoint is preferred; after 3 consecutive failures an endpoint is deprioritized for 60 seconds (with automatic recovery). The public default RPC is always appended as the final fallback.
+
+**Wallet connector fallback**: When the `walletConnect` connector is enabled alongside `injected`, the connect button automatically offers a WalletConnect QR path when no injected wallet is detected (e.g. mobile browsers without an extension).
 
 Only expose RPC URLs that are safe to bundle into browser JavaScript. Do not put private RPC credentials in `NEXT_PUBLIC_*` variables unless your provider explicitly documents that the key is public and browser-safe.
 
@@ -145,6 +150,7 @@ Currently supported values:
 | Value | Connector |
 | ----- | --------- |
 | `injected` | Browser-extension / injected wallets (MetaMask, Rabby, etc.) — the default |
+| `walletConnect` | [WalletConnect](https://walletconnect.com/) v2 — QR-code based mobile wallet pairing (requires `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID`) |
 
 Setting any other value (for example `walletconnect`) throws a `ConfigError` at startup that lists the supported values and links back to this section — connectors are compiled into the bundle, so an unrecognized name can never work at runtime and is better caught early.
 

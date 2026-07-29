@@ -33,6 +33,7 @@
     "../lib/config-validation.js",
     "../lib/wallet/validation.js",
     "../lib/wallet/siwe-session.ts",
+    "../lib/wallet/config.ts",
     "../lib/config.ts",
     "../lib/features.ts",
     "../components/feature-gate.tsx",
