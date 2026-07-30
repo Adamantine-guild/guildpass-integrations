@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useId, useState, useMemo } from "react";
+import { useEffect, useId, useRef, useState, useMemo } from "react";
 import { useAccount } from "wagmi";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   getApi,
   type AccessPolicy,
+  type MutationResult,
   type Resource,
   MembershipTier,
   Role,
@@ -43,6 +44,11 @@ import {
   storePolicyDraft,
 } from "@/lib/policy-drafts";
 import { PolicyConflictDialog } from "@/components/ui/policy-conflict-dialog";
+import {
+  buildPolicyConflictContext,
+  type PolicyConflictContext,
+} from "@/lib/api/policy-conflict";
+import { withOfflineMutationQueue } from "@/lib/api/offline-mutations";
 import { ScenarioSelector } from "@/components/developer/scenario-selector";
 import { config } from "@/lib/config";
 const ALL_ROLES: Role[] = ["member", "moderator", "admin"];
@@ -304,11 +310,16 @@ export default function PoliciesPage() {
   );
   
   // Conflict detection state
-  const [conflictState, setConflictState] = useState<{
-    attemptedPolicy: AccessPolicy;
-    currentPolicy?: AccessPolicy;
-  } | null>(null);
+  const [conflictState, setConflictState] = useState<PolicyConflictContext | null>(null);
   const [isLoadingConflictData, setIsLoadingConflictData] = useState(false);
+
+  // Tracks the most recent mutation's result status so onSettled can skip
+  // invalidating the policies query when the mutation was only queued for
+  // offline replay — there's nothing new on the server yet, and refetching
+  // now would just overwrite the optimistic update with stale data (see
+  // components/offline/mutation-queue-sync.tsx for when the real
+  // invalidation happens, once replay actually succeeds).
+  const lastMutationStatusRef = useRef<MutationResult["status"] | null>(null);
 
   const {
     data: policies,
@@ -339,11 +350,15 @@ export default function PoliciesPage() {
     isError: mutateError,
     error: mutateErrorValue,
     reset: resetMutation,
-  } = useMutation<{ status: 'executed' | 'pending'; pendingActionId?: string }, unknown, AccessPolicy, PolicyRollback>({
+  } = useMutation<MutationResult, unknown, AccessPolicy, PolicyRollback>({
     mutationFn: (policy: AccessPolicy) =>
-      getApi(address, authSession?.token, communitySlug).updatePolicy(policy),
+      withOfflineMutationQueue(
+        getApi(address, authSession?.token, communitySlug),
+        communitySlug,
+      ).updatePolicy(policy),
 
     onMutate: async (policy) => {
+      lastMutationStatusRef.current = null;
       await qc.cancelQueries({ queryKey: queryKeys.policies.all(communitySlug) });
       const previousPolicies = qc.getQueryData<AccessPolicy[]>(
         queryKeys.policies.all(communitySlug),
@@ -362,6 +377,7 @@ export default function PoliciesPage() {
     },
 
     onSuccess: (data, policy, context) => {
+      lastMutationStatusRef.current = data.status;
       if (data.status === 'pending') {
         qc.setQueryData(queryKeys.policies.all(communitySlug), context?.previousPolicies);
         addToast({
@@ -370,6 +386,26 @@ export default function PoliciesPage() {
           description: `Policy update for "${policy.resourceId}" has been proposed for approval.`,
         });
         setSuccessMessage(`Policy update for "${policy.resourceId}" proposed for approval.`);
+        clearPolicyDraft(policy.resourceId);
+        clearPolicyDraft("");
+        setEditingResourceId(null);
+        setShowCreateForm(false);
+        resetMutation();
+        return;
+      }
+
+      if (data.status === 'queued') {
+        // Offline — the optimistic update already reflects the attempted
+        // change locally; leave it in place until replay confirms it
+        // (components/offline/mutation-queue-sync.tsx), rather than rolling
+        // back to the previous server state.
+        addToast({
+          tone: "warning",
+          title: "Action queued",
+          description: `Your update to "${policy.resourceId}" is queued. It will automatically sync when you're back online.`,
+        });
+        setSuccessMessage("");
+        setRollbackMessage("");
         clearPolicyDraft(policy.resourceId);
         clearPolicyDraft("");
         setEditingResourceId(null);
@@ -439,25 +475,13 @@ export default function PoliciesPage() {
 
       // Check for conflict error (409)
       if (isApiError(err) && err.status === 409) {
-        // Fetch the current version of the policy from the server
         setIsLoadingConflictData(true);
-        getApi(address, authSession?.token, communitySlug)
-          .getPolicy(policy.resourceId)
-          .then((currentPolicy) => {
-            setConflictState({
-              attemptedPolicy: policy,
-              currentPolicy: currentPolicy ?? undefined,
-            });
-          })
-          .catch(() => {
-            // If we can't fetch the current policy, still show the dialog
-            setConflictState({
-              attemptedPolicy: policy,
-            });
-          })
-          .finally(() => {
-            setIsLoadingConflictData(false);
-          });
+        buildPolicyConflictContext(
+          getApi(address, authSession?.token, communitySlug),
+          policy,
+        )
+          .then(setConflictState)
+          .finally(() => setIsLoadingConflictData(false));
       } else if (!(err instanceof AuthError)) {
         // Non-auth, non-conflict errors — show a toast with the error message
         addToast({
@@ -480,7 +504,12 @@ export default function PoliciesPage() {
 
     onSettled: () => {
       setPendingPolicyId(null);
-      qc.invalidateQueries({ queryKey: queryKeys.policies.all(communitySlug) });
+      // Skip invalidating when the mutation was only queued for offline
+      // replay — there's nothing new on the server yet (see
+      // lastMutationStatusRef above).
+      if (lastMutationStatusRef.current !== 'queued') {
+        qc.invalidateQueries({ queryKey: queryKeys.policies.all(communitySlug) });
+      }
     },
   });
 

@@ -79,6 +79,14 @@
     "../lib/integration/resilientCall.ts",
     "../lib/hooks/*.ts",
     "../lib/members/*.ts",
-    "../components/admin/*.tsx"
+    "../components/admin/*.tsx",
+    "../lib/offline/mutation-queue.ts",
+    "../lib/offline/mutation-replay.ts",
+    "../lib/offline/use-mutation-queue-status.ts",
+    "../lib/offline/use-sync-status.ts",
+    "../lib/api/offline-mutations.ts",
+    "../lib/api/policy-conflict.ts",
+    "../components/offline/mutation-queue-sync.tsx",
+    "../components/ui/sync-status-banner.tsx"
   ]
 }

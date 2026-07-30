@@ -41,7 +41,37 @@ export interface ApprovalConfig {
   updatePolicy: number
 }
 
+/**
+ * {@link Community} as actually returned in mock mode, which additionally
+ * carries multi-admin approval thresholds. Kept separate from the
+ * auto-generated \`Community\` interface (test/fixtures/openapi.json) rather
+ * than added to it directly, since \`approvalConfig\` isn't part of the
+ * OpenAPI schema yet.
+ */
+export interface CommunityWithApprovalConfig extends Community {
+  approvalConfig?: ApprovalConfig
+}
+
 export type PendingActionType = 'assignRole' | 'removeRole' | 'updatePolicy'
+
+/**
+ * Result of an admin write mutation (assignRole/removeRole/updatePolicy).
+ *
+ * - 'executed' — applied immediately.
+ * - 'pending'  — multi-admin approval threshold not yet met (see
+ *   {@link ApprovalConfig} / {@link PendingActionType}); unrelated to
+ *   connectivity.
+ * - 'queued'   — the caller was offline or the request failed with a network
+ *   error; the mutation was persisted to the durable offline mutation queue
+ *   (see lib/offline/mutation-queue.ts) instead of failing, and will be
+ *   replayed automatically once the app is back online.
+ */
+export type MutationResultStatus = 'executed' | 'pending' | 'queued'
+
+export interface MutationResult {
+  status: MutationResultStatus
+  pendingActionId?: string
+}
 
 export interface PendingActionPayload {
   address?: string
@@ -249,6 +279,143 @@ export interface BackendSession {
   }
 }
 
+// ── Governance Types ──────────────────────────────────────────────────────────
+
+/**
+ * Proposal status lifecycle:
+ * - draft: Created by admin, not yet active
+ * - active: Open for voting by members
+ * - closed: Voting period ended, awaiting resolution
+ * - resolved: Outcome applied/executed
+ */
+export type ProposalStatus = 'draft' | 'active' | 'closed' | 'resolved'
+
+export type ProposalType = 'policy_change' | 'resource_addition' | 'rule_update' | 'other'
+
+export interface Proposal {
+  id: string
+  communityId: string
+  type: ProposalType
+  title: string
+  description: string
+  status: ProposalStatus
+  proposer: string
+  createdAt: string
+  votingStartsAt: string
+  votingEndsAt: string
+  /** JSON-encoded proposal-specific data (e.g., policy diff, resource spec). */
+  payload: Record<string, unknown>
+  /** Total voting weight available (sum of all role/tier weights). */
+  totalWeight: number
+  /** Vote counts and weighted results. */
+  votesSummary: VotesSummary
+}
+
+export interface VotesSummary {
+  totalVotes: number
+  weightsFor: number
+  weightsAgainst: number
+  weightsAbstain: number
+  percentFor?: number
+  percentAgainst?: number
+}
+
+export type VoteChoice = 'for' | 'against' | 'abstain'
+
+export interface Vote {
+  id: string
+  proposalId: string
+  voter: string
+  choice: VoteChoice
+  weight: number
+  /**
+   * Voter's tier/role at time of vote, used to calculate weight.
+   * { tier: 'pro', role: 'moderator' } for example.
+   */
+  voterContext?: {
+    tier?: MembershipTier
+    role?: Role
+  }
+  votedAt: string
+}
+
+export interface GovernanceApi {
+  // ── Member queries (read-only) ────────────────────────────────────────
+  /**
+   * List active and recent proposals.
+   * @param filter - Optional filter by status ('active', 'draft', 'closed', 'resolved') or type
+   * @param limit - Pagination limit (default 20)
+   * @param cursor - Pagination cursor
+   */
+  listProposals(params?: {
+    filter?: ProposalStatus | ProposalType
+    limit?: number
+    cursor?: string
+  }, signal?: AbortSignal): Promise<Proposal[]>
+
+  /**
+   * Get a single proposal by ID with full details and vote summary.
+   */
+  getProposal(id: string, signal?: AbortSignal): Promise<Proposal | null>
+
+  /**
+   * Get the authenticated member's vote on a proposal (if any).
+   */
+  getMemberVote(proposalId: string, signal?: AbortSignal): Promise<Vote | null>
+
+  /**
+   * List all votes on a proposal (for transparency).
+   */
+  listProposalVotes(proposalId: string, params?: {
+    limit?: number
+    cursor?: string
+  }, signal?: AbortSignal): Promise<Vote[]>
+
+  // ── Member mutations ──────────────────────────────────────────────────
+  /**
+   * Cast or update a vote on an active proposal.
+   * Requires SIWE authentication. The voter's weight is determined by their
+   * tier/role at the time of voting (or mock-determined in demo).
+   * Throws 403 if voting is not open, 404 if proposal not found.
+   */
+  castVote(proposalId: string, choice: VoteChoice): Promise<Vote>
+
+  // ── Admin mutations ───────────────────────────────────────────────────
+  /**
+   * Create a new governance proposal (admin only).
+   * Initially in 'draft' status; must call publishProposal() to activate.
+   */
+  createProposal(proposal: Omit<Proposal, 'id' | 'createdAt' | 'status' | 'communityId' | 'votesSummary' | 'totalWeight'>): Promise<Proposal>
+
+  /**
+   * Update a proposal (admin only, must be in draft or closed status).
+   */
+  updateProposal(id: string, updates: Partial<Omit<Proposal, 'id' | 'status' | 'proposer' | 'createdAt' | 'votesSummary' | 'totalWeight'>>): Promise<Proposal>
+
+  /**
+   * Publish a draft proposal, transitioning it to 'active' and opening voting.
+   * Admin only.
+   */
+  publishProposal(id: string): Promise<Proposal>
+
+  /**
+   * Close voting on an active proposal, transitioning to 'closed'.
+   * Admin only. Does not execute/resolve the outcome.
+   */
+  closeProposalVoting(id: string): Promise<Proposal>
+
+  /**
+   * Resolve a closed proposal by applying its outcome (e.g., update policy, add resource).
+   * Admin only. This is a notification method; actual state changes happen on the backend.
+   */
+  resolveProposal(id: string, outcome: string): Promise<Proposal>
+
+  /**
+   * Delete a draft proposal. Admin only.
+   */
+  deleteProposal(id: string): Promise<void>
+}
+
 // ── API Interface ─────────────────────────────────────────────────────────────
 
 /**
@@ -300,6 +467,22 @@ export interface MemberAccessApi {
   rejectConnectionRequest(targetAddress: string): Promise<void>
 }
 
+export interface RoleDistributionEntry {
+  role: Role
+  count: number
+}
+
+/**
+ * Analytics surface exposed on {@link AdminAccessApi}. Both LiveAccessApi
+ * and MockAccessApi implement this as a plain object of async methods
+ * (see lib/api/live.ts / lib/api/mock.ts's \`analytics\` field).
+ */
+export interface AnalyticsDataSource {
+  getMembershipTrend(signal?: AbortSignal): Promise<MemberGrowthDataPoint[]>
+  getRoleDistribution(signal?: AbortSignal): Promise<RoleDistributionEntry[]>
+  getAccessAttempts(signal?: AbortSignal): Promise<ResourceAccessCount[]>
+}
+
 /**
  * Authenticated admin queries and mutations.
  * These methods require a valid SIWE token context.
@@ -307,6 +490,8 @@ export interface MemberAccessApi {
 export interface AdminAccessApi {
   // ── Admin queries & mutations (require a valid SIWE token context) ────────
   listWebhookEvents(signal?: AbortSignal): Promise<WebhookEventLog[]>
+  /** Paginated/filterable variant of listWebhookEvents used by app/admin/events. */
+  listAdminEvents(params?: AdminEventFilterParams): Promise<Paginated<WebhookEvent>>
   /**
    * Subscribe to the admin webhook event stream.
    *
@@ -328,15 +513,31 @@ export interface AdminAccessApi {
   approveAction(id: string): Promise<void>
   rejectAction(id: string): Promise<void>
   updateApprovalConfig(config: ApprovalConfig): Promise<void>
-  
-  assignRole(address: string, role: Role): Promise<{ status: 'executed' | 'pending'; pendingActionId?: string }>
-  removeRole(address: string, role: Role): Promise<{ status: 'executed' | 'pending'; pendingActionId?: string }>
-  updatePolicy(policy: AccessPolicy): Promise<{ status: 'executed' | 'pending'; pendingActionId?: string }>
+
+  assignRole(address: string, role: Role): Promise<MutationResult>
+  removeRole(address: string, role: Role): Promise<MutationResult>
+  updatePolicy(policy: AccessPolicy): Promise<MutationResult>
 
   // ── Moderation Queue ──
   listReports(signal?: AbortSignal): Promise<ModerationReport[]>
   getReport(id: string, signal?: AbortSignal): Promise<ModerationReport | null>
   updateReportState(id: string, state: ModerationState, updates?: Partial<ModerationReport>): Promise<void>
+
+  // ── Governance (requires SIWE auth for voting/proposals) ──
+  listProposals(params?: { filter?: ProposalStatus | ProposalType; limit?: number; cursor?: string }, signal?: AbortSignal): Promise<Proposal[]>
+  getProposal(id: string, signal?: AbortSignal): Promise<Proposal | null>
+  getMemberVote(proposalId: string, signal?: AbortSignal): Promise<Vote | null>
+  listProposalVotes(proposalId: string, params?: { limit?: number; cursor?: string }, signal?: AbortSignal): Promise<Vote[]>
+  castVote(proposalId: string, choice: VoteChoice): Promise<Vote>
+  createProposal(proposal: Omit<Proposal, 'id' | 'createdAt' | 'status' | 'communityId' | 'votesSummary' | 'totalWeight'>): Promise<Proposal>
+  updateProposal(id: string, updates: Partial<Omit<Proposal, 'id' | 'status' | 'proposer' | 'createdAt' | 'votesSummary' | 'totalWeight'>>): Promise<Proposal>
+  publishProposal(id: string): Promise<Proposal>
+  closeProposalVoting(id: string): Promise<Proposal>
+  resolveProposal(id: string, outcome: string): Promise<Proposal>
+  deleteProposal(id: string): Promise<void>
+
+  // Analytics
+  analytics: AnalyticsDataSource
 }
 
 /**

@@ -2,7 +2,8 @@
 
 import { useAccount } from "wagmi";
 import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { getApi, type MemberRow, type Role } from "@/lib/api";
+import { getApi, type MemberRow, type MutationResult, type Role } from "@/lib/api";
+import { withOfflineMutationQueue } from "@/lib/api/offline-mutations";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -248,9 +249,12 @@ export default function MembersPage() {
     isError: mutateError,
     error: mutateErrorValue,
     reset: resetMutation,
-  } = useMutation<{ status: 'executed' | 'pending'; pendingActionId?: string }, unknown, AssignRoleInput, { previousQueries?: [any, any][]; auditId: string }>({
+  } = useMutation<MutationResult, unknown, AssignRoleInput, { previousQueries?: [any, any][]; auditId: string }>({
     mutationFn: (input) =>
-      getApi(address, authSession?.token, communitySlug).assignRole(input.address, input.role),
+      withOfflineMutationQueue(
+        getApi(address, authSession?.token, communitySlug),
+        communitySlug,
+      ).assignRole(input.address, input.role),
     // Auth errors are handled via registerPendingRetry — do not auto-retry 401s
     // to avoid racing with the re-auth banner flow.
     retry: false,
@@ -307,6 +311,23 @@ export default function MembersPage() {
           tone: "warning",
           title: "Approval Required",
           description: `Assignment of ${input.role} to ${input.address.slice(0, 6)}…${input.address.slice(-4)} has been proposed for approval.`,
+        });
+        setAddr("");
+        resetMutation();
+        return;
+      }
+
+      if (data.status === 'queued') {
+        // Offline — keep the optimistic update applied by onMutate rather
+        // than rolling back; it reflects what will happen once
+        // components/offline/mutation-queue-sync.tsx replays this mutation.
+        // The audit log entry is left in its "pending" state (rather than
+        // marked "success") since the mutation hasn't actually happened yet;
+        // this page has no way to hear back once replay completes later.
+        addToast({
+          tone: "warning",
+          title: "Action queued",
+          description: `Assigning ${input.role} to ${input.address.slice(0, 6)}…${input.address.slice(-4)} is queued. It will automatically sync when you're back online.`,
         });
         setAddr("");
         resetMutation();
@@ -407,13 +428,16 @@ export default function MembersPage() {
     mutateErrorValue instanceof AuthError && mutateErrorValue.code === "unauthorized";
 
   const removeRoleMutation = useMutation<
-    { status: 'executed' | 'pending'; pendingActionId?: string },
+    MutationResult,
     unknown,
     AssignRoleInput,
     { previousQueries?: [any, any][]; auditId: string }
   >({
     mutationFn: (input) =>
-      getApi(address, authSession?.token, communitySlug).removeRole(input.address, input.role),
+      withOfflineMutationQueue(
+        getApi(address, authSession?.token, communitySlug),
+        communitySlug,
+      ).removeRole(input.address, input.role),
     // Auth errors are handled via registerPendingRetry — do not auto-retry 401s.
     retry: false,
     onMutate: async (input) => {
@@ -466,6 +490,20 @@ export default function MembersPage() {
           tone: "warning",
           title: "Approval Required",
           description: `Removal of ${input.role} from ${input.address.slice(0, 6)}…${input.address.slice(-4)} has been proposed for approval.`,
+        });
+        resetMutation();
+        return;
+      }
+
+      if (data.status === 'queued') {
+        // Offline — keep the optimistic update applied by onMutate; the
+        // audit log entry stays "pending" since removal hasn't actually
+        // happened yet (see the assignRole mutation above for the same
+        // reasoning).
+        addToast({
+          tone: "warning",
+          title: "Action queued",
+          description: `Removing ${input.role} from ${input.address.slice(0, 6)}…${input.address.slice(-4)} is queued. It will automatically sync when you're back online.`,
         });
         resetMutation();
         return;
