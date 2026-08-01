@@ -1177,7 +1177,11 @@ export class MockAccessApi implements AccessApi {
     return new Promise((resolve) => setTimeout(() => resolve(state.webhookEvents), 300))
   }
 
-  subscribeWebhookEvents(onEvent: (event: WebhookEventLog) => void): WebhookEventUnsubscribe {
+  subscribeWebhookEvents(
+    onEvent: (event: WebhookEventLog) => void,
+    _onError?: (error: unknown) => void,
+    _onReconnecting?: (attempt: number, delayMs: number) => void,
+  ): WebhookEventUnsubscribe {
     const cid = this.communityId
     const intervalId = globalThis.setInterval(() => {
       onEvent(createMockStreamEvent(cid))
@@ -2093,7 +2097,6 @@ export class MockAccessApi implements AccessApi {
     schedulePersist()
   }
 
-  public analytics: import('./types').AnalyticsDataSource = {
   public analytics: any = {
     getMembershipTrend: async (_signal?: AbortSignal) => {
       await initPromise;

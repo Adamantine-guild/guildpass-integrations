@@ -807,6 +807,7 @@ export interface AdminAccessApi {
   subscribeWebhookEvents(
     onEvent: (event: WebhookEventLog) => void,
     onError?: (error: unknown) => void,
+    onReconnecting?: (attempt: number, delayMs: number) => void,
   ): WebhookEventUnsubscribe
   /**
    * Fetch the analytics summary for the admin dashboard.

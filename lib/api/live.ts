@@ -127,6 +127,26 @@ const CIRCUIT_COOLDOWN_MS = Number(
   process.env.NEXT_PUBLIC_API_CIRCUIT_COOLDOWN_MS ?? 10_000,
 )
 
+// ── SSE/webhook stream reconnect settings ───────────────────────────────
+// These are separate from the REST retry constants because a long-lived SSE
+// stream has different reliability requirements: it should retry more times
+// across a wider delay range, and reset its backoff after a stable period.
+// NOTE: These are read lazily (not module-level constants) so tests can
+// override them via process.env before each test.
+
+function sseReconnectMaxAttempts(): number {
+  return Number(process.env.NEXT_PUBLIC_SSE_RECONNECT_MAX_ATTEMPTS ?? 10)
+}
+function sseReconnectBaseDelayMs(): number {
+  return Number(process.env.NEXT_PUBLIC_SSE_RECONNECT_BASE_DELAY_MS ?? 100)
+}
+function sseReconnectMaxDelayMs(): number {
+  return Number(process.env.NEXT_PUBLIC_SSE_RECONNECT_MAX_DELAY_MS ?? 10_000)
+}
+function sseStabilityWindowMs(): number {
+  return Number(process.env.NEXT_PUBLIC_SSE_STABILITY_WINDOW_MS ?? 30_000)
+}
+
 const circuitBreakers = new Map<string, CircuitEntry>()
 
 function requestMethod(init?: RequestInit): string {
@@ -145,6 +165,15 @@ function backoffDelayMs(attemptIndex: number): number {
   const exponentialDelay = Math.min(
     RETRY_BASE_DELAY_MS * 2 ** Math.max(0, attemptIndex - 1),
     RETRY_MAX_DELAY_MS,
+  )
+  const jitter = Math.floor(Math.random() * exponentialDelay * 0.25)
+  return exponentialDelay + jitter
+}
+
+function sseBackoffDelayMs(attemptIndex: number): number {
+  const exponentialDelay = Math.min(
+    sseReconnectBaseDelayMs() * 2 ** Math.max(0, attemptIndex - 1),
+    sseReconnectMaxDelayMs(),
   )
   const jitter = Math.floor(Math.random() * exponentialDelay * 0.25)
   return exponentialDelay + jitter
@@ -960,10 +989,15 @@ export class LiveAccessApi implements AccessApi {
   subscribeWebhookEvents(
     onEvent: (event: WebhookEventLog) => void,
     onError?: (error: unknown) => void,
+    onReconnecting?: (attempt: number, delayMs: number) => void,
   ): WebhookEventUnsubscribe {
     const path = '/v1/admin/events/stream'
     const controller = new AbortController()
-    let buffer = ''
+    const self = this
+    let stopped = false
+    let reconnectTimeoutId: ReturnType<typeof setTimeout> | undefined
+    let attempt = 0
+    let lastFrameAt = 0
 
     /**
      * PROVISIONAL — `GET /v1/admin/events/stream` is a proposed guildpass-core
@@ -972,19 +1006,28 @@ export class LiveAccessApi implements AccessApi {
      * contract, failures are intentionally reported to the caller so the UI can
      * silently resume the existing `/v1/admin/events` polling behavior.
      */
-    fetch(`${BASE}${path}`, {
-      method: 'GET',
-      headers: {
-        ...this.authHeaders(),
-        Accept: 'text/event-stream',
-      },
-      signal: controller.signal,
-    })
-      .then(async (res) => {
+    const tryConnect = async (): Promise<void> => {
+      if (stopped) return
+
+      let buffer = ''
+
+      try {
+        const res = await fetch(`${BASE}${path}`, {
+          method: 'GET',
+          headers: {
+            ...self.authHeaders(),
+            Accept: 'text/event-stream',
+          },
+          signal: controller.signal,
+        })
+
         if (!res.ok || !res.body) {
           const body = await parseErrorBody(res).catch(() => undefined)
           throw createApiError(res.status, body, path)
         }
+
+        // Successful connection — reset attempt counter
+        attempt = 0
 
         const reader = res.body.getReader()
         const decoder = new TextDecoder()
@@ -1002,13 +1045,54 @@ export class LiveAccessApi implements AccessApi {
               onEvent(event)
             }
           }
+          // Track last successful frame to reset backoff after stability window
+          lastFrameAt = Date.now()
         }
-      })
-      .catch((err) => {
-        if (!controller.signal.aborted) onError?.(err)
-      })
+      } catch (err) {
+        if (stopped || controller.signal.aborted) return
 
-    return () => controller.abort()
+        // Report the error so the caller's polling fallback still works
+        onError?.(err)
+
+        // Calculate backoff delay
+        attempt++
+        if (attempt > sseReconnectMaxAttempts()) {
+          // Give up — the caller has already been notified via onError
+          return
+        }
+
+        // If the stream was stable for at least the stability window, reset
+        if (lastFrameAt > 0 && Date.now() - lastFrameAt >= sseStabilityWindowMs()) {
+          attempt = 1
+        }
+
+        const delay = sseBackoffDelayMs(attempt)
+        onReconnecting?.(attempt, delay)
+
+        if (stopped) return
+        // Wait for the backoff delay before reconnecting
+        await new Promise<void>((resolve) => {
+          reconnectTimeoutId = setTimeout(resolve, delay)
+        })
+
+        // Only recurse if not stopped during the delay
+        if (!stopped) {
+          void tryConnect()
+        }
+      }
+    }
+
+    // Kick off the first connection attempt
+    void tryConnect()
+
+    return () => {
+      stopped = true
+      controller.abort()
+      if (reconnectTimeoutId !== undefined) {
+        clearTimeout(reconnectTimeoutId)
+        reconnectTimeoutId = undefined
+      }
+    }
   }
 
   /**
