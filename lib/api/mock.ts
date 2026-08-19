@@ -2062,7 +2062,6 @@ export class MockAccessApi implements AccessApi {
   }
 
   public analytics: import('./types').AnalyticsDataSource = {
-  public analytics: any = {
     getMembershipTrend: async (_signal?: AbortSignal) => {
       await initPromise;
       return getMemberGrowth();
