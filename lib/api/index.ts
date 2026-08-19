@@ -1,15 +1,13 @@
 import { config } from '../config'
 import { LiveAccessApi } from './live'
 import {
-  MockAccessApi,
+  createMockAccessApi,
   resetMockData,
   applyMockScenario,
   replayMockEvent,
   setMockRoleMutationFailure,
   setMockMetaVersion,
-  setMockResourceFetchFailure,
-  setMockResourceFetchDelay,
-} from './mock'
+} from './mock-boundary'
 import { AccessApi } from './types'
 import type { VersionCompatibility } from './version'
 
@@ -25,7 +23,7 @@ export type { VersionCompatibility }
  * @param communityId Scoped community ID or slug
  */
 export function getApi(address?: string, token?: string, communityId?: string): AccessApi {
-  if (config.apiMode === 'mock') return new MockAccessApi(address, communityId)
+  if (config.apiMode === 'mock') return createMockAccessApi(address, communityId)
   const api = new LiveAccessApi(address, token, communityId)
   // Kick off the startup version compatibility check. It resolves in the
   // background; callers can await api.checkVersion() for the result.
@@ -41,9 +39,7 @@ export {
   replayMockEvent,
   setMockRoleMutationFailure,
   setMockMetaVersion,
-  setMockResourceFetchFailure,
-  setMockResourceFetchDelay,
-} from './mock'
+} from './mock-boundary'
 export {
   ApiError,
   AuthError,

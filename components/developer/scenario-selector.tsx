@@ -10,7 +10,7 @@
 import { useState, useId } from "react";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/select";
-import { applyMockScenario, resetMockData } from "@/lib/api/mock";
+import { applyMockScenario, resetMockData } from "@/lib/api";
 import { config } from "@/lib/config";
 
 type MockScenario =
