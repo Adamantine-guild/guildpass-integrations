@@ -18,7 +18,9 @@ with a `Retry-After` header (seconds) and an `X-RateLimit-Remaining` header.
 The token bucket state is held in **process memory** (`Map`). This is correct
 and sufficient for a **single Next.js instance** (one server process). Under
 this deployment the effective limit is exactly the configured 30 req/min per
-key.
+key. The internal bucket store automatically prunes idle entries (buckets that
+have fully refilled and been inactive for at least 1 minute) and enforces an
+LRU capacity cap (10,000 buckets by default) to keep process memory bounded.
 
 ### Production / multi-instance upgrade path
 
