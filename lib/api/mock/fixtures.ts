@@ -273,6 +273,15 @@ export const MOCK_MEMBER_STORES: Record<string, Record<string, { membership: Mem
   }
 }
 
+/**
+ * Mutable social-graph / moderation state seeded with fixture data.
+ *
+ * These are top-level `let` bindings, exactly as before the domain split.
+ * Reassignment must stay inside this module (ESM module semantics forbid
+ * reassigning an imported binding), so mutation helpers are exported for
+ * the modules that own each domain; plain property/content mutations
+ * (e.g. `mockPrivacySettings[addr] = …`) remain safe from anywhere.
+ */
 export let mockConnections: Connection[] = [
   {
     id: 'conn-1',
@@ -306,3 +315,18 @@ export let mockReports: ModerationReport[] = [
     updatedAt: new Date(Date.now() - 1000 * 60 * 60 * 2).toISOString()
   }
 ];
+
+/** Reassign the connection store (owning module only — see note above). */
+export function setMockConnections(next: Connection[]): void {
+  mockConnections = next
+}
+
+/** Reassign the privacy-settings store (owning module only — see note above). */
+export function setMockPrivacySettings(next: Record<string, MemberPrivacySettings>): void {
+  mockPrivacySettings = next
+}
+
+/** Reassign the reports store (owning module only — see note above). */
+export function setMockReports(next: ModerationReport[]): void {
+  mockReports = next
+}

@@ -10,6 +10,7 @@ export type ApiErrorCode =
   | 'bad_request'
   | 'unknown_error'
   | 'conflict'
+  | 'invalid_state'
   | 'aborted';
 
 export interface ApiErrorOptions {

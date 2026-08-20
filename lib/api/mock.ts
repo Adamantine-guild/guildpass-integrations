@@ -2,685 +2,162 @@
  * lib/api/mock.ts
  *
  * In-memory mock API for local development and testing.
+ *
+ * The implementation is organised into focused modules under `lib/api/mock/`
+ * so a structural mistake in one domain cannot break the whole API layer:
+ *
+ *   - fixtures.ts    — fixture/seeded data (communities, members, events…)
+ *   - state.ts       — the in-memory per-community store + persistence
+ *   - session.ts     — SIWE endpoints + cookie-session simulation
+ *   - core.ts        — meta/community/resource/policy reads, wallet verification
+ *   - members.ts     — member reads + self-service profile mutation
+ *   - analytics.ts   — admin analytics summary + AnalyticsDataSource
+ *   - webhooks.ts    — webhook feed, replay, admin event log
+ *   - approvals.ts   — role/policy mutations + multi-approval pending actions
+ *   - social.ts      — connections, privacy settings, blocks
+ *   - moderation.ts  — moderation report queue
+ *   - governance.ts  — proposals and weighted voting
+ *   - controls.ts    — fault-injection knobs + API-version override
+ *   - scenarios.ts   — developer scenario presets + mock reset
+ *
+ * This module is the stable aggregation point: it composes `MockAccessApi`
+ * from the domain modules and re-exports every symbol that consumers of
+ * `lib/api/mock` (and `lib/api/index.ts`) relied on historically.
+ *
  * All existing member/resource/policy data and mutation logic is preserved.
- *
- * SIWE additions:
- * - getNonce()    — returns a random hex string (no real cryptography needed)
- * - siweVerify()  — immediately returns a mock SiweAuthSession with a 1-hour
- * expiry WITHOUT verifying the signature. This lets developers
- * work in mock mode without MetaMask.
- * - siweLogout()  — no-op that resolves immediately.
- *
- * Session simulation:
- *  Set NEXT_PUBLIC_MOCK_SESSION_STATE to control the simulated auth boundary:
- *    "expired"         — siweVerify returns an already-expired access token
- *                        with a valid refresh token so renewal can be tested
- *    "unauthenticated" — siweVerify always throws, simulating a backend rejection
- *    (default)         — normal mock behaviour (instant auth, 1-hour token)
- *
- * The mock MOCK_ADMIN_ADDRESS constant seeds a pre-authenticated admin for
- * convenience so you can simulate both unauthenticated and admin states:
- * NEXT_PUBLIC_MOCK_ADMIN_ADDRESS=0xYourAddress
- *
- * Scenario presets and reset functionality for developer testing are also included.
  */
-import { PolicyValidationError, validatePolicy } from '../validation/policy'
-import { ProfileValidationError, validateProfile } from '../validation/profile'
+import { config } from '../config'
+import { buildAnalyticsDataSource, mockGetAnalyticsSummary } from './mock/analytics'
 import {
+  mockApproveAction,
+  mockAssignRole,
+  mockGetPendingActions,
+  mockRejectAction,
+  mockRemoveRole,
+  mockUpdateApprovalConfig,
+  mockUpdatePolicy,
+} from './mock/approvals'
+import {
+  mockGetCommunity,
+  mockGetMeta,
+  mockGetPolicy,
+  mockGetResource,
+  mockListPolicies,
+  mockListResources,
+  mockVerifyWallet,
+} from './mock/core'
+import {
+  MOCK_META_VERSION_OVERRIDE,
+  setMockMetaVersion,
+  setMockResourceFetchDelay,
+  setMockResourceFetchFailure,
+  setMockRoleMutationFailure,
+} from './mock/controls'
+import { mockConnections, mockPrivacySettings, mockReports } from './mock/fixtures'
+import {
+  mockCastVote,
+  mockCloseProposalVoting,
+  mockCreateProposal,
+  mockDeleteProposal,
+  mockGetMemberVote,
+  mockGetProposal,
+  mockListProposalVotes,
+  mockListProposals,
+  mockPublishProposal,
+  mockResolveProposal,
+  mockUpdateProposal,
+} from './mock/governance'
+import {
+  mockGetMembership,
+  mockGetProfile,
+  mockListMembers,
+  mockUpdateProfile,
+} from './mock/members'
+import { mockGetReport, mockListReports, mockUpdateReportState } from './mock/moderation'
+import { applyMockScenario, resetMockData } from './mock/scenarios'
+import {
+  mockGetNonce,
+  mockGetSession,
+  mockGetSessionStatus,
+  mockSiweLogout,
+  mockSiweRefresh,
+  mockSiweVerify,
+} from './mock/session'
+import {
+  mockAcceptConnectionRequest,
+  mockBlockMember,
+  mockCreateConnectionRequest,
+  mockGetConnections,
+  mockGetPrivacySettings,
+  mockRejectConnectionRequest,
+  mockUnblockMember,
+  mockUpdatePrivacySettings,
+} from './mock/social'
+import {
+  communityStates,
+  getCommunityState,
+  type CommunityState,
+  type MockApiContext,
+} from './mock/state'
+import {
+  mockListAdminEvents,
+  mockListWebhookEvents,
+  mockReplayEvent,
+  mockSubscribeWebhookEvents,
+  replayMockEvent,
+} from './mock/webhooks'
+import type {
   AccessApi,
   AccessPolicy,
+  AdminEventFilterParams,
+  AnalyticsDataSource,
   AnalyticsSummary,
+  ApprovalConfig,
   Community,
+  Connection,
+  MemberPrivacySettings,
   MemberProfile,
   MemberRow,
   Membership,
-  MembershipTier,
   MetaResponse,
+  ModerationReport,
+  ModerationState,
+  Paginated,
   PaginatedMembers,
+  PendingAction,
+  Proposal,
+  ProposalStatus,
+  ProposalType,
   Resource,
   ResourceLookupResult,
   Role,
   Session,
   SessionStatus,
   SiweAuthSession,
-  WalletVerification,
-  WebhookEventLog,
-  WebhookEventUnsubscribe,
-  Connection,
-  MemberPrivacySettings,
-  ModerationReport,
-  ModerationState,
-  AdminEventFilterParams,
-  Paginated,
-  WebhookEvent,
-  EXPECTED_API_VERSION,
-  PendingAction,
-  ApprovalConfig,
-  PendingActionType,
-  PendingActionPayload,
-  Proposal,
   Vote,
   VoteChoice,
-  VotesSummary,
-  ProposalStatus,
-  ProposalType,
+  WalletVerification,
+  WebhookEvent,
+  WebhookEventLog,
+  WebhookEventUnsubscribe,
 } from './types'
-import { ApiError } from './errors'
-import {
-  loadPersistedState,
-  persistState,
-  clearPersistedState,
-  LS_KEY,
-} from './mock-storage'
-import { config } from '../config'
-import {
-  MOCK_ANALYTICS_SUMMARY,
-  getResourceAccess,
-  getMemberGrowth,
-  getMockAnalyticsSummary,
-} from './analytics/mock'
 
-/** Read once at module load so it is stable across renders. */
-const MOCK_SESSION_STATE =
-  (typeof process !== 'undefined' &&
-    process.env.NEXT_PUBLIC_MOCK_SESSION_STATE) ||
-  ''
-
-// ── Mock cookie-session simulation (cookie auth mode) ───────────────────────
-//
-// There is no real backend in mock mode, so a real httpOnly cookie can't be
-// set. This uses a plain, non-httpOnly document.cookie entry to simulate
-// "the browser is holding a session cookie" — an honest simulation boundary
-// (mock JS genuinely cannot set an httpOnly cookie either). It intentionally
-// never touches sessionStorage, so cookie-mode session state is provably
-// independent of the bearer-token sessionStorage path in lib/session.ts.
-// Only ever written/read when config.authMode === 'cookie', so bearer-mode
-// mock runs get zero new side effects.
-
-const MOCK_SESSION_COOKIE = 'gp_mock_session'
-
-function setMockSessionCookie(address: string, expiresAt: string): void {
-  if (typeof document === 'undefined') return
-  const value = encodeURIComponent(`${address}|${expiresAt}`)
-  document.cookie = `${MOCK_SESSION_COOKIE}=${value}; path=/; SameSite=Lax`
-}
-
-function clearMockSessionCookie(): void {
-  if (typeof document === 'undefined') return
-  document.cookie = `${MOCK_SESSION_COOKIE}=; path=/; Max-Age=0; SameSite=Lax`
-}
-
-function readMockSessionCookie(): { address: string; expiresAt: string } | null {
-  if (typeof document === 'undefined') return null
-  const row = document.cookie
-    .split('; ')
-    .find((entry) => entry.startsWith(`${MOCK_SESSION_COOKIE}=`))
-  if (!row) return null
-  const raw = decodeURIComponent(row.slice(MOCK_SESSION_COOKIE.length + 1))
-  const [address, expiresAt] = raw.split('|')
-  return address && expiresAt ? { address, expiresAt } : null
-}
-
-import {
-  DEFAULT_COMMUNITY,
-  DEFAULT_RESOURCES,
-  DEFAULT_POLICIES,
-  DEFAULT_WEBHOOK_EVENTS,
-  DEFAULT_MEMBER_STORE,
-  MOCK_COMMUNITIES,
-  MOCK_RESOURCES,
-  MOCK_POLICIES,
-  MOCK_MEMBER_STORES,
+export {
+  applyMockScenario,
+  communityStates,
+  getCommunityState,
+  MOCK_META_VERSION_OVERRIDE,
   mockConnections,
   mockPrivacySettings,
   mockReports,
-} from './mock/fixtures';
-
-export { mockConnections, mockPrivacySettings, mockReports };
-
-export interface CommunityState {
-  community: Community
-  resources: Resource[]
-  policies: AccessPolicy[]
-  webhookEvents: WebhookEventLog[]
-  memberStore: Record<string, { membership: Membership; roles: Role[]; profile: MemberProfile }>
-  pendingActions: PendingAction[]
-  proposals: Record<string, Proposal>
-  votes: Record<string, Vote>  // Maps vote ID to Vote
+  replayMockEvent,
+  resetMockData,
+  setMockMetaVersion,
+  setMockResourceFetchDelay,
+  setMockResourceFetchFailure,
+  setMockRoleMutationFailure,
 }
-
-export let communityStates: Record<string, CommunityState> = {}
-
-export function getCommunityState(communityId: string = 'guildpass-demo'): CommunityState {
-  const normalizedId = MOCK_COMMUNITIES[communityId] ? communityId : 'guildpass-demo'
-  if (!communityStates[normalizedId]) {
-    communityStates[normalizedId] = {
-      community: { ...MOCK_COMMUNITIES[normalizedId] },
-      resources: [...(MOCK_RESOURCES[normalizedId] ?? [])],
-      policies: [...(MOCK_POLICIES[normalizedId] ?? [])],
-      webhookEvents: [...DEFAULT_WEBHOOK_EVENTS],
-      memberStore: Object.fromEntries(
-        Object.entries(MOCK_MEMBER_STORES[normalizedId] ?? {}).map(([k, v]) => [
-          k,
-          { ...v, roles: [...v.roles], membership: { ...v.membership }, profile: { ...v.profile } }
-        ])
-      ),
-      pendingActions: [],
-      proposals: {},
-      votes: {},
-    }
-  }
-  return communityStates[normalizedId]
-}
-
-function createMockStreamEvent(communityId: string = 'guildpass-demo'): WebhookEventLog {
-  const state = getCommunityState(communityId)
-  const base = DEFAULT_WEBHOOK_EVENTS[Math.floor(Math.random() * DEFAULT_WEBHOOK_EVENTS.length)]
-  const statuses: WebhookEventLog['status'][] = ['success', 'pending', 'failed']
-  const event: WebhookEventLog = {
-    ...base,
-    id: `stream_${Date.now()}_${Math.random().toString(16).slice(2)}`,
-    timestamp: new Date().toISOString(),
-    status: statuses[Math.floor(Math.random() * statuses.length)],
-    isReplay: false,
-    fullPayload: {
-      ...(base.fullPayload ?? base.payloadSummary),
-      source: 'mock-sse-stream',
-    },
-  }
-  state.webhookEvents.unshift(event)
-  return event
-}
-
-let saveTimeout: ReturnType<typeof setTimeout> | null = null
-
-async function saveState() {
-  if (saveTimeout) clearTimeout(saveTimeout)
-  saveTimeout = setTimeout(async () => {
-    await persistState({ communityStates } as any)
-  }, 100)
-}
-
-function schedulePersist(): void {
-  saveState().catch(() => {})
-}
-
-const initPromise = loadPersistedState().then((persisted) => {
-  if (!persisted) {
-    for (const cid of Object.keys(MOCK_COMMUNITIES)) {
-      getCommunityState(cid)
-    }
-    return
-  }
-  if ((persisted as any).communityStates) {
-    communityStates = (persisted as any).communityStates
-  } else {
-    // Backward compatibility: load legacy state into guildpass-demo
-    communityStates['guildpass-demo'] = {
-      community: (persisted as any).community || { ...DEFAULT_COMMUNITY },
-      resources: (persisted as any).resources || [...DEFAULT_RESOURCES],
-      policies: (persisted as any).policies || [...DEFAULT_POLICIES],
-      webhookEvents: (persisted as any).webhookEvents || [...DEFAULT_WEBHOOK_EVENTS],
-      memberStore: (persisted as any).memberStore || { ...DEFAULT_MEMBER_STORE },
-      pendingActions: (persisted as any).pendingActions || [],
-    }
-  }
-  for (const cid of Object.keys(MOCK_COMMUNITIES)) {
-    getCommunityState(cid)
-  }
-})
-
-if (typeof window !== 'undefined') {
-  window.addEventListener('beforeunload', () => {
-    if (saveTimeout) clearTimeout(saveTimeout)
-    try {
-      localStorage.setItem(LS_KEY, JSON.stringify({ communityStates }))
-    } catch { /* ignore */ }
-  })
-}
-
-function ensureAddress(addr?: string, communityId: string = 'guildpass-demo') {
-  if (!addr) return null
-  const state = getCommunityState(communityId)
-  if (!state.memberStore[addr]) {
-    state.memberStore[addr] = {
-      membership: {
-        address: addr,
-        tier: 'free',
-        active: true,
-      },
-      roles: ['member'],
-      profile: {
-        address: addr,
-        displayName: `User ${addr.slice(0, 6)}`,
-        badges: ['Early Member', 'Beta Tester'],
-      },
-    }
-  }
-  return state.memberStore[addr]
-}
-
-type MockScenario =
-  | 'active-member'
-  | 'expired-member'
-  | 'denied-resource'
-  | 'admin-session-expired'
-  | 'no-roles'
-  | 'multiple-roles'
-  | 'multiple-communities'
-  | 'concurrent-policy-edit'
-  | 'customized-profile'
-
-/**
- * Replay a webhook event by cloning it into the mock event store.
- * The clone is marked with `isReplay: true` and inserted at the top
- * of the feed with a `pending` status so it is visually distinct.
- *
- * This function operates directly on the module-level mock store and
- * is intended for use by the admin event replay tool. It must only be
- * called when `config.apiMode === 'mock'`.
- */
-export async function replayMockEvent(eventId: string, communityId: string = 'guildpass-demo'): Promise<WebhookEventLog> {
-  await initPromise
-  const state = getCommunityState(communityId)
-  const original = state.webhookEvents.find((e) => e.id === eventId)
-  if (!original) {
-    throw new ApiError({
-      status: 404,
-      code: 'not_found',
-      safeMessage: `Event "${eventId}" not found in mock store.`,
-    })
-  }
-
-  const replay: WebhookEventLog = {
-    ...original,
-    id: `replay_${eventId}_${Date.now()}`,
-    timestamp: new Date().toISOString(),
-    isReplay: true,
-    status: 'pending',
-    fullPayload: original.fullPayload ?? { ...original.payloadSummary },
-  }
-
-  state.webhookEvents.unshift(replay)
-  schedulePersist()
-
-  // Apply side effects to the member store for recognised event types.
-  const addr = original.affectedIdentifier
-  if (addr && addr.startsWith('0x')) {
-    const existing = state.memberStore[addr]
-    switch (original.eventType) {
-      case 'membership.created':
-      case 'membership.renewed': {
-        const tier = (original.payloadSummary.tier as MembershipTier) ?? 'free'
-        state.memberStore[addr] = {
-          membership: { address: addr, tier, active: true },
-          roles: existing?.roles ?? ['member'],
-          profile: existing?.profile ?? { address: addr, displayName: `Replayed ${addr.slice(0, 6)}`, badges: [] },
-        }
-        break
-      }
-      case 'membership.expired':
-        if (existing) {
-          state.memberStore[addr] = {
-            ...existing,
-            membership: { ...existing.membership, active: false },
-          }
-        }
-        break
-      case 'tier.upgraded': {
-        const newTier = (original.payloadSummary.tier as MembershipTier) ?? 'standard'
-        if (existing) {
-          state.memberStore[addr] = {
-            ...existing,
-            membership: { ...existing.membership, tier: newTier },
-          }
-        }
-        break
-      }
-      // policy.updated — no member-store side effect
-    }
-  }
-
-  return replay
-}
-
-/**
- * Reset all mock data to its initial state.
- */
-export async function resetMockData() {
-  await initPromise
-  communityStates = {}
-  for (const cid of Object.keys(MOCK_COMMUNITIES)) {
-    getCommunityState(cid)
-  }
-  mockRoleMutationShouldFail = false
-  mockResourceFetchFailure = false
-  mockResourceFetchDelayMs = 0
-  await clearPersistedState()
-}
-
-/**
- * Apply a predefined scenario preset for testing.
- */
-export async function applyMockScenario(scenario: MockScenario, address: string = '0x1234567890123456789012345678901234567890') {
-  await resetMockData()
-  
-  const demoState = getCommunityState('guildpass-demo')
-
-  switch (scenario) {
-    case 'active-member':
-      demoState.memberStore[address] = {
-        membership: {
-          address,
-          tier: 'standard',
-          active: true,
-        },
-        roles: ['member'],
-        profile: {
-          address,
-          displayName: 'Active Standard User',
-          badges: ['Early Member', 'Standard Tier'],
-        },
-      }
-      break
-      
-    case 'expired-member':
-      demoState.memberStore[address] = {
-        membership: {
-          address,
-          tier: 'standard',
-          active: false,
-          expiresAt: new Date(Date.now() - 1000 * 60 * 60 * 24).toISOString(),
-        },
-        roles: ['member'],
-        profile: {
-          address,
-          displayName: 'Expired User',
-          badges: ['Former Member'],
-        },
-      }
-      break
-      
-    case 'denied-resource':
-      demoState.memberStore[address] = {
-        membership: {
-          address,
-          tier: 'free',
-          active: true,
-        },
-        roles: ['member'],
-        profile: {
-          address,
-          displayName: 'Free Tier User',
-          badges: ['Free Tier'],
-        },
-      }
-      // Ensure Alpha Docs require standard tier
-      demoState.policies = demoState.policies.map(p => 
-        p.resourceId === 'alpha' 
-          ? { ...p, minTier: 'standard' } 
-          : p
-      )
-      break
-      
-    case 'admin-session-expired':
-      demoState.memberStore[address] = {
-        membership: {
-          address,
-          tier: 'pro',
-          active: true,
-        },
-        roles: ['admin', 'member'],
-        profile: {
-          address,
-          displayName: 'Expired Admin',
-          badges: ['Admin', 'Pro Tier'],
-        },
-      }
-      break
-      
-    case 'no-roles':
-      demoState.memberStore[address] = {
-        membership: {
-          address,
-          tier: 'free',
-          active: true,
-        },
-        roles: [],
-        profile: {
-          address,
-          displayName: 'No Roles User',
-          badges: ['New User'],
-        },
-      }
-      break
-
-    case 'multiple-roles':
-      // 'admin' is included deliberately: it's the only role that changes
-      // nav/admin-console visibility in this codebase (every first-party
-      // module in lib/admin-modules/modules/*.ts requires it), so leaving it
-      // out would make role-aware nav unverifiable. It does not bypass
-      // tier-gated resource access (lib/api/access-decision.ts evaluates
-      // tier independently of role), so alpha/pro-reports stay genuinely
-      // tier-gated for this member.
-      demoState.memberStore[address] = {
-        membership: {
-          address,
-          tier: 'pro',
-          active: true,
-        },
-        roles: ['admin', 'moderator', 'member'],
-        profile: {
-          address,
-          displayName: 'Multi-Role Member',
-          badges: ['Admin', 'Moderator'],
-        },
-      }
-      break
-
-    case 'multiple-communities':
-      // Seed a member whose data reflects participation in more than one
-      // community. The mock session model exposes a single active community,
-      // so this preset points the active community at a multi-community hub
-      // and marks the member's badges to reflect their other memberships.
-      // Existing single-community presets are unaffected.
-      const hubState = getCommunityState('guildpass-hub')
-      hubState.community = {
-        id: 'guildpass-hub',
-        name: 'GuildPass Hub (Multi-Community)',
-        description:
-          'Shared hub for a member active across several communities',
-        tiers: ['free', 'standard', 'pro'],
-      }
-      hubState.memberStore[address] = {
-        membership: {
-          address,
-          tier: 'standard',
-          active: true,
-        },
-        roles: ['member'],
-        profile: {
-          address,
-          displayName: 'Multi-Community Member',
-          badges: [
-            'GuildPass Demo Community',
-            'Builders Collective',
-            'Design Guild',
-          ],
-        },
-      }
-      break
-      
-    case 'concurrent-policy-edit':
-      // Set up a scenario to test concurrent policy editing
-      demoState.memberStore[address] = {
-        membership: {
-          address,
-          tier: 'pro',
-          active: true,
-        },
-        roles: ['admin', 'member'],
-        profile: {
-          address,
-          displayName: 'Admin Testing Concurrency',
-          badges: ['Admin', 'Pro Tier'],
-        },
-      }
-      // Update the 'alpha' policy with a very recent timestamp to simulate
-      // another admin just having edited it
-      const alphaIdx = demoState.policies.findIndex((p) => p.resourceId === 'alpha')
-      if (alphaIdx >= 0) {
-        demoState.policies[alphaIdx] = {
-          ...demoState.policies[alphaIdx],
-          updatedAt: new Date(Date.now() - 1000 * 5).toISOString(), // 5 seconds ago
-          minTier: 'pro', // Changed from 'standard'
-        }
-      }
-      break
-
-    case 'customized-profile':
-      // A member who has filled out every rich-profile field (#254), to
-      // exercise the public profile view and editor pre-fill against a
-      // fully-populated record rather than only the sparse defaults.
-      demoState.memberStore[address] = {
-        membership: {
-          address,
-          tier: 'standard',
-          active: true,
-        },
-        roles: ['member'],
-        profile: {
-          address,
-          displayName: 'Ada Lovelace',
-          bio: 'Builder and early GuildPass member, exploring what token-gated communities can look like.',
-          avatar: 'https://example.com/avatars/ada-lovelace.png',
-          socialLinks: [
-            { platform: 'twitter', url: 'https://example.com/twitter/ada' },
-            { platform: 'github', url: 'https://example.com/github/ada' },
-            { platform: 'website', url: 'https://example.com/ada' },
-          ],
-          badges: ['Early Member', 'Standard Tier'],
-        },
-      }
-      break
-  }
-  schedulePersist()
-}
-
-/** Nonce TTL in milliseconds (5 minutes — mirrors siwe-go default). */
-const NONCE_TTL_MS = 5 * 60 * 1000
-
-/** Extract the nonce value from an EIP-4361 message string. */
-function extractNonceFromMessage(message: string): string | null {
-  const match = message.match(/Nonce:\s*(\S+)/)
-  return match ? match[1] : null
-}
-
-/** Generate a short random hex nonce (16 bytes). */
-function randomHex(): string {
-  return Array.from({ length: 16 }, () =>
-    Math.floor(Math.random() * 256)
-      .toString(16)
-      .padStart(2, '0'),
-  ).join('')
-}
-
-/** Throw a mock 401 ApiError — mirrors what the live API throws on expired tokens. */
-function throwMockUnauthorized(): never {
-  throw new ApiError({
-    status: 401,
-    code: 'unauthorized',
-    safeMessage: 'Session expired. Please sign in again.',
-  })
-}
-
-/**
- * When true, the next assignRole()/removeRole() call throws a generic
- * (non-auth) failure instead of succeeding — issue #243. This exists
- * alongside NEXT_PUBLIC_MOCK_SESSION_STATE=expired rather than reusing it:
- * that flag is read once at module load and specifically simulates auth/
- * session state, whereas this is a runtime-togglable flag for exercising
- * the optimistic-update rollback path for an ordinary server error, from
- * either a test or the /developer dev-tools page. Reset by resetMockData().
- */
-let mockRoleMutationShouldFail = false
-
-/**
- * Toggle a simulated non-auth failure for the next assignRole()/
- * removeRole() call(s). Mock-only — LiveAccessApi has no equivalent, and
- * this must never be called from application code, only from tests or the
- * /developer page.
- */
-export function setMockRoleMutationFailure(shouldFail: boolean): void {
-  mockRoleMutationShouldFail = shouldFail
-}
-
-/**
- * When set, the next getResource()/getPolicy() call(s) simulate an
- * operational failure instead of succeeding — used to verify loading and
- * error-boundary behaviour in mock mode without a real backend.
- * 'network' simulates a transport-level failure (fetch rejection);
- * 'server' simulates an HTTP 5xx. Reset by resetMockData().
- */
-let mockResourceFetchFailure: 'network' | 'server' | false = false
-
-/** Optional artificial delay (ms) applied before getResource()/getPolicy() resolve or fail. */
-let mockResourceFetchDelayMs = 0
-
-/**
- * Toggle a simulated operational failure for getResource()/getPolicy().
- * Mock-only — LiveAccessApi has no equivalent. Intended for tests and the
- * /developer page, never application code.
- */
-export function setMockResourceFetchFailure(mode: 'network' | 'server' | false): void {
-  mockResourceFetchFailure = mode
-}
-
-/** Set an artificial delay (ms) before getResource()/getPolicy() settle. Pass 0 to disable. */
-export function setMockResourceFetchDelay(ms: number): void {
-  mockResourceFetchDelayMs = ms
-}
-
-function mockResourceFetchError(): ApiError {
-  return mockResourceFetchFailure === 'network'
-    ? new ApiError({
-        code: 'network_error',
-        safeMessage: 'Unable to connect. Please check your connection and try again.',
-        retryable: true,
-      })
-    : new ApiError({
-        status: 500,
-        code: 'server_error',
-        safeMessage: 'The server could not complete the request. Please try again.',
-        retryable: true,
-      })
-}
-
-/** Throw a mock 500 ApiError — simulates an ordinary (non-auth) server failure. */
-function throwMockRoleMutationFailure(): never {
-  throw new ApiError({
-    status: 500,
-    code: 'server_error',
-    safeMessage: 'Simulated role mutation failure (mock mode).',
-    retryable: true,
-  })
-}
-
-/**
- * Override the mock backend's advertised API contract version.
- * Set to `null` to restore the default (matches EXPECTED_API_VERSION).
- * When set, `getMeta()` returns this version, which can be used to
- * simulate an incompatible backend.
- */
-export let MOCK_META_VERSION_OVERRIDE: string | null = null
-
-/**
- * Set the mock backend's advertised API contract version. Pass `null` to
- * restore the default behaviour (matches the frontend's expected version).
- */
-export function setMockMetaVersion(version: string | null): void {
-  MOCK_META_VERSION_OVERRIDE = version
-}
+export type { CommunityState, MockApiContext }
 
 export class MockAccessApi implements AccessApi {
   /** In-memory nonce store keyed by nonce value → creation timestamp. */
@@ -689,1119 +166,245 @@ export class MockAccessApi implements AccessApi {
   readonly address?: string
   readonly communityId: string
 
+  /** Analytics surface exposed on the API client (see AdminAccessApi). */
+  public analytics: AnalyticsDataSource
+
   constructor(
     address?: string,
     communityId?: string,
   ) {
     this.address = address
     this.communityId = communityId ?? 'guildpass-demo'
+    this.analytics = buildAnalyticsDataSource({
+      address: this.address,
+      communityId: this.communityId,
+      authMode: config.authMode,
+    })
   }
 
-  async getMeta(_signal?: AbortSignal): Promise<MetaResponse> {
-    await initPromise
+  /** Fresh per-call context so config-derived values are never stale. */
+  #ctx(): MockApiContext {
     return {
-      version: MOCK_META_VERSION_OVERRIDE ?? EXPECTED_API_VERSION,
-      commit: 'mock-commit-sha',
-      uptime: (typeof process !== 'undefined' && typeof process.uptime === 'function') ? Math.floor(process.uptime()) : 0,
+      address: this.address,
+      communityId: this.communityId,
+      authMode: config.authMode,
     }
   }
 
   // ── Read-only ──────────────────────────────────────────────────────────────
 
-  async getSession(_signal?: AbortSignal): Promise<Session> {
-    await initPromise
-    const MOCK_SESSION_STATE = process.env.NEXT_PUBLIC_MOCK_SESSION_STATE || 'valid'
-    const state = getCommunityState(this.communityId)
-    if (MOCK_SESSION_STATE === 'cleared') {
-      return {
-        // No authenticated session
-        roles: [],
-        community: state.community,
-      }
-    }
+  async getMeta(_signal?: AbortSignal): Promise<MetaResponse> {
+    return mockGetMeta(_signal)
+  }
 
-    const data = ensureAddress(this.address, this.communityId)
-    return {
-      address: this.address,
-      roles: data ? data.roles : [],
-      membership: data ? data.membership : undefined,
-      community: state.community,
-      ...(data ? { badges: data.profile.badges } : {}),
-    }
+  async getSession(_signal?: AbortSignal): Promise<Session> {
+    return mockGetSession(this.#ctx(), _signal)
   }
 
   async getCommunity(_signal?: AbortSignal): Promise<Community> {
-    await initPromise
-    return getCommunityState(this.communityId).community
+    return mockGetCommunity(this.#ctx(), _signal)
   }
 
   async getMembership(address: string, _signal?: AbortSignal): Promise<Membership | null> {
-    await initPromise
-    const data = ensureAddress(address, this.communityId)
-    return data?.membership ?? null
+    return mockGetMembership(this.#ctx(), address, _signal)
   }
 
   async getProfile(address: string, _signal?: AbortSignal): Promise<MemberProfile | null> {
-    await initPromise
-    const data = ensureAddress(address, this.communityId)
-    return data?.profile ?? null
+    return mockGetProfile(this.#ctx(), address, _signal)
   }
 
   /**
-   * Updates the caller's own profile. Mirrors the live client's self-service
-   * ownership check (`this.address` must match `profile.address`) even
-   * though mock mode has no real signature to verify, so the two clients
-   * behave the same way from a caller's perspective. `badges` is
-   * system-assigned and is always preserved from the existing record,
-   * regardless of what the caller passes.
+   * Updates the caller's own profile. See lib/api/mock/members.ts for the
+   * self-service ownership check semantics.
    */
   async updateProfile(profile: MemberProfile): Promise<void> {
-    await initPromise
-    if (MOCK_SESSION_STATE === 'expired') throwMockUnauthorized()
-
-    if (!this.address || this.address.toLowerCase() !== profile.address?.toLowerCase()) {
-      throw new ApiError({
-        status: 403,
-        code: 'forbidden',
-        safeMessage: 'You can only edit your own profile.',
-      })
-    }
-
-    const result = validateProfile(profile)
-    if (!result.valid) {
-      throw new ProfileValidationError(result.errors)
-    }
-
-    const data = ensureAddress(result.value.address)
-    if (!data) {
-      throw new ApiError({
-        status: 404,
-        code: 'not_found',
-        safeMessage: `Member "${result.value.address}" not found.`,
-      })
-    }
-
-    data.profile = {
-      ...data.profile,
-      displayName: result.value.displayName,
-      bio: result.value.bio,
-      avatar: result.value.avatar,
-      socialLinks: result.value.socialLinks,
-    }
-    schedulePersist()
+    return mockUpdateProfile(this.#ctx(), profile)
   }
 
   async listMembers(params?: { cursor?: string; limit?: number; filter?: string }, _signal?: AbortSignal): Promise<MemberRow[] | PaginatedMembers> {
-    await initPromise
-    const state = getCommunityState(this.communityId)
-    let list = Object.values(state.memberStore).map((m) => ({
-      address: m.membership.address,
-      roles: m.roles,
-      tier: m.membership.tier,
-      active: m.membership.active,
-      ...(m.profile.displayName ? { displayName: m.profile.displayName } : {}),
-    }))
-
-    if (!params) {
-      return list
-    }
-
-    if (params.filter) {
-      const f = params.filter.toLowerCase()
-      list = list.filter((m) => m.address.toLowerCase().includes(f))
-    }
-
-    const limit = params.limit ?? 100
-    const cursor = params.cursor ? parseInt(params.cursor, 10) : 0
-
-    const paginated = list.slice(cursor, cursor + limit)
-    const nextCursor = cursor + limit < list.length ? String(cursor + limit) : undefined
-
-    return {
-      members: paginated,
-      nextCursor,
-    }
+    return mockListMembers(this.#ctx(), params, _signal)
   }
 
   async listResources(_signal?: AbortSignal): Promise<Resource[]> {
-    await initPromise
-    const state = getCommunityState(this.communityId)
-    return state.resources.map((r) => ({ ...r, roles: r.roles ?? [] }))
+    return mockListResources(this.#ctx(), _signal)
   }
 
   async listPolicies(_signal?: AbortSignal): Promise<AccessPolicy[]> {
-    await initPromise
-    const state = getCommunityState(this.communityId)
-    return state.policies.map((p) => ({ ...p, roles: p.roles ?? [] }))
+    return mockListPolicies(this.#ctx(), _signal)
   }
 
   async getResource(id: string, _signal?: AbortSignal): Promise<ResourceLookupResult> {
-    await initPromise
-    if (mockResourceFetchDelayMs > 0) await new Promise((r) => setTimeout(r, mockResourceFetchDelayMs))
-    if (mockResourceFetchFailure) {
-      return { status: 'error', error: mockResourceFetchError() }
-    }
-    const state = getCommunityState(this.communityId)
-    const r = state.resources.find((x) => x.id === id)
-    return r
-      ? { status: 'found', data: { ...r, roles: r.roles ?? [] }, source: 'direct' }
-      : { status: 'not_found' }
+    return mockGetResource(this.#ctx(), id, _signal)
   }
 
   async getPolicy(resourceId: string, _signal?: AbortSignal): Promise<AccessPolicy | null> {
-    await initPromise
-    if (mockResourceFetchDelayMs > 0) await new Promise((r) => setTimeout(r, mockResourceFetchDelayMs))
-    if (mockResourceFetchFailure) {
-      throw mockResourceFetchError()
-    }
-    const state = getCommunityState(this.communityId)
-    const p = state.policies.find((x) => x.resourceId === resourceId)
-    return p ? { ...p, roles: p.roles ?? [] } : null
+    return mockGetPolicy(this.#ctx(), resourceId, _signal)
   }
 
   // ── Admin queries & mutations ──────────────────────────────────────────────
 
   async listWebhookEvents(_signal?: AbortSignal): Promise<WebhookEventLog[]> {
-    await initPromise
-    const state = getCommunityState(this.communityId)
-    return new Promise((resolve) => setTimeout(() => resolve(state.webhookEvents), 300))
+    return mockListWebhookEvents(this.#ctx(), _signal)
   }
 
   subscribeWebhookEvents(onEvent: (event: WebhookEventLog) => void): WebhookEventUnsubscribe {
-    const cid = this.communityId
-    const intervalId = globalThis.setInterval(() => {
-      onEvent(createMockStreamEvent(cid))
-    }, 5000)
-
-    globalThis.setTimeout(() => onEvent(createMockStreamEvent(cid)), 1000)
-    return () => globalThis.clearInterval(intervalId)
+    return mockSubscribeWebhookEvents(this.communityId, onEvent)
   }
 
   async replayEvent(eventId: string): Promise<WebhookEventLog> {
-    await initPromise
-    const state = getCommunityState(this.communityId)
-    const original = state.webhookEvents.find((e) => e.id === eventId)
-    if (!original) {
-      throw new ApiError({
-        status: 404,
-        code: 'not_found',
-        safeMessage: `Event "${eventId}" not found in mock store.`,
-      })
-    }
-
-    const replay: WebhookEventLog = {
-      ...original,
-      id: `replay_${eventId}_${Date.now()}`,
-      timestamp: new Date().toISOString(),
-      isReplay: true,
-      status: 'pending',
-      fullPayload: original.fullPayload ?? { ...original.payloadSummary },
-    }
-
-    state.webhookEvents.unshift(replay)
-    schedulePersist()
-    return replay
+    return mockReplayEvent(this.#ctx(), eventId)
   }
 
   async getAnalyticsSummary(_signal?: AbortSignal): Promise<AnalyticsSummary> {
-    await initPromise
-    const state = getCommunityState(this.communityId)
-    const activeCount = Object.values(state.memberStore).filter(m => m.membership.active).length
-    const totalCount = Object.values(state.memberStore).length
-    const resourceAccess = state.resources.map(r => ({
-      resourceId: r.id,
-      resourceTitle: r.title,
-      accessCount: Math.floor(Math.random() * 100) + 10,
-      deniedCount: Math.floor(Math.random() * 20),
-    }))
-    const summary: AnalyticsSummary = {
-      totalMembers: totalCount,
-      activeMembers: activeCount,
-      memberGrowth: Array.from({ length: 30 }, (_, i) => {
-        const d = new Date()
-        d.setDate(d.getDate() - (29 - i))
-        return {
-          date: d.toISOString().split('T')[0],
-          newMembers: Math.floor(Math.random() * 3),
-          totalMembers: totalCount - (29 - i) * 2,
-        }
-      }),
-      resourceAccess,
-      generatedAt: new Date().toISOString(),
-    }
-    return new Promise((resolve) =>
-      setTimeout(() => resolve(summary), 300),
-    )
+    return mockGetAnalyticsSummary(this.#ctx(), _signal)
   }
 
   async getPendingActions(): Promise<PendingAction[]> {
-    await initPromise
-    return getCommunityState(this.communityId).pendingActions
+    return mockGetPendingActions(this.#ctx())
   }
 
   async approveAction(id: string): Promise<void> {
-    await initPromise
-    const state = getCommunityState(this.communityId)
-    const action = state.pendingActions.find(a => a.id === id)
-    if (!action || action.status !== 'pending') return
-    
-    const adminAddr = this.address || '0x0000000000000000000000000000000000000001'
-    if (!action.currentApprovals.includes(adminAddr)) {
-      action.currentApprovals.push(adminAddr)
-    }
-
-    if (action.currentApprovals.length >= action.requiredApprovals) {
-      if (action.type === 'assignRole') {
-        const data = ensureAddress(action.payload.address!, this.communityId)
-        if (data && !data.roles.includes(action.payload.role! as Role)) data.roles.push(action.payload.role! as Role)
-      } else if (action.type === 'removeRole') {
-        const data = state.memberStore[action.payload.address!]
-        if (data) data.roles = data.roles.filter(r => r !== action.payload.role!)
-      } else if (action.type === 'updatePolicy') {
-        const result = validatePolicy(action.payload.policy!)
-        if (result.valid) {
-           const idx = state.policies.findIndex(p => p.resourceId === result.value.resourceId)
-           const updatedPolicy = { ...result.value, updatedAt: new Date().toISOString() }
-           if (idx >= 0) state.policies[idx] = updatedPolicy
-           else state.policies.push(updatedPolicy)
-        }
-      }
-      action.status = 'executed'
-    }
-    schedulePersist()
+    return mockApproveAction(this.#ctx(), id)
   }
 
   async rejectAction(id: string): Promise<void> {
-    await initPromise
-    const state = getCommunityState(this.communityId)
-    const action = state.pendingActions.find(a => a.id === id)
-    if (action && action.status === 'pending') {
-      action.status = 'rejected'
-      schedulePersist()
-    }
+    return mockRejectAction(this.#ctx(), id)
   }
 
   async updateApprovalConfig(config: ApprovalConfig): Promise<void> {
-    await initPromise
-    const state = getCommunityState(this.communityId)
-    ;(state.community as any).approvalConfig = config
-    schedulePersist()
-  }
-
-  private _checkApproval(type: PendingActionType, payload: PendingActionPayload): { status: 'executed' | 'pending'; pendingActionId?: string } {
-    const state = getCommunityState(this.communityId)
-    const config = (state.community as any).approvalConfig
-    const required = config ? config[type] || 1 : 1
-    
-    if (required > 1) {
-      const pendingActionId = `pa_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`
-      const adminAddr = this.address || '0x0000000000000000000000000000000000000001'
-      state.pendingActions.push({
-        id: pendingActionId,
-        type,
-        payload,
-        proposer: adminAddr,
-        requiredApprovals: required,
-        currentApprovals: [adminAddr],
-        status: 'pending',
-        createdAt: new Date().toISOString()
-      })
-      schedulePersist()
-      return { status: 'pending', pendingActionId }
-    }
-    return { status: 'executed' }
+    return mockUpdateApprovalConfig(this.#ctx(), config)
   }
 
   async assignRole(address: string, role: Role): Promise<{ status: 'executed' | 'pending'; pendingActionId?: string }> {
-    await initPromise
-    if (MOCK_SESSION_STATE === 'expired') throwMockUnauthorized()
-    if (mockRoleMutationShouldFail) throwMockRoleMutationFailure()
-    
-    const check = this._checkApproval('assignRole', { address, role })
-    if (check.status === 'pending') return check
-
-    const data = ensureAddress(address, this.communityId)
-    if (!data) return { status: 'executed' }
-    if (!data.roles.includes(role)) data.roles.push(role)
-    schedulePersist()
-    return { status: 'executed' }
+    return mockAssignRole(this.#ctx(), address, role)
   }
 
   async removeRole(address: string, role: Role): Promise<{ status: 'executed' | 'pending'; pendingActionId?: string }> {
-    await initPromise
-    if (MOCK_SESSION_STATE === 'expired') throwMockUnauthorized()
-    if (mockRoleMutationShouldFail) throwMockRoleMutationFailure()
-    
-    const check = this._checkApproval('removeRole', { address, role })
-    if (check.status === 'pending') return check
-
-    const state = getCommunityState(this.communityId)
-    const data = state.memberStore[address]
-    if (!data) return { status: 'executed' }
-    data.roles = data.roles.filter((r) => r !== role)
-    schedulePersist()
-    return { status: 'executed' }
+    return mockRemoveRole(this.#ctx(), address, role)
   }
 
   async updatePolicy(policy: AccessPolicy): Promise<{ status: 'executed' | 'pending'; pendingActionId?: string }> {
-    await initPromise
-    if (MOCK_SESSION_STATE === 'expired') throwMockUnauthorized()
-    const result = validatePolicy(policy)
-
-    if (!result.valid) {
-      throw new PolicyValidationError(result.errors)
-    }
-
-    const state = getCommunityState(this.communityId)
-    const idx = state.policies.findIndex((p) => p.resourceId === result.value.resourceId)
-    
-    // Optimistic concurrency control: check if policy was modified since load
-    if (idx >= 0 && policy.updatedAt) {
-      const existingPolicy = state.policies[idx]
-      if (existingPolicy.updatedAt && existingPolicy.updatedAt !== policy.updatedAt) {
-        throw new ApiError({
-          status: 409,
-          code: 'conflict',
-          safeMessage: 'This policy was modified by another user. Please reload and try again.',
-          details: {
-            currentUpdatedAt: existingPolicy.updatedAt,
-            providedUpdatedAt: policy.updatedAt,
-          },
-        })
-      }
-    }
-    
-    const check = this._checkApproval('updatePolicy', { policy })
-    if (check.status === 'pending') return check
-
-    // Update policy with new timestamp
-    const updatedPolicy = {
-      ...result.value,
-      updatedAt: new Date().toISOString(),
-    }
-    
-    if (idx >= 0) state.policies[idx] = updatedPolicy
-    else state.policies.push(updatedPolicy)
-    schedulePersist()
-    return { status: 'executed' }
+    return mockUpdatePolicy(this.#ctx(), policy)
   }
 
   async listAdminEvents(params?: AdminEventFilterParams): Promise<Paginated<WebhookEvent>> {
-    let events = getCommunityState(this.communityId).webhookEvents as any[]
-    
-    if (params?.types && params.types.length > 0) {
-      events = events.filter((e) => params.types!.includes(e.type))
-    }
-    
-    if (params?.startDate) {
-      const start = new Date(params.startDate)
-      events = events.filter((e) => new Date(e.createdAt) >= start)
-    }
-    
-    if (params?.endDate) {
-      // Include the end date fully (e.g., up to end of the day)
-      const end = new Date(params.endDate)
-      end.setUTCHours(23, 59, 59, 999)
-      events = events.filter((e) => new Date(e.createdAt) <= end)
-    }
-
-    const page = params?.page || 1
-    const limit = params?.limit || 20
-    const startIndex = (page - 1) * limit
-
-    const paginated = events.slice(startIndex, startIndex + limit)
-
-    return {
-      data: paginated,
-      total: events.length,
-      page,
-      limit
-    }
+    return mockListAdminEvents(this.#ctx(), params)
   }
 
   // ── SIWE mock endpoints ────────────────────────────────────────────────────
 
-  async getNonce(_address: string): Promise<string> {
-    await initPromise
-    const nonce = randomHex()
-    this.#nonceStore.set(nonce, Date.now())
-    return nonce
+  async getNonce(address: string): Promise<string> {
+    return mockGetNonce(this.#ctx(), this.#nonceStore, address)
   }
 
-  async siweVerify(message: string, _signature: string): Promise<SiweAuthSession> {
-    await initPromise
-    if (MOCK_SESSION_STATE === 'unauthenticated') {
-      throwMockUnauthorized()
-    }
-
-    const nonce = extractNonceFromMessage(message)
-    if (!nonce || !this.#nonceStore.has(nonce)) {
-      throw new ApiError({
-        status: 400,
-        code: 'bad_request',
-        safeMessage: 'Nonce not found or already used.',
-      })
-    }
-
-    const createdAt = this.#nonceStore.get(nonce)!
-    if (Date.now() - createdAt > NONCE_TTL_MS) {
-      this.#nonceStore.delete(nonce)
-      throw new ApiError({
-        status: 400,
-        code: 'bad_request',
-        safeMessage: 'Nonce expired. Please request a new one.',
-      })
-    }
-
-    this.#nonceStore.delete(nonce)
-
-    const expiresAt =
-      MOCK_SESSION_STATE === 'expired'
-        ? new Date(Date.now() - 1).toISOString()
-        : new Date(Date.now() + 60 * 60 * 1000).toISOString()
-
-    const refreshExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
-    const resolvedAddress = this.address ?? '0x0000000000000000000000000000000000000000'
-
-    if (config.authMode === 'cookie') {
-      setMockSessionCookie(resolvedAddress, expiresAt)
-    }
-
-    return {
-      isAuthenticated: true,
-      token: `mock-jwt-${randomHex()}`,
-      address: resolvedAddress,
-      expiresAt,
-      refreshToken: `mock-refresh-${randomHex()}`,
-      refreshExpiresAt,
-    }
+  async siweVerify(message: string, signature: string): Promise<SiweAuthSession> {
+    return mockSiweVerify(this.#ctx(), this.#nonceStore, message, signature)
   }
 
   async siweRefresh(refreshToken: string): Promise<SiweAuthSession> {
-    await initPromise
-    // e2e instrumentation only: mock mode makes no real network request for
-    // siweRefresh, so cross-tab race tests need some observable signal for
-    // "how many refresh attempts actually happened" per tab.
-    if (typeof window !== 'undefined') {
-      (window as any).__mockSiweRefreshCalls__ =
-        ((window as any).__mockSiweRefreshCalls__ ?? 0) + 1
-    }
-    if (MOCK_SESSION_STATE === 'expired' || MOCK_SESSION_STATE === 'unauthenticated') {
-      throw new ApiError({
-        status: 401,
-        code: 'unauthorized',
-        safeMessage: 'Refresh token expired. Please sign in again.',
-      })
-    }
-
-    if (config.authMode === 'cookie') {
-      // Cookie mode has no refresh-token string for the frontend to hold —
-      // the (mock) session cookie is the only refreshability signal.
-      if (!readMockSessionCookie()) {
-        throw new ApiError({
-          status: 401,
-          code: 'unauthorized',
-          safeMessage: 'Invalid refresh token.',
-        })
-      }
-    } else if (!refreshToken || !refreshToken.startsWith('mock-refresh-')) {
-      throw new ApiError({
-        status: 401,
-        code: 'unauthorized',
-        safeMessage: 'Invalid refresh token.',
-      })
-    }
-
-    const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString()
-    const refreshExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
-    const resolvedAddress = this.address ?? '0x0000000000000000000000000000000000000000'
-
-    if (config.authMode === 'cookie') {
-      setMockSessionCookie(resolvedAddress, expiresAt)
-    }
-
-    return {
-      isAuthenticated: true,
-      token: `mock-jwt-${randomHex()}`,
-      address: resolvedAddress,
-      expiresAt,
-      refreshToken: `mock-refresh-${randomHex()}`,
-      refreshExpiresAt,
-    }
+    return mockSiweRefresh(this.#ctx(), refreshToken)
   }
 
   async siweLogout(_token?: string): Promise<void> {
-    await initPromise
-    if (config.authMode === 'cookie') {
-      clearMockSessionCookie()
-    }
+    return mockSiweLogout(this.#ctx(), _token)
   }
 
-  /**
-   * Mock counterpart to LiveAccessApi.getSessionStatus(). Reads only the
-   * simulated document.cookie session marker set by siweVerify/siweRefresh —
-   * never sessionStorage — so cookie-mode session state stays deterministic
-   * and independent of the bearer-token sessionStorage path.
-   */
   async getSessionStatus(_signal?: AbortSignal): Promise<SessionStatus> {
-    await initPromise
-    if (MOCK_SESSION_STATE === 'unauthenticated') {
-      return { authenticated: false }
-    }
-    const cookie = readMockSessionCookie()
-    if (!cookie) {
-      return { authenticated: false }
-    }
-    if (MOCK_SESSION_STATE === 'expired' || new Date(cookie.expiresAt).getTime() <= Date.now()) {
-      return { authenticated: false }
-    }
-    return { authenticated: true, address: cookie.address, expiresAt: cookie.expiresAt }
+    return mockGetSessionStatus(this.#ctx(), _signal)
   }
 
   async verifyWallet(_address: string, _signal?: AbortSignal): Promise<WalletVerification> {
-    await initPromise
-    return {
-      verified: true,
-      method: 'mock',
-      checkedAt: new Date().toISOString(),
-    }
+    return mockVerifyWallet(_address, _signal)
   }
 
   // ── Social Graph (Connections / Blocks) ──
   async getConnections(address: string, _signal?: AbortSignal): Promise<Connection[]> {
-    await initPromise
-    const addr = address.toLowerCase()
-    const viewer = this.address?.toLowerCase()
-
-    // 1. Block check: active block in either direction -> empty/hidden profile
-    const isBlocked = mockConnections.some(c =>
-      c.status === 'blocked' &&
-      ((c.fromAddress.toLowerCase() === viewer && c.toAddress.toLowerCase() === addr) ||
-       (c.toAddress.toLowerCase() === viewer && c.fromAddress.toLowerCase() === addr))
-    )
-    if (isBlocked) {
-      return []
-    }
-
-    // 2. Privacy rules check
-    const targetPrivacy = mockPrivacySettings[addr]?.connectionVisibility || 'public'
-    const isOwner = viewer === addr
-    if (!isOwner) {
-      if (targetPrivacy === 'private') {
-        return []
-      }
-      if (targetPrivacy === 'mutual-only') {
-        const hasMutual = mockConnections.some(c =>
-          c.status === 'accepted' &&
-          ((c.fromAddress.toLowerCase() === viewer && c.toAddress.toLowerCase() === addr) ||
-           (c.toAddress.toLowerCase() === viewer && c.fromAddress.toLowerCase() === addr))
-        )
-        if (!hasMutual) return []
-      }
-    }
-
-    // Return non-blocked connections for this address
-    return mockConnections.filter(c =>
-      c.status !== 'blocked' &&
-      (c.fromAddress.toLowerCase() === addr || c.toAddress.toLowerCase() === addr)
-    )
+    return mockGetConnections(this.#ctx(), address, _signal)
   }
 
   async getPrivacySettings(address: string, _signal?: AbortSignal): Promise<MemberPrivacySettings> {
-    await initPromise
-    const addr = address.toLowerCase()
-    return mockPrivacySettings[addr] || { address, connectionVisibility: 'public' }
+    return mockGetPrivacySettings(this.#ctx(), address, _signal)
   }
 
   async updatePrivacySettings(address: string, settings: MemberPrivacySettings): Promise<void> {
-    await initPromise
-    const addr = address.toLowerCase()
-    mockPrivacySettings[addr] = settings
+    return mockUpdatePrivacySettings(this.#ctx(), address, settings)
   }
 
   async blockMember(targetAddress: string): Promise<void> {
-    await initPromise
-    if (!this.address) throw new Error('Not logged in')
-    const viewer = this.address.toLowerCase()
-    const target = targetAddress.toLowerCase()
-
-    // Remove existing connections between them
-    mockConnections = mockConnections.filter(c =>
-      !((c.fromAddress.toLowerCase() === viewer && c.toAddress.toLowerCase() === target) ||
-        (c.toAddress.toLowerCase() === viewer && c.fromAddress.toLowerCase() === target))
-    )
-
-    // Add block record
-    mockConnections.push({
-      id: `block-${Date.now()}`,
-      fromAddress: this.address,
-      toAddress: targetAddress,
-      status: 'blocked',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    })
+    return mockBlockMember(this.#ctx(), targetAddress)
   }
 
   async unblockMember(targetAddress: string): Promise<void> {
-    await initPromise
-    if (!this.address) throw new Error('Not logged in')
-    const viewer = this.address.toLowerCase()
-    const target = targetAddress.toLowerCase()
-
-    mockConnections = mockConnections.filter(c =>
-      !(c.status === 'blocked' && c.fromAddress.toLowerCase() === viewer && c.toAddress.toLowerCase() === target)
-    )
+    return mockUnblockMember(this.#ctx(), targetAddress)
   }
 
   async createConnectionRequest(targetAddress: string): Promise<void> {
-    await initPromise
-    if (!this.address) throw new Error('Not logged in')
-    mockConnections.push({
-      id: `conn-${Date.now()}`,
-      fromAddress: this.address,
-      toAddress: targetAddress,
-      status: 'pending',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    })
+    return mockCreateConnectionRequest(this.#ctx(), targetAddress)
   }
 
   async acceptConnectionRequest(targetAddress: string): Promise<void> {
-    await initPromise
-    if (!this.address) throw new Error('Not logged in')
-    const viewer = this.address.toLowerCase()
-    const target = targetAddress.toLowerCase()
-
-    const conn = mockConnections.find(c =>
-      c.status === 'pending' &&
-      c.fromAddress.toLowerCase() === target &&
-      c.toAddress.toLowerCase() === viewer
-    )
-    if (conn) {
-      conn.status = 'accepted'
-      conn.updatedAt = new Date().toISOString()
-    }
+    return mockAcceptConnectionRequest(this.#ctx(), targetAddress)
   }
 
   async rejectConnectionRequest(targetAddress: string): Promise<void> {
-    await initPromise
-    if (!this.address) throw new Error('Not logged in')
-    const viewer = this.address.toLowerCase()
-    const target = targetAddress.toLowerCase()
-
-    mockConnections = mockConnections.filter(c =>
-      !(c.status === 'pending' &&
-        c.fromAddress.toLowerCase() === target &&
-        c.toAddress.toLowerCase() === viewer)
-    )
+    return mockRejectConnectionRequest(this.#ctx(), targetAddress)
   }
 
   // ── Moderation Queue ──
   async listReports(_signal?: AbortSignal): Promise<ModerationReport[]> {
-    await initPromise
-    return mockReports
+    return mockListReports(_signal)
   }
 
   async getReport(id: string, _signal?: AbortSignal): Promise<ModerationReport | null> {
-    await initPromise
-    return mockReports.find(r => r.id === id) || null
+    return mockGetReport(id, _signal)
   }
 
   async updateReportState(id: string, state: ModerationState, updates?: Partial<ModerationReport>): Promise<void> {
-    await initPromise
-    const report = mockReports.find(r => r.id === id)
-    if (report) {
-      report.state = state
-      if (updates) {
-        Object.assign(report, updates)
-      }
-      report.updatedAt = new Date().toISOString()
-    }
+    return mockUpdateReportState(id, state, updates)
   }
 
   // ── Governance ──
   async listProposals(params?: { filter?: ProposalStatus | ProposalType; limit?: number; cursor?: string }, _signal?: AbortSignal): Promise<Proposal[]> {
-    await initPromise
-    const state = getCommunityState(this.communityId)
-    let proposals = Object.values(state.proposals)
-
-    if (params?.filter) {
-      // Filter by status or type
-      const isStatus = ['draft', 'active', 'closed', 'resolved'].includes(params.filter)
-      if (isStatus) {
-        proposals = proposals.filter(p => p.status === params.filter)
-      } else {
-        proposals = proposals.filter(p => p.type === params.filter)
-      }
-    }
-
-    // Sort by creation date, newest first
-    proposals.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-
-    const limit = params?.limit ?? 20
-    const cursor = params?.cursor ? parseInt(params.cursor, 10) : 0
-    return proposals.slice(cursor, cursor + limit)
+    return mockListProposals(this.#ctx(), params, _signal)
   }
 
   async getProposal(id: string, _signal?: AbortSignal): Promise<Proposal | null> {
-    await initPromise
-    const state = getCommunityState(this.communityId)
-    return state.proposals[id] ?? null
+    return mockGetProposal(this.#ctx(), id, _signal)
   }
 
   async getMemberVote(proposalId: string, _signal?: AbortSignal): Promise<Vote | null> {
-    await initPromise
-    if (!this.address) return null
-
-    const state = getCommunityState(this.communityId)
-    const vote = Object.values(state.votes).find(
-      v => v.proposalId === proposalId && v.voter.toLowerCase() === this.address!.toLowerCase()
-    )
-    return vote ?? null
+    return mockGetMemberVote(this.#ctx(), proposalId, _signal)
   }
 
   async listProposalVotes(proposalId: string, params?: { limit?: number; cursor?: string }, _signal?: AbortSignal): Promise<Vote[]> {
-    await initPromise
-    const state = getCommunityState(this.communityId)
-    let votes = Object.values(state.votes).filter(v => v.proposalId === proposalId)
-
-    // Sort by vote time, newest first
-    votes.sort((a, b) => new Date(b.votedAt).getTime() - new Date(a.votedAt).getTime())
-
-    const limit = params?.limit ?? 20
-    const cursor = params?.cursor ? parseInt(params.cursor, 10) : 0
-    return votes.slice(cursor, cursor + limit)
+    return mockListProposalVotes(this.#ctx(), proposalId, params, _signal)
   }
 
   async castVote(proposalId: string, choice: VoteChoice): Promise<Vote> {
-    await initPromise
-    if (MOCK_SESSION_STATE === 'expired') throwMockUnauthorized()
-    if (!this.address) {
-      throw new ApiError({
-        status: 403,
-        code: 'forbidden',
-        safeMessage: 'Must be authenticated to vote.',
-      })
-    }
-
-    const state = getCommunityState(this.communityId)
-    const proposal = state.proposals[proposalId]
-
-    if (!proposal) {
-      throw new ApiError({
-        status: 404,
-        code: 'not_found',
-        safeMessage: 'Proposal not found.',
-      })
-    }
-
-    if (proposal.status !== 'active') {
-      throw new ApiError({
-        status: 400,
-        code: 'invalid_state',
-        safeMessage: 'Voting is not currently open for this proposal.',
-      })
-    }
-
-    // Check if already voted
-    const existingVoteId = Object.entries(state.votes).find(
-      ([_, v]) => v.proposalId === proposalId && v.voter.toLowerCase() === this.address!.toLowerCase()
-    )?.[0]
-
-    // Get voter's weight based on tier/role
-    const memberData = state.memberStore[this.address]
-    const tier = memberData?.membership.tier ?? 'free'
-    const role = memberData?.roles[0] ?? 'member'
-
-    // Simple weight: free=1, standard=2, pro=3 (tier) × member=1, moderator=2, admin=3 (role)
-    const tierWeight: Record<MembershipTier, number> = { free: 1, standard: 2, pro: 3 }
-    const roleMultiplier: Record<Role, number> = { member: 1, moderator: 2, admin: 3 }
-    const weight = tierWeight[tier] * roleMultiplier[role]
-
-    const vote: Vote = {
-      id: existingVoteId || `vote_${Date.now()}_${Math.random().toString(16).slice(2)}`,
-      proposalId,
-      voter: this.address,
-      choice,
-      weight,
-      voterContext: { tier, role },
-      votedAt: new Date().toISOString(),
-    }
-
-    // Update proposal vote summary
-    if (existingVoteId) {
-      const oldVote = state.votes[existingVoteId]
-      // Remove old vote from summary
-      proposal.votesSummary.totalVotes--
-      proposal.votesSummary.weightsFor -= oldVote.choice === 'for' ? oldVote.weight : 0
-      proposal.votesSummary.weightsAgainst -= oldVote.choice === 'against' ? oldVote.weight : 0
-      proposal.votesSummary.weightsAbstain -= oldVote.choice === 'abstain' ? oldVote.weight : 0
-    }
-
-    // Add new vote to summary
-    proposal.votesSummary.totalVotes++
-    if (choice === 'for') proposal.votesSummary.weightsFor += weight
-    else if (choice === 'against') proposal.votesSummary.weightsAgainst += weight
-    else proposal.votesSummary.weightsAbstain += weight
-
-    // Recalculate percentages
-    if (proposal.totalWeight > 0) {
-      proposal.votesSummary.percentFor = Math.round((proposal.votesSummary.weightsFor / proposal.totalWeight) * 100)
-      proposal.votesSummary.percentAgainst = Math.round((proposal.votesSummary.weightsAgainst / proposal.totalWeight) * 100)
-    }
-
-    state.votes[vote.id] = vote
-    schedulePersist()
-
-    return vote
+    return mockCastVote(this.#ctx(), proposalId, choice)
   }
 
   async createProposal(proposal: Omit<Proposal, 'id' | 'createdAt' | 'status' | 'communityId' | 'votesSummary' | 'totalWeight'>): Promise<Proposal> {
-    await initPromise
-    if (MOCK_SESSION_STATE === 'expired') throwMockUnauthorized()
-
-    // Check if user is admin
-    if (!this.address || !getCommunityState(this.communityId).memberStore[this.address]?.roles.includes('admin')) {
-      throw new ApiError({
-        status: 403,
-        code: 'forbidden',
-        safeMessage: 'Only admins can create proposals.',
-      })
-    }
-
-    const state = getCommunityState(this.communityId)
-
-    // Calculate total weight (sum of all member weights)
-    let totalWeight = 0
-    Object.values(state.memberStore).forEach(member => {
-      const tierWeight: Record<MembershipTier, number> = { free: 1, standard: 2, pro: 3 }
-      const roleMultiplier: Record<Role, number> = { member: 1, moderator: 2, admin: 3 }
-      const weight = tierWeight[member.membership.tier] * roleMultiplier[member.roles[0] ?? 'member']
-      totalWeight += weight
-    })
-
-    const newProposal: Proposal = {
-      id: `prop_${Date.now()}_${Math.random().toString(16).slice(2)}`,
-      communityId: this.communityId,
-      ...proposal,
-      status: 'draft',
-      createdAt: new Date().toISOString(),
-      votesSummary: {
-        totalVotes: 0,
-        weightsFor: 0,
-        weightsAgainst: 0,
-        weightsAbstain: 0,
-      },
-      totalWeight,
-    }
-
-    state.proposals[newProposal.id] = newProposal
-    schedulePersist()
-
-    return newProposal
+    return mockCreateProposal(this.#ctx(), proposal)
   }
 
   async updateProposal(id: string, updates: Partial<Omit<Proposal, 'id' | 'status' | 'proposer' | 'createdAt' | 'votesSummary' | 'totalWeight'>>): Promise<Proposal> {
-    await initPromise
-    if (MOCK_SESSION_STATE === 'expired') throwMockUnauthorized()
-
-    if (!this.address || !getCommunityState(this.communityId).memberStore[this.address]?.roles.includes('admin')) {
-      throw new ApiError({
-        status: 403,
-        code: 'forbidden',
-        safeMessage: 'Only admins can update proposals.',
-      })
-    }
-
-    const state = getCommunityState(this.communityId)
-    const proposal = state.proposals[id]
-
-    if (!proposal) {
-      throw new ApiError({
-        status: 404,
-        code: 'not_found',
-        safeMessage: 'Proposal not found.',
-      })
-    }
-
-    if (proposal.status === 'active' || proposal.status === 'resolved') {
-      throw new ApiError({
-        status: 400,
-        code: 'invalid_state',
-        safeMessage: 'Cannot update an active or resolved proposal.',
-      })
-    }
-
-    Object.assign(proposal, updates)
-    schedulePersist()
-
-    return proposal
+    return mockUpdateProposal(this.#ctx(), id, updates)
   }
 
   async publishProposal(id: string): Promise<Proposal> {
-    await initPromise
-    if (MOCK_SESSION_STATE === 'expired') throwMockUnauthorized()
-
-    if (!this.address || !getCommunityState(this.communityId).memberStore[this.address]?.roles.includes('admin')) {
-      throw new ApiError({
-        status: 403,
-        code: 'forbidden',
-        safeMessage: 'Only admins can publish proposals.',
-      })
-    }
-
-    const state = getCommunityState(this.communityId)
-    const proposal = state.proposals[id]
-
-    if (!proposal) {
-      throw new ApiError({
-        status: 404,
-        code: 'not_found',
-        safeMessage: 'Proposal not found.',
-      })
-    }
-
-    if (proposal.status !== 'draft') {
-      throw new ApiError({
-        status: 400,
-        code: 'invalid_state',
-        safeMessage: 'Only draft proposals can be published.',
-      })
-    }
-
-    proposal.status = 'active'
-    schedulePersist()
-
-    return proposal
+    return mockPublishProposal(this.#ctx(), id)
   }
 
   async closeProposalVoting(id: string): Promise<Proposal> {
-    await initPromise
-    if (MOCK_SESSION_STATE === 'expired') throwMockUnauthorized()
-
-    if (!this.address || !getCommunityState(this.communityId).memberStore[this.address]?.roles.includes('admin')) {
-      throw new ApiError({
-        status: 403,
-        code: 'forbidden',
-        safeMessage: 'Only admins can close voting.',
-      })
-    }
-
-    const state = getCommunityState(this.communityId)
-    const proposal = state.proposals[id]
-
-    if (!proposal) {
-      throw new ApiError({
-        status: 404,
-        code: 'not_found',
-        safeMessage: 'Proposal not found.',
-      })
-    }
-
-    if (proposal.status !== 'active') {
-      throw new ApiError({
-        status: 400,
-        code: 'invalid_state',
-        safeMessage: 'Only active proposals can be closed.',
-      })
-    }
-
-    proposal.status = 'closed'
-    schedulePersist()
-
-    return proposal
+    return mockCloseProposalVoting(this.#ctx(), id)
   }
 
   async resolveProposal(id: string, outcome: string): Promise<Proposal> {
-    await initPromise
-    if (MOCK_SESSION_STATE === 'expired') throwMockUnauthorized()
-
-    if (!this.address || !getCommunityState(this.communityId).memberStore[this.address]?.roles.includes('admin')) {
-      throw new ApiError({
-        status: 403,
-        code: 'forbidden',
-        safeMessage: 'Only admins can resolve proposals.',
-      })
-    }
-
-    const state = getCommunityState(this.communityId)
-    const proposal = state.proposals[id]
-
-    if (!proposal) {
-      throw new ApiError({
-        status: 404,
-        code: 'not_found',
-        safeMessage: 'Proposal not found.',
-      })
-    }
-
-    proposal.status = 'resolved'
-    proposal.payload = { ...proposal.payload, outcome, resolvedAt: new Date().toISOString() }
-    schedulePersist()
-
-    return proposal
+    return mockResolveProposal(this.#ctx(), id, outcome)
   }
 
   async deleteProposal(id: string): Promise<void> {
-    await initPromise
-    if (MOCK_SESSION_STATE === 'expired') throwMockUnauthorized()
-
-    if (!this.address || !getCommunityState(this.communityId).memberStore[this.address]?.roles.includes('admin')) {
-      throw new ApiError({
-        status: 403,
-        code: 'forbidden',
-        safeMessage: 'Only admins can delete proposals.',
-      })
-    }
-
-    const state = getCommunityState(this.communityId)
-    const proposal = state.proposals[id]
-
-    if (!proposal) {
-      throw new ApiError({
-        status: 404,
-        code: 'not_found',
-        safeMessage: 'Proposal not found.',
-      })
-    }
-
-    if (proposal.status !== 'draft') {
-      throw new ApiError({
-        status: 400,
-        code: 'invalid_state',
-        safeMessage: 'Only draft proposals can be deleted.',
-      })
-    }
-
-    delete state.proposals[id]
-    // Also delete any votes on this proposal
-    Object.keys(state.votes).forEach(voteId => {
-      if (state.votes[voteId].proposalId === id) {
-        delete state.votes[voteId]
-      }
-    })
-    schedulePersist()
-  }
-
-  public analytics: import('./types').AnalyticsDataSource = {
-    getMembershipTrend: async (_signal?: AbortSignal) => {
-      await initPromise;
-      return getMemberGrowth();
-    },
-    getRoleDistribution: async (_signal?: AbortSignal) => {
-      await initPromise;
-      const state = getCommunityState(this.communityId);
-      const members = Object.values(state.memberStore);
-      const ALL_ROLES: import('./types').Role[] = ['member', 'moderator', 'admin'];
-      return ALL_ROLES.map(role => ({
-        role,
-        count: members.filter(m => m.roles.includes(role)).length
-      }));
-    },
-    getAccessAttempts: async (_signal?: AbortSignal) => {
-      await initPromise;
-      return getResourceAccess();
-    }
+    return mockDeleteProposal(this.#ctx(), id)
   }
 }
-
