@@ -44,39 +44,41 @@ All application code (components, pages, tests) must import from `@/lib/api`. Ne
 
 ---
 
-### `lib/api/mock.ts` — Implementation: Fixtures + Behavior
+### `lib/api/mock.ts` — Implementation: Composition & Re-exports
 
-**Responsibility:** Core mock API implementation split into two concerns:
+**Responsibility:** Thin aggregation point. `MockAccessApi` composes focused, domain-scoped modules under `lib/api/mock/`, and every historical public export (`MockAccessApi`, `getCommunityState()`, `communityStates`, developer controls, etc.) is re-exported so existing imports keep working.
 
-#### Fixtures (Static Data)
-These are default/seeded data sets that populate the mock store:
-- `DEFAULT_COMMUNITY` — Demo community configuration
-- `DEFAULT_RESOURCES` — Gated resource catalog (alpha, pro-reports, mem-updates)
-- `DEFAULT_POLICIES` — Access policies including composable rule examples
-- `DEFAULT_WEBHOOK_EVENTS` — Example webhook event log entries
-- `DEFAULT_MEMBER_STORE` — 50,000 synthetic seeded members with realistic names, tiers, roles
+The implementation is deliberately split so a structural mistake in one domain cannot break the whole API layer:
 
-Fixtures initialize the mock state and are restored by `resetMockData()`. They are never directly imported by application code; they live in `mock.ts` to keep implementation details private.
+| Module | Responsibility |
+| --- | --- |
+| `mock/fixtures.ts` | Fixture/seeded data (communities, members, policies, webhook events, connections, reports) + the mutable social/moderation stores |
+| `mock/state.ts` | In-memory per-community store (`communityStates`, `getCommunityState()`, `ensureAddress()`) + persistence orchestration (`initPromise`, `schedulePersist()`) |
+| `mock/session.ts` | SIWE endpoints, nonce handling, and the `cookie`-auth-mode session-cookie simulation |
+| `mock/core.ts` | Meta/community/resource/policy reads and wallet verification |
+| `mock/members.ts` | Member reads and self-service profile mutation |
+| `mock/analytics.ts` | Admin analytics summary + the `AnalyticsDataSource` surface |
+| `mock/webhooks.ts` | Webhook feed, event replay, admin event log |
+| `mock/approvals.ts` | Role/policy mutations and the multi-approval pending-action flow |
+| `mock/social.ts` | Connections, privacy settings, blocking |
+| `mock/moderation.ts` | Moderation report queue |
+| `mock/governance.ts` | Proposals and weighted voting |
+| `mock/controls.ts` | Fault-injection knobs (`setMockRoleMutationFailure()`, `setMockResourceFetchFailure/Delay()`) and the API-version override |
+| `mock/scenarios.ts` | Scenario presets and `resetMockData()` |
 
-#### Behavior (Simulation Logic)
-These functions implement mock API behaviors:
-- **SIWE simulation:** `getNonce()`, `siweVerify()`, `siweLogout()` (no real cryptography)
-- **Session state:** Mock cookie reading/writing for `cookie` auth mode
-- **Scenario presets:** Apply scripted test scenarios (active member, expired member, denied access, etc.)
-- **Event replay:** Replay webhook events (e.g., for testing event-driven UI updates)
-- **Failure injection:** `setMockRoleMutationFailure()`, `setMockResourceFetchFailure()`, `setMockResourceFetchDelay()` for failure mode testing
-- **Version override:** `setMockMetaVersion()` for API compatibility testing
+**Behavior (Simulation Logic):**
+- **SIWE simulation:** `getNonce()`, `siweVerify()`, `siweLogout()` (no real cryptography) — `mock/session.ts`
+- **Session state:** Mock cookie reading/writing for `cookie` auth mode — `mock/session.ts`
+- **Scenario presets:** Scripted test scenarios (active member, expired member, denied access, etc.) — `mock/scenarios.ts`
+- **Event replay:** Replay webhook events (e.g., for testing event-driven UI updates) — `mock/webhooks.ts`
+- **Failure injection:** `setMockRoleMutationFailure()`, `setMockResourceFetchFailure()`, `setMockResourceFetchDelay()` — `mock/controls.ts`
+- **Version override:** `setMockMetaVersion()` — `mock/controls.ts`
 
-**MockAccessApi class:** Implements the `AccessApi` interface, providing:
-- Read methods: `getSession()`, `getCommunity()`, `getMembers()`, `getMembership()`, etc.
+**MockAccessApi class:** Implements the `AccessApi` interface by forwarding each method to the matching domain module:
+- Read methods: `getSession()`, `getCommunity()`, `listMembers()`, `getMembership()`, etc.
 - Write methods: `assignRole()`, `updatePolicy()`, `updateProfile()`, etc.
 - SIWE methods: `getNonce()`, `siweVerify()`, `siweLogout()`
-
-**Internal helpers:**
-- `ensureAddress()` — Ensures a member record exists
-- `randomHex()` — Generates mock nonces
-- `throwMockUnauthorized()` — Simulates auth failures
-- Community state management via `getCommunityState()`, `communityStates`
+- Analytics surface: `analytics` property built by `mock/analytics.ts`
 
 **Storage:** Delegates to `mock-storage.ts` for persistence via IndexedDB (with localStorage fallback).
 
@@ -194,13 +196,14 @@ Override the mock API's reported version for compatibility testing.
 
 ## Fixture Maintenance Rules
 
-When modifying fixtures in `mock.ts`:
+When modifying fixtures in `mock/fixtures.ts`:
 
-1. **Changes are internal only** — Never export fixture constants. They are consumed by `MockAccessApi` methods only.
+1. **Changes are internal only** — Fixture constants are consumed by the mock domain modules only, never application code.
 2. **Preserve defaults** — Default fixtures represent the "reset" state. `resetMockData()` restores them; any changes should be intentional.
 3. **Seed stability** — The 50,000 synthetic members are generated deterministically; changing the seed names or generation logic affects all downstream member lookups and pagination tests.
 4. **Scenario implications** — Fixture additions affect all scenarios. If adding a new resource, consider whether scenarios should reference it.
 5. **Type alignment** — Ensure fixture data conforms to types in `types.ts`. Zod schemas help catch drift during testing.
+6. **Mutable stores** — `mockConnections`, `mockPrivacySettings`, and `mockReports` are top-level `let` bindings. Reassign them via the exported setters in `fixtures.ts` (reassigning an imported binding is forbidden by ESM module semantics); content/property mutations are fine from anywhere.
 
 ---
 
@@ -208,7 +211,7 @@ When modifying fixtures in `mock.ts`:
 
 When adding new behavior to the mock (e.g., new test failure mode):
 
-1. **Implement in `MockAccessApi` methods** — Behavior lives where it's called, not in separate helper files.
+1. **Implement in the matching domain module** — Add the logic to the `lib/api/mock/` module for that domain (e.g., governance → `mock/governance.ts`), and forward to it from the `MockAccessApi` method in `mock.ts`. If a new domain appears, give it its own focused module under `lib/api/mock/`.
 2. **Expose toggles via `mock-boundary.ts`** — If developers need to enable/disable the behavior, export a setter (e.g., `setMockXyzFail()`).
 3. **Document in this file** — Add the new control to the "Developer Controls" section.
 4. **Test both modes** — E2E tests should verify the behavior works in both mock and live modes (or skip live if the failure cannot be easily reproduced).
@@ -237,7 +240,7 @@ The entire flow is transparent to the component; it only sees the `AccessApi` in
 
 ### Safe Changes
 These changes can happen without breaking consumers:
-- Reorganizing fixture data within `mock.ts` (e.g., moving defaults into a separate file)
+- Reorganizing fixture data or moving a mock domain into its own module under `lib/api/mock/` (e.g., adding a dedicated module for a new API domain)
 - Adding new developer controls to `mock-boundary.ts` and re-exporting them from `index.ts`
 - Changing mock storage backend (e.g., from IndexedDB to SQLite) as long as `persistState()`/`loadPersistedState()` signature stays the same
 - Optimizing fixture generation (e.g., lazy-loading the 50k members)
