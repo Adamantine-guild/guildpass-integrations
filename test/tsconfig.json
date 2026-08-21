@@ -28,6 +28,8 @@
     "../lib/api/access-decision.ts",
     "../lib/rate-limit.ts",
     "../lib/api/mock.ts",
+    "../lib/api/mock/**/*.ts",
+    "../lib/api/mock-boundary.ts",
     "../lib/wallet/address.ts",
     "../lib/wallet/chains.ts",
     "../lib/wallet/config.ts",
