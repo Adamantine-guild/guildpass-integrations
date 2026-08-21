@@ -6,6 +6,7 @@
  * The implementation is organised into focused modules under `lib/api/mock/`
  * so a structural mistake in one domain cannot break the whole API layer:
  *
+ *   - domains.ts     — canonical domain registry used by structure tests
  *   - fixtures.ts    — fixture/seeded data (communities, members, events…)
  *   - state.ts       — the in-memory per-community store + persistence
  *   - session.ts     — SIWE endpoints + cookie-session simulation
