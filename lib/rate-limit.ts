@@ -4,7 +4,8 @@
  * The token-bucket refill/consume algorithm is decoupled from storage via
  * the RateLimitStore interface. `InMemoryRateLimitStore` (the default)
  * keeps bucket state in a per-process Map — sufficient for a single
- * Next.js instance. If you run more than one instance behind a load
+ * Next.js instance. Bounded bucket eviction (idle pruning + LRU capacity cap)
+ * prevents unbounded memory growth. If you run more than one instance behind a load
  * balancer, each instance keeps its own counters and the effective limit is
  * multiplied by the instance count. For multi-instance or serverless (edge)
  * deployments, inject a shared RateLimitStore backed by Redis or another
@@ -43,33 +44,99 @@ interface Bucket {
   tokens: number
   /** epoch ms of the last refill */
   last: number
+  /** epoch ms of the last access */
+  lastAccess: number
+}
+
+export interface InMemoryRateLimitStoreOptions {
+  /** Maximum number of buckets allowed before LRU eviction. Defaults to 10,000. */
+  maxBuckets?: number
+  /** Inactivity threshold (ms) after which a fully-refilled bucket is evicted. Defaults to full refill time (maxTokens / refillPerMs). */
+  idleTimeoutMs?: number
 }
 
 /**
- * Default RateLimitStore: per-process Map, sufficient for a single
- * Next.js instance. See docs/deployment.md for the multi-instance upgrade
- * path.
+ * Default RateLimitStore: per-process Map with bounded bucket eviction,
+ * sufficient for a single Next.js instance. See docs/deployment.md for the
+ * multi-instance upgrade path.
  */
 export class InMemoryRateLimitStore implements RateLimitStore {
   private readonly buckets = new Map<string, Bucket>()
+  private readonly maxBuckets: number
+  private readonly idleTimeoutMs: number
 
   constructor(
     private readonly maxTokens: number,
     private readonly refillPerMs: number,
-  ) {}
+    options?: InMemoryRateLimitStoreOptions | number,
+    idleTimeoutMs?: number,
+  ) {
+    if (typeof options === 'number') {
+      this.maxBuckets = options
+      this.idleTimeoutMs = idleTimeoutMs ?? Math.ceil(maxTokens / refillPerMs)
+    } else {
+      this.maxBuckets = options?.maxBuckets ?? 10_000
+      this.idleTimeoutMs = options?.idleTimeoutMs ?? Math.ceil(maxTokens / refillPerMs)
+    }
+  }
+
+  /**
+   * Returns the current number of buckets stored in memory (used for tests and inspection).
+   */
+  getBucketCount(): number {
+    return this.buckets.size
+  }
+
+  /**
+   * Clears all rate limit buckets from memory (used for test isolation).
+   */
+  clear(): void {
+    this.buckets.clear()
+  }
+
+  private evictStaleOrOverCapacity(now: number): void {
+    // 1. Sweep stale/idle buckets that are fully refilled and idle for >= idleTimeoutMs
+    this.buckets.forEach((bucket, key) => {
+      const elapsedRefill = now - bucket.last
+      const currentTokens = Math.min(
+        this.maxTokens,
+        bucket.tokens + Math.max(0, elapsedRefill) * this.refillPerMs,
+      )
+      const isFullyRefilled = currentTokens >= this.maxTokens
+      const isIdle = now - bucket.lastAccess >= this.idleTimeoutMs
+
+      if (isFullyRefilled && isIdle) {
+        this.buckets.delete(key)
+      }
+    })
+
+    // 2. Enforce hard maxBuckets cap via LRU eviction (front of Map is least recently accessed)
+    while (this.buckets.size >= this.maxBuckets) {
+      const oldestKey = this.buckets.keys().next().value
+      if (oldestKey === undefined) break
+      this.buckets.delete(oldestKey)
+    }
+  }
 
   async take(key: string, now: number): Promise<{ tokens: number; consumed: boolean }> {
     let bucket = this.buckets.get(key)
+
     if (!bucket) {
-      bucket = { tokens: this.maxTokens, last: now }
+      this.evictStaleOrOverCapacity(now)
+      bucket = { tokens: this.maxTokens, last: now, lastAccess: now }
       this.buckets.set(key, bucket)
     } else {
-      // refill based on elapsed time
+      // Re-insert key to maintain LRU access ordering (most recently accessed key is at the end)
+      this.buckets.delete(key)
+      this.buckets.set(key, bucket)
+
+      // Refill based on elapsed time
       const elapsed = now - bucket.last
       if (elapsed > 0) {
         bucket.tokens = Math.min(this.maxTokens, bucket.tokens + elapsed * this.refillPerMs)
         bucket.last = now
       }
+      bucket.lastAccess = now
     }
 
     if (bucket.tokens >= 1) {
@@ -87,6 +154,23 @@ const REFILL_PER_MS = MAX_TOKENS / WINDOW_MS
 
 // keyed by `${scope}:${id}` — e.g. "ip:1.2.3.4" or "wallet:GA…"
 const defaultStore = new InMemoryRateLimitStore(MAX_TOKENS, REFILL_PER_MS)
+
+/**
+ * Resets internal rate limiter state for the default store (used for unit test isolation).
+ */
+export function resetRateLimitStateForTest(): void {
+  defaultStore.clear()
+}
+
+/**
+ * Returns the current bucket count of the store (defaults to defaultStore) for testing.
+ */
+export function getRateLimitBucketCountForTest(store: RateLimitStore = defaultStore): number {
+  if (store instanceof InMemoryRateLimitStore) {
+    return store.getBucketCount()
+  }
+  return 0
+}
 
 async function take(store: RateLimitStore, key: string): Promise<RateLimitResult> {
   const { tokens, consumed } = await store.take(key, Date.now())
@@ -122,3 +206,4 @@ export async function rateLimitRequest(
 
   return ipResult
 }
+

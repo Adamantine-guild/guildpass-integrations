@@ -1,6 +1,12 @@
 import { describe, test, afterEach } from 'node:test'
 import * as assert from 'node:assert/strict'
-import { rateLimitRequest, InMemoryRateLimitStore, type RateLimitStore } from '../lib/rate-limit'
+import {
+  rateLimitRequest,
+  InMemoryRateLimitStore,
+  type RateLimitStore,
+  resetRateLimitStateForTest,
+  getRateLimitBucketCountForTest,
+} from '../lib/rate-limit'
 
 function makeReq(opts: { ip?: string; address?: string } = {}): Request {
   const headers = new Headers()
@@ -11,8 +17,7 @@ function makeReq(opts: { ip?: string; address?: string } = {}): Request {
 }
 
 afterEach(() => {
-  // clear bucket state between tests by re-importing is not trivial here;
-  // tests are ordered to avoid cross-contamination (fresh keys per test).
+  resetRateLimitStateForTest()
 })
 
 describe('rateLimitRequest', () => {
@@ -112,6 +117,78 @@ describe('InMemoryRateLimitStore', () => {
 })
 
 // ===========================================================================
+// InMemoryRateLimitStore eviction and memory bounding
+// ===========================================================================
+
+describe('InMemoryRateLimitStore eviction', () => {
+  test('evicts idle, fully-refilled buckets when new requests arrive', async () => {
+    const store = new InMemoryRateLimitStore(5, 5 / 60_000, { maxBuckets: 100, idleTimeoutMs: 1_000 })
+
+    for (let i = 0; i < 50; i++) {
+      await store.take(`key-${i}`, 0)
+    }
+    assert.equal(store.getBucketCount(), 50)
+
+    // Advance time past idleTimeoutMs (1,000ms) and full refill time (60,000ms)
+    // Next request triggers eviction sweep of all 50 idle buckets
+    await store.take('key-new', 60_000)
+    assert.equal(store.getBucketCount(), 1)
+  })
+
+  test('evicted key returning later receives a fresh, correctly-initialized bucket', async () => {
+    const store = new InMemoryRateLimitStore(5, 5 / 60_000, { maxBuckets: 10, idleTimeoutMs: 1_000 })
+
+    const r1 = await store.take('k1', 0)
+    assert.equal(r1.consumed, true)
+    assert.equal(r1.tokens, 4)
+
+    // Advance time by 60,000ms (idleTimeoutMs = 1,000ms, fully refilled to 5)
+    // Accessing k2 triggers eviction sweep, removing k1
+    await store.take('k2', 60_000)
+    assert.equal(store.getBucketCount(), 1)
+
+    // k1 returns. Gets fresh bucket with maxTokens (5) - 1 = 4 remaining
+    const r2 = await store.take('k1', 60_001)
+    assert.equal(r2.consumed, true)
+    assert.equal(r2.tokens, 4)
+    assert.equal(store.getBucketCount(), 2)
+  })
+
+  test('enforces maxBuckets cap via LRU eviction when active keys exceed capacity', async () => {
+    const store = new InMemoryRateLimitStore(5, 5 / 60_000, { maxBuckets: 3, idleTimeoutMs: 1_000_000 })
+
+    await store.take('k1', 0)
+    await store.take('k2', 0)
+    await store.take('k3', 0)
+    assert.equal(store.getBucketCount(), 3)
+
+    // Access k1 again to refresh its LRU position (LRU order: k2, k3, k1)
+    await store.take('k1', 10)
+
+    // Taking k4 pushes bucket count over maxBuckets (3), evicting least-recently used key ('k2')
+    await store.take('k4', 20)
+    assert.equal(store.getBucketCount(), 3)
+
+    // Accessing k2 now creates a new bucket because it was LRU evicted
+    const r2 = await store.take('k2', 20)
+    assert.equal(r2.consumed, true)
+    assert.equal(r2.tokens, 4)
+  })
+
+  test('defaultStore bucket count stays bounded and resetRateLimitStateForTest clears it', async () => {
+    assert.equal(getRateLimitBucketCountForTest(), 0)
+
+    for (let i = 0; i < 20; i++) {
+      await rateLimitRequest(makeReq({ ip: `192.168.1.${i}` }))
+    }
+    assert.equal(getRateLimitBucketCountForTest(), 20)
+
+    resetRateLimitStateForTest()
+    assert.equal(getRateLimitBucketCountForTest(), 0)
+  })
+})
+
+// ===========================================================================
 // rateLimitRequest with an injected fake store — pins down key-check order,
 // short-circuit behavior, and the exact retryAfter/remaining derivation
 // without needing real time or 30 real requests to exhaust a bucket.
@@ -174,3 +251,4 @@ describe('rateLimitRequest with an injected store', () => {
     assert.equal(result.retryAfter, 1)
   })
 })
+
