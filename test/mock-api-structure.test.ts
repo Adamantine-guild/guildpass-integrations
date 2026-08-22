@@ -164,7 +164,10 @@ describe('mock API domain module structure', () => {
 
     assert.match(indexSource, /from '\.\/mock-boundary'/)
     assert.doesNotMatch(indexSource, /from '\.\/mock\//)
-    assert.match(navSource, /from ["']@\/lib\/api["']/)
+    // nav.tsx may import from the top-level barrel (@/lib/api) or from the
+    // narrow factory module (@/lib/api/factory) — both are API-boundary
+    // imports that do not reach mock implementation details directly.
+    assert.match(navSource, /from ["']@\/lib\/api(\/factory)?["']/)
     assert.doesNotMatch(navSource, /from ["']@\/lib\/api\/mock/)
   })
 })
