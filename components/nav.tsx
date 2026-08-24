@@ -3,7 +3,7 @@ import Link from "next/link";
 import type { Route } from "next";
 import { usePathname, useRouter, useParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
-import { getApi } from "@/lib/api";
+import { getApi } from "@/lib/api/factory";
 import { useAccount } from "wagmi";
 import { cn } from "@/lib/utils";
 import { ConnectButton } from "./wallet/connect-button";

@@ -26,6 +26,26 @@
  * `lib/api/mock` (and `lib/api/index.ts`) relied on historically.
  *
  * All existing member/resource/policy data and mutation logic is preserved.
+ *
+ * ## Export naming conventions
+ *
+ * Exports are grouped into three categories:
+ *
+ *   **Fixture data** (`mock*` camelCase) — mutable in-memory stores and their
+ *   accessors (`communityStates`, `getCommunityState`, `mockConnections`,
+ *   `mockPrivacySettings`, `mockReports`). Named with a lowercase `mock`
+ *   prefix to distinguish live runtime state from the static `DEFAULT_*` /
+ *   `MOCK_*` uppercase constants in `fixtures.ts`.
+ *
+ *   **Controls** (`setMock*` / `resetMock*` / `applyMock*` / `MOCK_*`) —
+ *   fault-injection toggles and scenario management functions. `setMock*`
+ *   names toggle individual knobs; `resetMockData` / `applyMockScenario`
+ *   operate at scenario level.
+ *
+ *   **Standalone tools** — `replayMockEvent` is a dev-tool function that
+ *   directly mutates the in-memory event store. It is not an `AccessApi`
+ *   method delegate and intentionally does not follow the `mock*` method
+ *   naming convention used for `MockAccessApi` internal delegates.
  */
 import { config } from '../config'
 import { buildAnalyticsDataSource, mockGetAnalyticsSummary } from './mock/analytics'
@@ -143,21 +163,39 @@ import type {
   WebhookEventUnsubscribe,
 } from './types'
 
+// ── Exported fixture data (mutable in-memory stores) ──────────────────────────
+// Named `mock*` (camelCase) to distinguish live fixtures from static `DEFAULT_*`
+// and `MOCK_*` constants defined in lib/api/mock/fixtures.ts.
 export {
-  applyMockScenario,
-  communityStates,
-  getCommunityState,
-  MOCK_META_VERSION_OVERRIDE,
+  communityStates,   // per-community runtime state map
+  getCommunityState, // accessor for per-community state
   mockConnections,
   mockPrivacySettings,
   mockReports,
-  replayMockEvent,
+}
+
+// ── Exported control/setter functions ─────────────────────────────────────────
+// Convention: `setMock*` for toggling fault-injection knobs; `resetMock*` /
+// `applyMock*` for higher-level scenario management.
+export {
+  MOCK_META_VERSION_OVERRIDE,
+  applyMockScenario,
   resetMockData,
   setMockMetaVersion,
   setMockResourceFetchDelay,
   setMockResourceFetchFailure,
   setMockRoleMutationFailure,
 }
+
+// ── Exported standalone tools ──────────────────────────────────────────────────
+// `replayMockEvent` is a standalone dev-tool function (not an AccessApi method)
+// that directly mutates the in-memory event store; it does not follow the
+// `mock*` API-method naming convention used for MockAccessApi delegates.
+export {
+  replayMockEvent,
+}
+
+// ── Exported types ─────────────────────────────────────────────────────────────
 export type { CommunityState, MockApiContext }
 
 export class MockAccessApi implements AccessApi {

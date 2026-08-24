@@ -130,21 +130,37 @@ export const MOCK_API_DOMAINS = [
 
 export type MockApiDomainFile = (typeof MOCK_API_DOMAINS)[number]['file']
 
-/** Public aggregator re-exports that existing `lib/api/mock` consumers rely on. */
+/**
+ * Public aggregator re-exports that existing `lib/api/mock` consumers rely on.
+ *
+ * Symbols are grouped by responsibility to make the distinction between
+ * data, controls, and standalone tools explicit:
+ *
+ *   Fixture data  — `mock*` (camelCase) mutable in-memory stores and
+ *                   their state-map accessors.
+ *   Controls      — `setMock*` fault-injection knobs; `resetMock*` /
+ *                   `applyMock*` for scenario management; the
+ *                   `MOCK_*` override constant.
+ *   Standalone    — `replayMockEvent` dev-tool that directly mutates
+ *                   the in-memory event store (not an AccessApi method).
+ */
 export const MOCK_API_PUBLIC_REEXPORTS = [
-  'applyMockScenario',
+  // ── Fixture data ────────────────────────────────────────────────────────────
   'communityStates',
   'getCommunityState',
-  'MOCK_META_VERSION_OVERRIDE',
   'mockConnections',
   'mockPrivacySettings',
   'mockReports',
-  'replayMockEvent',
+  // ── Controls ────────────────────────────────────────────────────────────────
+  'MOCK_META_VERSION_OVERRIDE',
+  'applyMockScenario',
   'resetMockData',
   'setMockMetaVersion',
   'setMockResourceFetchDelay',
   'setMockResourceFetchFailure',
   'setMockRoleMutationFailure',
+  // ── Standalone tools ────────────────────────────────────────────────────────
+  'replayMockEvent',
 ] as const
 
 /** AccessApi methods that MockAccessApi must keep implementing. */
